@@ -1,0 +1,59 @@
+// components/Icon.jsx
+import * as Lu from "lucide-react";
+
+/**
+ * Usage: <Icon name="cart" className="h-5 w-5" />
+ * Inherits currentColor; works with Tailwind sizing.
+ */
+const MAP = {
+  cart: Lu.ShoppingCart,
+  search: Lu.Search,
+  plus: Lu.Plus,
+  minus: Lu.Minus,
+  x: Lu.X,
+  trash: Lu.Trash2,
+  send: Lu.Send,
+  sliders: Lu.SlidersHorizontal,
+  info: Lu.Info,
+  check: Lu.CheckCircle,
+  "edit-3": Lu.Edit3,
+  "shopping-cart": Lu.ShoppingCart,
+  "trash-2": Lu.Trash2,
+  loader: Lu.Loader2,
+  eye: Lu.Eye,
+
+  
+  // 👇 add these
+  globe: Lu.Globe,
+  language: Lu.Languages, // optional alt
+  "arrow-up": Lu.ArrowUp,
+  "arrow-down": Lu.ChevronDown,
+  "arrow-left": Lu.ChevronLeft,
+  "arrow-right": Lu.ChevronRight,
+  check: Lu.Check,
+  "map-pin": Lu.MapPin,
+  help: Lu.HelpCircle,
+  "phone-call": Lu.PhoneCall,
+  sparkles: Lu.Sparkles,
+  receipt: Lu.LucideReceiptText,
+};
+
+export default function Icon({
+  name,
+  className = "h-5 w-5",
+  strokeWidth = 2,
+  absoluteStrokeWidth = false,
+  ...rest
+}) {
+  const Cmp = MAP[name];
+  if (!Cmp) return null;
+  return (
+    <Cmp
+      className={className}
+      strokeWidth={strokeWidth}
+      absoluteStrokeWidth={absoluteStrokeWidth}
+      aria-hidden
+      {...rest}
+    />
+  );
+}
