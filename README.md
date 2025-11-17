@@ -410,13 +410,18 @@ The application integrates with Telr payment gateway for secure card payments.
 
 ## 📸 Screenshots
 
-> **Note:** Add screenshots of your application here. You can add them to a `screenshots/` folder and reference them like this:
+<div align="center">
 
-```
+### Menu Page
 ![Menu Page](./screenshots/menu-page.png)
+
+### Payment Page
 ![Payment Page](./screenshots/payment-page.png)
+
+### Cart Drawer
 ![Cart Drawer](./screenshots/cart-drawer.png)
-```
+
+</div>
 
 ---
 
