@@ -99,10 +99,10 @@ export default function ItemCard({
   const initial = (itemName || "?").trim().charAt(0).toUpperCase() || "?";
 
   const unitPrice = useMemo(() => {
+    // Don't use item.price as fallback since it's the total (UnitPrice + Tax1Amount)
     const v =
       getVal(item, "pc.UnitPrice") ??
       getVal(item, "pc_UnitPrice") ??
-      getVal(item, "price") ??
       0;
     return num(v);
   }, [item]);

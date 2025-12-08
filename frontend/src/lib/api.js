@@ -1,10 +1,48 @@
 import axios from "axios";
 
 export const API = axios.create({
-  // Change only if your backend runs elsewhere
-  baseURL: import.meta.env?.VITE_API_BASE_URL || "http://192.168.70.186:5001/api",
+  // baseURL: import.meta.env?.VITE_API_BASE_URL || "http://192.168.1.37/api",
+  baseURL:"http://192.168.1.37:5001/api",
   timeout: 10000
 });
 
-// Optional: attach interceptors later (auth, errors, etc.)
-// API.interceptors.response.use(r => r, err => Promise.reject(err));
+
+
+// Retry logic for rate limiting (429 errors)
+const MAX_RETRIES = 2; // Reduced from 3 to 2
+const RETRY_DELAY = 2000; // Increased to 2 seconds
+
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Request interceptor to add retry logic
+API.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config;
+    
+    // Only retry on 429 (Too Many Requests) errors
+    // Don't retry payment completion calls to avoid duplicate payments
+    const isPaymentCall = config.url?.includes('/payment/') || config.url?.includes('/telr/');
+    
+    if (error.response?.status === 429 && !config._retry && !isPaymentCall) {
+      config._retry = true;
+      let retryCount = config._retryCount || 0;
+      
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        config._retryCount = retryCount;
+        
+        // Exponential backoff: 2s, 4s
+        const delay = RETRY_DELAY * Math.pow(2, retryCount - 1);
+        console.warn(`[API] Rate limited (429). Retrying in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})...`);
+        
+        await sleep(delay);
+        return API(config);
+      }
+    }
+    
+    return Promise.reject(error);
+  }
+);

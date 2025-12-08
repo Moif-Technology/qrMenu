@@ -4,8 +4,10 @@ import mssql from "mssql";
 // ---- DIRECT CONFIG (env-driven; defaults kept for local dev) ----
 const baseConfig = {
   user: process.env.DB_USER || "sa",
+  // password: process.env.DB_PASSWORD || "gtarc",
   password: process.env.DB_PASSWORD || "motech",
   server: process.env.DB_SERVER || "MOIF\\SQLEXPRESS",
+  // server: process.env.DB_SERVER || "INVENTPOS\\SQLEXPRESS",
   port: process.env.DB_PORT ? Number(process.env.DB_PORT) : undefined,
   options: {
     encrypt: process.env.DB_ENCRYPT === "true",

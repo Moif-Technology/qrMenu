@@ -627,10 +627,14 @@ export default function TableSummaryPremium() {
         return;
       }
 
+      // Set the handled key immediately to prevent duplicate processing
       telrHandledKeyRef.current = handledKeyCandidate || `handled-${Date.now()}`;
 
       (async () => {
         try {
+          // Add a small delay to prevent rapid-fire requests
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
           const telrResponse = await checkTelrStatus(orderRef || stored?.orderRef || "");
           const telrData = telrResponse?.data || {};
           const transactionStatus = telrData?.transaction?.status?.code;
@@ -817,30 +821,23 @@ export default function TableSummaryPremium() {
               console.log("[FRONTEND] Found unpaid KOTs, showing payment page for new orders");
             }
             
-            // If there's a pending payment with balance, show it
-            // This will show the balance even when there are unpaid KOTs if a payment exists for this kotMasterID
-            if (balanceData.hasPendingPayment && balanceData.balance > 0) {
+            // CRITICAL: Only show balance if it's > 0 (payment not complete)
+            // When balance = 0, payment is complete - clear remainingBalance
+            if (balanceData.balance > 0 && !balanceData.isFullyPaid) {
+              // Payment is pending - show balance
               setRemainingBalance(balanceData.balance);
               setSplitTransId(balanceData.transId);
-              // Set equal split info if available
-              if (balanceData.equalSplitInfo) {
-                setEqualSplitInfo(balanceData.equalSplitInfo);
-                // Show modal to ask user if they want to continue equal split
-                setShowEqualSplitModal(true);
-              }
-            } else if (balanceData.balance > 0) {
-              // Also check if balance exists even if hasPendingPayment is false
-              setRemainingBalance(balanceData.balance);
-              setSplitTransId(balanceData.transId);
-              // Set equal split info if available
+              // Set equal split info if available (only if balance > 0)
               if (balanceData.equalSplitInfo) {
                 setEqualSplitInfo(balanceData.equalSplitInfo);
                 // Show modal to ask user if they want to continue equal split
                 setShowEqualSplitModal(true);
               }
             } else {
+              // Payment is complete (balance = 0) - clear everything
               setRemainingBalance(null);
               setEqualSplitInfo(null);
+              setSplitTransId(null);
             }
           } catch (err) {
             console.error("Error fetching balance:", err);

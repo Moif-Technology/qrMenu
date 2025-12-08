@@ -143,12 +143,6 @@ const telrReturnPage = (status, { message, redirectUrl }) => {
           ? "Payment was declined."
           : "Processing payment result.");
 
-  const scriptPayload = {
-    source: "telr-hpp",
-    status: safeStatus,
-    redirectUrl: redirectUrl || null,
-  };
-
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -163,6 +157,8 @@ const telrReturnPage = (status, { message, redirectUrl }) => {
       .status-declined { color: #b3261e; }
       .fallback-link { display: inline-block; margin-top: 18px; color: #116ac9; text-decoration: none; font-weight: 600; }
       .fallback-link:hover { text-decoration: underline; }
+      .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(0,0,0,0.1); border-top-color: #116ac9; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
@@ -170,40 +166,21 @@ const telrReturnPage = (status, { message, redirectUrl }) => {
     <p>${safeMessage}</p>
     ${
       redirectUrl
-        ? `<a class="fallback-link" href="${redirectUrl}">Continue</a>`
+        ? `<div><span class="spinner"></span>Redirecting...</div><a class="fallback-link" href="${redirectUrl}">Click here if you are not redirected</a>`
         : ""
     }
     <script>
       (function () {
-        const payload = ${JSON.stringify(scriptPayload)};
-        const REDIRECT_DELAY = payload.redirectUrl ? 600 : 0;
-        try {
-          const targets = [];
-          if (window.parent && window.parent !== window) targets.push(window.parent);
-          if (window.opener) targets.push(window.opener);
-          targets.forEach((target) => {
-            try { target.postMessage(payload, "*"); } catch (err) { console.warn("postMessage failed", err); }
-          });
-        } catch (err) {
-          console.warn("Telr return postMessage failed", err);
-        }
-
-        if (payload.redirectUrl) {
+        const redirectUrl = ${JSON.stringify(redirectUrl || null)};
+        const REDIRECT_DELAY = redirectUrl ? 1500 : 0;
+        
+        if (redirectUrl) {
           setTimeout(() => {
             try {
-              if (window.opener && !window.opener.closed) {
-                window.opener.location.href = payload.redirectUrl;
-                window.close();
-              } else if (window.parent && window.parent !== window) {
-                window.parent.location.href = payload.redirectUrl;
-              } else {
-                window.location.replace(payload.redirectUrl);
-              }
+              window.location.replace(redirectUrl);
             } catch (redirectErr) {
               console.warn("Redirect failed", redirectErr);
-              if (payload.redirectUrl) {
-                window.location.href = payload.redirectUrl;
-              }
+              window.location.href = redirectUrl;
             }
           }, REDIRECT_DELAY);
         }
@@ -252,7 +229,7 @@ router.post("/api/telr/create", async (req, res) => {
       ivp_currency: currency,
       ivp_desc: description,
       ivp_cart: String(cartId),
-      ivp_framed: "2",
+      ivp_framed: "0",
       return_auth: `${APP_BASE_URL}/api/telr/return/auth${returnQuery}`,
       return_can: `${APP_BASE_URL}/api/telr/return/cancel${returnQuery}`,
       return_decl: `${APP_BASE_URL}/api/telr/return/declined${returnQuery}`,

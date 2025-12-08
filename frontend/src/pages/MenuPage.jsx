@@ -53,13 +53,33 @@ function mapRowToItem(row) {
     )
     .filter(Boolean);
 
+  // Calculate price: use backend-calculated price, or calculate from UnitPrice + Tax1Amount
+  let calculatedPrice = 0;
+  if (row.price !== undefined && row.price !== null) {
+    // Backend already calculated price (UnitPrice + Tax1Amount)
+    calculatedPrice = Number(row.price);
+  } else {
+    // Calculate from UnitPrice + Tax1Amount
+    const unitPrice = Number(
+      row["pc.UnitPrice"] ?? 
+      row["pc_UnitPrice"] ?? 
+      0
+    );
+    const tax1Amount = Number(
+      row["pc.Tax1Amount"] ?? 
+      row["pc_Tax1Amount"] ?? 
+      0
+    );
+    calculatedPrice = Number((unitPrice + tax1Amount).toFixed(2));
+  }
+
   return {
     id: row.id ?? row.product_id ?? row.ID,
     name: row.name ?? row.Description ?? "Untitled",
     desc: row.short_description ?? row.Specification ?? "",
     img: normalizeImage(row.image ?? row.DocImage ?? row.ImageLocation ?? normalizedImages[0] ?? ""),
     images: normalizedImages,
-    price: Number(row.price ?? 0),
+    price: calculatedPrice,
     category: row.group_name ?? row.group_code ?? "",
     categoryId: row.group_id ?? row.GroupID ?? null,
     _raw: row

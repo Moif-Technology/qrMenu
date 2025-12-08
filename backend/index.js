@@ -26,13 +26,24 @@ const apiLimiter = rateLimit({
   legacyHeaders: false, // Disable `X-RateLimit-*` headers
 });
 
-// Stricter limit for payment endpoints: 20 requests per 15 minutes per IP
+// Stricter limit for payment endpoints: 100 requests per 5 minutes per IP
+// Using shorter window (5 min) to allow more frequent payment attempts
+// Increased limit to handle payment callbacks and retries
 const paymentLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.RATE_LIMIT_PAYMENT_MAX ? Number(process.env.RATE_LIMIT_PAYMENT_MAX) : 20,
+  windowMs: 5 * 60 * 1000, // 5 minutes (shorter window)
+  max: process.env.RATE_LIMIT_PAYMENT_MAX ? Number(process.env.RATE_LIMIT_PAYMENT_MAX) : 100, // Increased from 20 to 100
   message: { ok: false, error: "Too many payment requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
+  // Skip rate limiting for read-only endpoints
+  skip: (req) => {
+    // Allow read-only payment queries without rate limiting
+    return req.method === 'GET' && (
+      req.path.includes('/balance/') || 
+      req.path.includes('/paid-items/') ||
+      req.path.includes('/methods')
+    );
+  },
 });
 
 // Apply rate limiting to API routes
@@ -125,9 +136,10 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ ok: false, error: msg });
 });
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running at http://0.0.0.0:${PORT}`);
 });
+
 
 // Graceful shutdown
 function shutdown(signal) {

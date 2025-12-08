@@ -69,6 +69,7 @@ export async function listGroups() {
       ${q("GroupCode")}              AS code,
       ${q("GroupDescriptionArabic")} AS name_ar
     FROM ${T_CATS}
+    WHERE ${q("keyshift")} = 1
     ORDER BY ${q("GroupDescription")} ASC
   `;
   const rs = await pool.request().query(sql);
@@ -270,11 +271,17 @@ export async function listMenuItems({
 
       const primaryImage = images[0] ?? null;
 
+      // Calculate price with tax: UnitPrice + Tax1Amount
+      const unitPrice = Number(row["pc.UnitPrice"] ?? row["pc_UnitPrice"] ?? 0);
+      const tax1Amount = Number(row["pc.Tax1Amount"] ?? row["pc_Tax1Amount"] ?? 0);
+      const price = Number((unitPrice + tax1Amount).toFixed(2));
+
       const { imagesConcat, ...rest } = row;
       return {
         ...rest,
         image: primaryImage,
         images,
+        price, // Add calculated price field
       };
     });
 
