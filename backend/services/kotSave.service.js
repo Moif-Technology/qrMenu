@@ -128,6 +128,7 @@ export async function saveKot(payload) {
   console.log("[KOT:SVC] start", {
     items: items.length,
     tableId: header?.tableId,
+    areaId: header?.areaId,
     chairId: header?.chairId,
     chairNo: header?.chairNo,
   });
@@ -136,6 +137,9 @@ export async function saveKot(payload) {
 
   const tableId = resolveTableId(header.tableId);
   if (!tableId) throw new Error("Valid numeric TableID required from QR");
+
+  // Get AreaID from header
+  const areaId = toInt(header?.areaId || header?.areaID || null);
 
   // Get ChairNo from header, default to 1
   const chairNo = toInt(header?.chairId || header?.chairNo || 1, 1);
@@ -209,6 +213,9 @@ export async function saveKot(payload) {
       reqM.input("Upload", mssql.VarChar(50), "PENDING");
       reqM.input("TableID", mssql.Int, tableId);
       reqM.input("ChairNo", mssql.Int, chairNo);
+      if (areaId) {
+        reqM.input("AreaID", mssql.BigInt, areaId);
+      }
       reqM.input("SubTotalM", mssql.Decimal(18, 2), subTotalM);
       reqM.input("Tax1AmountM", mssql.Decimal(18, 2), tax1M);
       reqM.input("Amount", mssql.Decimal(18, 2), amountM);
@@ -217,13 +224,17 @@ export async function saveKot(payload) {
       reqM.input("ModBy", mssql.VarChar(50), "DIGIMENU");
       reqM.input("Remarks", mssql.NVarChar(500), remarks);
 
+      // Build INSERT statement with optional AreaID
+      const areaIdField = areaId ? `${q("AreaID")},` : '';
+      const areaIdValue = areaId ? '@AreaID,' : '';
+      
       const sqlM = `
        DECLARE @now DATETIME2(0) = SYSDATETIME();  -- one precise timestamp
         INSERT INTO ${T_KOTM} (
           ${q("kotMasterID")},
           ${q("KotStatus")}, ${q("KotDate")}, ${q("KotTime")},
           ${q("CustomerID")}, ${q("DeliveryBoyId")}, ${q("Deliverytime")},
-          ${q("TableID")}, ${q("ChairNo")}, ${q("WaiterID")}, ${q(
+          ${q("TableID")}, ${q("ChairNo")}, ${areaIdField}${q("WaiterID")}, ${q(
         "SalesManID"
       )},
           ${q("UploadStatusM")}, ${q("BillDiscount")},
@@ -244,7 +255,7 @@ export async function saveKot(payload) {
           1,
           0,
           CONVERT(time(1), '00:00:00'),
-          @TableID, @ChairNo, 0, 0,
+          @TableID, @ChairNo, ${areaIdValue}0, 0,
           @Upload, 0,
           @SubTotalM, @Tax1AmountM, 0, 0,
           0, 0, 0,

@@ -6,7 +6,7 @@ import { makeToken } from "../utils/qr.utils.js";
 // Get frontend URL from environment variable, with fallback for development
 // For production, set FRONTEND_URL in .env file
 // Example: FRONTEND_URL=https://yourdomain.com
-const FRONT = process.env.FRONTEND_URL || process.env.VITE_FRONTEND_URL || "http://192.168.1.37:5173";
+const FRONT = process.env.FRONTEND_URL || process.env.VITE_FRONTEND_URL || "http://192.168.0.34:5173";
 
 // Table ID and area - can be passed as command line args or set in env
 // Usage: node scripts/gen-qr-103.js [tableId] [area]

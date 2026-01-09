@@ -1,11 +1,15 @@
 // src/components/MenuGrid.jsx
 import { useCart } from "../store/cartStore";
 import ItemCard from "./ItemCard";
+import PackageCard from "./PackageCard";
 
-export default function MenuGrid({ items, onQuickAdd, onOpen }) {
+export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPackageView = false }) {
   const add = useCart((s) => s.add);
 
   const handleQuickAdd = onQuickAdd ?? ((prod, selectedMods) => add(prod, selectedMods));
+
+  // Detect if we're showing packages (either explicit prop or category name contains "package")
+  const showingPackages = isPackageView || categoryKey?.toLowerCase().includes('package');
 
   return (
     <section className="relative">
@@ -15,15 +19,61 @@ export default function MenuGrid({ items, onQuickAdd, onOpen }) {
       />
 
       <div className="relative mx-auto max-w-6xl px-4 sm:px-6 pb-16">
-        <div className="grid gap-3 sm:gap-4 md:gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--card-min,170px)),1fr))] [--card-min:170px] sm:[--card-min:200px] md:[--card-min:220px] lg:[--card-min:240px]">
-        {items.map((p) => (
-        <ItemCard
-              key={p.id || p.name}
-  item={p}
-              onQuickAdd={handleQuickAdd}
-  onOpen={onOpen}
-/>
-        ))}
+        {/* Package Header */}
+        {showingPackages && items.length > 0 && (
+          <div className="mb-8 text-center">
+            <div className="inline-flex items-center gap-3 rounded-full border-2 border-[rgba(201,26,77,0.2)] bg-gradient-to-r from-[rgba(201,26,77,0.08)] to-[rgba(168,15,61,0.08)] px-6 py-3 shadow-lg backdrop-blur-sm">
+              <svg className="w-6 h-6 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+              </svg>
+              <span 
+                className="text-xl font-black uppercase tracking-wider"
+                style={{ 
+                  background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text"
+                }}
+              >
+                Premium Packages
+              </span>
+              <svg className="w-6 h-6 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+              </svg>
+            </div>
+          </div>
+        )}
+
+        <div className={`grid gap-3 sm:gap-4 md:gap-6 ${
+          showingPackages 
+            ? '[grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] md:[grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]' 
+            : '[grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--card-min,170px)),1fr))] [--card-min:170px] sm:[--card-min:200px] md:[--card-min:220px] lg:[--card-min:240px]'
+        }`}>
+        {items.map((p) => {
+          const productId = String(
+            p._raw?.product_id || 
+            p._raw?.["pm.ProductID"] || 
+            p._raw?.["pm_ProductID"] ||
+            p.product_id ||
+            p.id
+          );
+          // Include categoryKey in key to force React to remount ItemCard when category changes
+          // This ensures images reset properly on mobile browsers
+          const uniqueKey = `${categoryKey || 'default'}_${p.id || p.name || productId}`;
+          
+          // Use PackageCard for packages, ItemCard for regular items
+          const CardComponent = showingPackages ? PackageCard : ItemCard;
+          
+          return (
+            <div key={uniqueKey} data-product-id={productId}>
+              <CardComponent
+                item={p}
+                onQuickAdd={handleQuickAdd}
+                onOpen={onOpen}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
     </section>

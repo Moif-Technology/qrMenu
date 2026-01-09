@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "gen:qr": "node scripts/gen-qr-103.js"
+    "gen:qr": "node scripts/gen-qr-103.js",
+    "migrate:images": "node scripts/migrate-images-to-cloudinary.js",
+    "test:images": "node scripts/test-image-query.js"
   },
   "keywords": [],
   "author": "",
@@ -15,13 +17,15 @@
   "type": "module",
   "dependencies": {
     "axios": "^1.12.2",
+    "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^7.1.5",
     "mssql": "^12.0.0",
     "node-cache": "^5.1.2",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "twilio": "^5.3.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

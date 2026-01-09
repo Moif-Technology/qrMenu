@@ -1,0 +1,469 @@
+// src/components/ItemCard.jsx
+import { useEffect, useMemo, useState, memo } from "react";
+// import { useCart } from "../store/cartStore";
+import Icon from "./Icon";
+// import ModifierModal from "./ModifierModal";
+import { useTranslation } from "react-i18next";
+
+/** 🔧 COMMON IMAGE */
+const COMMON_IMAGE =
+  import.meta?.env?.VITE_MENU_IMG ||
+  "https://res.cloudinary.com/danoolbdz/image/upload/v1766755726/no-image-icon-23500_j6y6gn.jpg";
+const USE_COMMON_IMAGE_ONLY = false;
+
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+function getVal(item, key) {
+  const alt = key.includes(".") ? key.replaceAll(".", "_") : key.replaceAll("_", ".");
+  if (item?.[key] !== undefined) return item[key];
+  if (item?.[alt] !== undefined) return item[alt];
+  if (item?._raw?.[key] !== undefined) return item._raw[key];
+  if (item?._raw?.[alt] !== undefined) return item._raw[alt];
+  return undefined;
+}
+
+function ItemCard({
+  item,
+  onQuickAdd,
+  onOpen,
+  onModifiers,
+  qtyInCart,
+}) {
+  // const items = useCart((s) => s.items);
+  // const inc = useCart((s) => s.inc);
+  // const dec = useCart((s) => s.dec);
+  // const remove = useCart((s) => s.remove);
+  // const tableArea = useCart((s) => s.tableArea);
+  const { t } = useTranslation();
+
+  // const [selectedMods, setSelectedMods] = useState([]);
+  // const selectedIds = useMemo(
+  //   () => [...selectedMods.map((m) => m.id ?? m.ModifierID ?? m.name)].sort(),
+  //   [selectedMods]
+  // );
+
+  // const [showMods, setShowMods] = useState(false);
+
+  const itemId = useMemo(
+    () =>
+    getVal(item, "id") ??
+    getVal(item, "pm.ID") ??
+    getVal(item, "pm_ID") ??
+    getVal(item, "product_id") ??
+    getVal(item, "pm.ProductID") ??
+    getVal(item, "pm_ProductID") ??
+      null,
+    [item]
+  );
+
+  const itemName = useMemo(
+    () =>
+    item?.name ??
+    getVal(item, "pm.Description") ??
+    getVal(item, "pm_Description") ??
+    getVal(item, "pm.ShortDescription") ??
+    getVal(item, "pm_ShortDescription") ??
+      "Item",
+    [item]
+  );
+
+  const imageList = useMemo(() => {
+    if (USE_COMMON_IMAGE_ONLY) {
+      return [COMMON_IMAGE];
+    }
+    const list = [];
+    if (Array.isArray(item?.images)) {
+      item.images.forEach((src) => {
+        if (typeof src === "string" && src.trim() && src !== "null" && src !== "undefined") {
+          // Validate URL or data URI format
+          if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:") || src.startsWith("blob:")) {
+            list.push(src.trim());
+          }
+        }
+      });
+    }
+    const single = item?.img || item?.image || item?._raw?.DocImage;
+    if (single && typeof single === "string" && single.trim() && single !== "null" && single !== "undefined") {
+      // Validate URL or data URI format
+      if (single.startsWith("http://") || single.startsWith("https://") || single.startsWith("data:") || single.startsWith("blob:")) {
+        if (!list.includes(single)) list.unshift(single);
+      }
+    }
+    return list.length ? list : [COMMON_IMAGE];
+  }, [item]);
+
+  const [imageIndex, setImageIndex] = useState(0);
+  const [imageLoading, setImageLoading] = useState(true);
+  const [imageError, setImageError] = useState(false);
+  
+  useEffect(() => {
+    setImageIndex(0);
+    setImageLoading(true);
+    setImageError(false);
+  }, [imageList]);
+
+  const activeImage = imageList[Math.min(imageIndex, imageList.length - 1)] || COMMON_IMAGE;
+  
+  // Check if we have a real image (not the default fallback)
+  // Also validate that it's a proper URL or data URI
+  const hasRealImage = activeImage && 
+                       activeImage !== COMMON_IMAGE && 
+                       (activeImage.startsWith("http://") || 
+                        activeImage.startsWith("https://") || 
+                        activeImage.startsWith("data:") || 
+                        activeImage.startsWith("blob:"));
+
+  const nextImage = () => {
+    setImageIndex((idx) => (idx + 1) % imageList.length);
+  };
+  const prevImage = () => {
+    setImageIndex((idx) => (idx - 1 + imageList.length) % imageList.length);
+  };
+
+  const initial = (itemName || "?").trim().charAt(0).toUpperCase() || "?";
+
+  const unitPrice = useMemo(() => {
+    // Don't use item.price as fallback since it's the total (UnitPrice + Tax1Amount)
+    const v =
+      getVal(item, "pc.UnitPrice") ??
+      getVal(item, "pc_UnitPrice") ??
+      0;
+    return num(v);
+  }, [item]);
+
+  const tax1Amount = useMemo(() => {
+    const v =
+      getVal(item, "pc.Tax1Amount") ??
+      getVal(item, "pc_Tax1Amount") ??
+      0;
+    return num(v);
+  }, [item]);
+
+  const totalPrice = useMemo(() => Number((unitPrice + tax1Amount).toFixed(2)), [
+    unitPrice,
+    tax1Amount,
+  ]);
+
+  const itemForCart = useMemo(
+    () => ({ ...item, id: itemId, name: itemName, price: totalPrice }),
+    [item, itemId, itemName, totalPrice]
+  );
+
+  // const lineKey = useMemo(
+  //   () => JSON.stringify({ id: itemId, mods: selectedIds }),
+  //   [itemId, selectedIds]
+  // );
+
+  // const qtyFromStore = useMemo(() => {
+  //   const line = items.find((x) => x._k === lineKey);
+  //   return line?.qty ?? 0;
+  // }, [items, lineKey]);
+
+  const vibrate = (ms = 8) => {
+    if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
+  };
+  const setRipple = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty("--x", `${e.clientX - r.left}px`);
+    e.currentTarget.style.setProperty("--y", `${e.clientY - r.top}px`);
+  };
+
+  // const liveRef = useRef(null);
+  // useEffect(() => {
+  //   if (liveRef.current) liveRef.current.textContent = `Quantity ${qtyFromStore}`;
+  // }, [qtyFromStore]);
+
+  const groupDesc =
+    getVal(item, "gm.GroupDescription") ?? getVal(item, "gm_GroupDescription");
+
+  return (
+    <article className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[rgba(201,26,77,0.08)] bg-white/95 shadow-[0_12px_26px_rgba(122,0,38,0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_45px_rgba(122,0,38,0.12)] sm:rounded-[24px]">
+      <div className="relative overflow-hidden rounded-t-[24px]">
+        <div 
+          className="relative w-full aspect-[4/3] bg-slate-100 overflow-hidden cursor-pointer"
+          onClick={onOpen ? () => onOpen(itemForCart) : undefined}
+          role="button"
+          tabIndex={0}
+          aria-label={`View details for ${itemName}`}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && onOpen) {
+              e.preventDefault();
+              onOpen(itemForCart);
+            }
+          }}
+        >
+          {/* Loading Spinner - Show while image is loading */}
+          {imageLoading && hasRealImage && (
+            <div className="absolute inset-0 grid place-items-center bg-slate-100">
+              <div className="flex flex-col items-center gap-3">
+                {/* Spinner */}
+                <div className="relative w-12 h-12">
+                  <div className="absolute inset-0 border-4 border-[#C91A4D]/20 rounded-full"></div>
+                  <div className="absolute inset-0 border-4 border-transparent border-t-[#C91A4D] rounded-full animate-spin"></div>
+                </div>
+                <span className="text-xs font-medium text-gray-500">Loading image...</span>
+              </div>
+            </div>
+          )}
+
+          {/* Actual Image - Hidden while loading */}
+          {activeImage && (
+            <img
+              src={activeImage}
+              alt={itemName}
+              loading={activeImage.startsWith('https://res.cloudinary.com') ? 'eager' : 'lazy'}
+              fetchPriority={activeImage.startsWith('https://res.cloudinary.com') ? 'high' : 'auto'}
+              onLoad={() => {
+                setImageLoading(false);
+                setImageError(false);
+              }}
+              onError={(e) => {
+                console.warn(`[ItemCard] Image failed to load for ${itemName}:`, activeImage?.substring(0, 50));
+                setImageLoading(false);
+                setImageError(true);
+                // Try fallback to common image if current image is not already the fallback
+                if (activeImage !== COMMON_IMAGE && activeImage) {
+                  // If there are other images in the list, try next one
+                  if (imageList.length > 1 && imageIndex < imageList.length - 1) {
+                    setImageIndex(imageIndex + 1);
+                  } else {
+                    // Last resort: use common image
+                    e.currentTarget.src = COMMON_IMAGE;
+                  }
+                } else {
+                  // Already on fallback, hide image and show placeholder
+                  e.currentTarget.style.display = 'none';
+                }
+              }}
+              className={`h-full w-full object-cover transition-all duration-500 group-hover:scale-105 ${
+                imageLoading && hasRealImage ? 'opacity-0' : 'opacity-100'
+              }`}
+              referrerPolicy="no-referrer"
+              decoding="async"
+              // 🚀 SPEED: Add width/height to prevent layout shift and enable browser optimization
+              width="400"
+              height="300"
+              // 🚀 SPEED: Use sizes attribute for responsive images
+              sizes="(max-width: 640px) 170px, (max-width: 768px) 200px, (max-width: 1024px) 220px, 240px"
+            />
+          )}
+
+          {/* Default Image Placeholder - Show when no valid image or all images failed */}
+          {(!hasRealImage || (imageError && imageList.length <= 1) || (imageError && imageIndex >= imageList.length - 1)) && !imageLoading && (
+            <div className="grid h-full w-full place-items-center bg-gradient-to-br from-slate-100 to-slate-200">
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className="grid h-16 w-16 place-items-center rounded-xl text-lg font-bold text-white shadow-lg"
+                  style={{
+                    background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
+                  }}
+                  aria-hidden
+                >
+                  {initial}
+                </div>
+                <span className="text-xs text-gray-500 font-medium">NO IMAGE AVAILABLE</span>
+              </div>
+            </div>
+          )}
+
+          {imageList.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={prevImage}
+                className="absolute left-2 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white/85 text-slate-700 shadow transition hover:bg-white"
+                aria-label="Previous image"
+              >
+                <Icon name="arrow-left" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={nextImage}
+                className="absolute right-2 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white/85 text-slate-700 shadow transition hover:bg-white"
+                aria-label="Next image"
+              >
+                <Icon name="arrow-right" className="h-4 w-4" />
+              </button>
+              <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1">
+                {imageList.map((_, idx) => (
+                  <span
+                    key={idx}
+                    className={`h-2 w-2 rounded-full transition ${
+                      idx === imageIndex ? "bg-white" : "bg-white/40"
+                    }`}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[rgba(17,24,39,0.55)] via-transparent to-transparent" />
+
+        {groupDesc && (
+            <div className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-3 py-1 text-[11px] font-medium text-gray-700 shadow">
+            {groupDesc}
+          </div>
+        )}
+
+        <button
+          onClick={onOpen ? () => onOpen(itemForCart) : undefined}
+            className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full border border-white/60 bg-white/80 text-slate-700 shadow-sm transition hover:bg-white"
+          aria-label={`More info about ${itemName}`}
+          title="More info"
+        >
+            <Icon name="info" className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-4 px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-4">
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold leading-tight text-slate-900 line-clamp-2 sm:text-[1.05rem]">
+            {itemName}
+          </h3>
+          {(item.subtitle || item.desc) && (
+            <p className="text-[0.85rem] leading-relaxed text-gray-500 line-clamp-3 sm:text-sm">
+              {item.subtitle || item.desc}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-auto space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                {t("menu.price")}
+              </div>
+              <div className="text-lg font-bold text-slate-900 sm:text-[1.25rem]">
+                AED {totalPrice.toFixed(2)}
+              </div>
+        </div>
+
+        {/* Add to cart button removed */}
+        {/* {qtyFromStore <= 0 ? (
+          <button
+            onClick={(e) => {
+                  setRipple(e);
+                  vibrate(10);
+                  onQuickAdd?.(itemForCart, selectedMods);
+            }}
+            onPointerDown={setRipple}
+                className="relative inline-flex h-10 min-w-[112px] items-center justify-center gap-2 rounded-full px-4 text-xs font-semibold text-white shadow-lg transition active:scale-95 sm:h-11 sm:min-w-[120px] sm:px-5 sm:text-sm"
+                style={{
+                  background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))",
+                }}
+            aria-label={`Add ${itemName} to cart`}
+            title="Add to cart"
+          >
+                <Icon name="plus" className="h-4 w-4" />
+                <span className="sm:hidden">{t("menu.add")}</span>
+                <span className="hidden sm:inline">{t("menu.add_to_cart")}</span>
+            <span className="btn-ripple" aria-hidden />
+          </button>
+        ) : (
+          <div
+                className="flex items-center gap-2 rounded-full border border-[rgba(201,26,77,0.25)] bg-[rgba(201,26,77,0.08)] px-1.5 py-1 sm:px-2"
+            role="group"
+            aria-label={`Quantity controls for ${itemName}`}
+          >
+            <button
+              onClick={(e) => {
+                    setRipple(e);
+                    vibrate(6);
+                    if (qtyFromStore <= 1) {
+                      remove(lineKey);
+                    } else {
+                      dec(lineKey);
+                    }
+              }}
+              onPointerDown={setRipple}
+                  className="relative grid h-8 w-8 place-items-center rounded-full text-[var(--grad-start)] transition hover:bg-white active:scale-95 sm:h-9 sm:w-9"
+              aria-label={qtyFromStore <= 1 ? "Remove from cart" : "Decrease quantity"}
+              title={qtyFromStore <= 1 ? "Remove" : "Decrease"}
+            >
+                  <Icon name={qtyFromStore <= 1 ? "trash" : "minus"} className="h-4 w-4" />
+              <span className="btn-ripple" aria-hidden />
+            </button>
+                <span className="min-w-[32px] text-center text-xs font-semibold text-[var(--grad-start)] sm:min-w-[36px] sm:text-sm">
+                  {qtyFromStore}
+                </span>
+            <button
+                  onClick={(e) => {
+                    setRipple(e);
+                    vibrate(6);
+                    inc(lineKey);
+                  }}
+              onPointerDown={setRipple}
+                  className="relative grid h-8 w-8 place-items-center rounded-full text-[var(--grad-start)] transition hover:bg-white active:scale-95 sm:h-9 sm:w-9"
+              aria-label="Increase quantity"
+              title="Increase"
+            >
+                  <Icon name="plus" className="h-4 w-4" />
+              <span className="btn-ripple" aria-hidden />
+            </button>
+          </div>
+        )} */}
+      </div>
+
+          <div className="flex items-center justify-center text-[11px] font-medium text-gray-500 sm:text-xs">
+            {/* Customize button hidden */}
+            {/* <button
+              type="button"
+              onClick={(e) => {
+                setRipple(e);
+                vibrate(8);
+                setShowMods(true);
+              }}
+              onPointerDown={setRipple}
+              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
+              title="Customize"
+            >
+              <Icon name="sliders" className="h-3.5 w-3.5" />
+              {t("menu.customize")}
+              <span className="btn-ripple" aria-hidden />
+            </button> */}
+
+            <span className="rounded-full bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]" style={{ letterSpacing: "0.2em" }}>
+              VAT inclusive service charge not included
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* <span ref={liveRef} className="sr-only" aria-live="polite" /> */}
+
+      {/* ModifierModal hidden */}
+      {/* <ModifierModal
+        open={showMods}
+        item={itemForCart}
+        initialSelectedIds={selectedIds}
+        onClose={() => setShowMods(false)}
+        onApply={(pickedMods) => {
+          const oldKey = JSON.stringify({ id: itemId, mods: selectedIds });
+          useCart.getState().updateMods(oldKey, itemForCart, pickedMods || []);
+          setSelectedMods(pickedMods || []);
+          setShowMods(false);
+        }}
+      /> */}
+    </article>
+  );
+}
+
+// 🚀 SPEED OPTIMIZATION: Memoize ItemCard to prevent unnecessary re-renders
+// Only re-render if item data actually changes
+export default memo(ItemCard, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if item ID or image changes
+  const prevItemId = prevProps.item?.id || prevProps.item?._raw?.product_id || prevProps.item?._raw?.["pm.ProductID"];
+  const nextItemId = nextProps.item?.id || nextProps.item?._raw?.product_id || nextProps.item?._raw?.["pm.ProductID"];
+  
+  // Check both img and images array (updateItemImage updates item.img and item.images)
+  const prevImage = prevProps.item?.img || prevProps.item?.image || prevProps.item?.images?.[0];
+  const nextImage = nextProps.item?.img || nextProps.item?.image || nextProps.item?.images?.[0];
+  
+  // Re-render if ID changed OR image changed (return false means "should update")
+  if (prevItemId !== nextItemId) return false;
+  if (prevImage !== nextImage) return false;
+  
+  // No changes - skip re-render
+  return true;
+});

@@ -1,14 +1,14 @@
 // src/components/ItemCard.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useCart } from "../store/cartStore";
+import { useEffect, useMemo, useState, memo } from "react";
+// import { useCart } from "../store/cartStore";
 import Icon from "./Icon";
-import ModifierModal from "./ModifierModal";
+// import ModifierModal from "./ModifierModal";
 import { useTranslation } from "react-i18next";
 
 /** 🔧 COMMON IMAGE */
 const COMMON_IMAGE =
   import.meta?.env?.VITE_MENU_IMG ||
-  "https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=1200&q=80&auto=format&fit=crop";
+  "https://res.cloudinary.com/danoolbdz/image/upload/v1766755726/no-image-icon-23500_j6y6gn.jpg";
 const USE_COMMON_IMAGE_ONLY = false;
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -22,27 +22,27 @@ function getVal(item, key) {
   return undefined;
 }
 
-export default function ItemCard({
+function ItemCard({
   item,
   onQuickAdd,
   onOpen,
   onModifiers,
   qtyInCart,
 }) {
-  const items = useCart((s) => s.items);
-  const inc = useCart((s) => s.inc);
-  const dec = useCart((s) => s.dec);
-  const remove = useCart((s) => s.remove);
-  const tableArea = useCart((s) => s.tableArea);
+  // const items = useCart((s) => s.items);
+  // const inc = useCart((s) => s.inc);
+  // const dec = useCart((s) => s.dec);
+  // const remove = useCart((s) => s.remove);
+  // const tableArea = useCart((s) => s.tableArea);
   const { t } = useTranslation();
 
-  const [selectedMods, setSelectedMods] = useState([]);
-  const selectedIds = useMemo(
-    () => [...selectedMods.map((m) => m.id ?? m.ModifierID ?? m.name)].sort(),
-    [selectedMods]
-  );
+  // const [selectedMods, setSelectedMods] = useState([]);
+  // const selectedIds = useMemo(
+  //   () => [...selectedMods.map((m) => m.id ?? m.ModifierID ?? m.name)].sort(),
+  //   [selectedMods]
+  // );
 
-  const [showMods, setShowMods] = useState(false);
+  // const [showMods, setShowMods] = useState(false);
 
   const itemId = useMemo(
     () =>
@@ -74,20 +74,44 @@ export default function ItemCard({
     const list = [];
     if (Array.isArray(item?.images)) {
       item.images.forEach((src) => {
-        if (typeof src === "string" && src.trim()) list.push(src.trim());
+        if (typeof src === "string" && src.trim() && src !== "null" && src !== "undefined") {
+          // Validate URL or data URI format
+          if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:") || src.startsWith("blob:")) {
+            list.push(src.trim());
+          }
+        }
       });
     }
     const single = item?.img || item?.image || item?._raw?.DocImage;
-    if (single && !list.includes(single)) list.unshift(single);
+    if (single && typeof single === "string" && single.trim() && single !== "null" && single !== "undefined") {
+      // Validate URL or data URI format
+      if (single.startsWith("http://") || single.startsWith("https://") || single.startsWith("data:") || single.startsWith("blob:")) {
+        if (!list.includes(single)) list.unshift(single);
+      }
+    }
     return list.length ? list : [COMMON_IMAGE];
   }, [item]);
 
   const [imageIndex, setImageIndex] = useState(0);
+  const [imageError, setImageError] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  
   useEffect(() => {
     setImageIndex(0);
-  }, [imageList]);
+    setImageError(false);
+    setImageLoaded(false);
+  }, [imageList, itemName]);
 
   const activeImage = imageList[Math.min(imageIndex, imageList.length - 1)] || COMMON_IMAGE;
+  
+  // Check if we have a real image (not the default fallback)
+  // Also validate that it's a proper URL or data URI
+  const hasRealImage = activeImage && 
+                       activeImage !== COMMON_IMAGE && 
+                       (activeImage.startsWith("http://") || 
+                        activeImage.startsWith("https://") || 
+                        activeImage.startsWith("data:") || 
+                        activeImage.startsWith("blob:"));
 
   const nextImage = () => {
     setImageIndex((idx) => (idx + 1) % imageList.length);
@@ -125,15 +149,15 @@ export default function ItemCard({
     [item, itemId, itemName, totalPrice]
   );
 
-  const lineKey = useMemo(
-    () => JSON.stringify({ id: itemId, mods: selectedIds }),
-    [itemId, selectedIds]
-  );
+  // const lineKey = useMemo(
+  //   () => JSON.stringify({ id: itemId, mods: selectedIds }),
+  //   [itemId, selectedIds]
+  // );
 
-  const qtyFromStore = useMemo(() => {
-    const line = items.find((x) => x._k === lineKey);
-    return line?.qty ?? 0;
-  }, [items, lineKey]);
+  // const qtyFromStore = useMemo(() => {
+  //   const line = items.find((x) => x._k === lineKey);
+  //   return line?.qty ?? 0;
+  // }, [items, lineKey]);
 
   const vibrate = (ms = 8) => {
     if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
@@ -144,10 +168,10 @@ export default function ItemCard({
     e.currentTarget.style.setProperty("--y", `${e.clientY - r.top}px`);
   };
 
-  const liveRef = useRef(null);
-  useEffect(() => {
-    if (liveRef.current) liveRef.current.textContent = `Quantity ${qtyFromStore}`;
-  }, [qtyFromStore]);
+  // const liveRef = useRef(null);
+  // useEffect(() => {
+  //   if (liveRef.current) liveRef.current.textContent = `Quantity ${qtyFromStore}`;
+  // }, [qtyFromStore]);
 
   const groupDesc =
     getVal(item, "gm.GroupDescription") ?? getVal(item, "gm_GroupDescription");
@@ -155,33 +179,102 @@ export default function ItemCard({
   return (
     <article className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[rgba(201,26,77,0.08)] bg-white/95 shadow-[0_12px_26px_rgba(122,0,38,0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_45px_rgba(122,0,38,0.12)] sm:rounded-[24px]">
       <div className="relative overflow-hidden rounded-t-[24px]">
-        <div className="relative w-full aspect-[4/3] bg-slate-100 overflow-hidden">
-          {activeImage ? (
+        <div 
+          className="relative w-full aspect-[4/3] bg-slate-100 overflow-hidden cursor-pointer"
+          onClick={onOpen ? () => onOpen(itemForCart) : undefined}
+          role="button"
+          tabIndex={0}
+          aria-label={`View details for ${itemName}`}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && onOpen) {
+              e.preventDefault();
+              onOpen(itemForCart);
+            }
+          }}
+        >
+          {/* Blur-up Placeholder - ALWAYS shows instantly (like Medium, Pinterest, Instagram) */}
+          {/* This is the key: show blur placeholder immediately, no loading spinner */}
+          {item?.thumbnailUrl && hasRealImage ? (
             <img
-              src={activeImage}
-              alt={itemName}
-              loading="lazy"
-              onError={(e) => {
-                if (activeImage !== COMMON_IMAGE) {
-                  e.currentTarget.src = COMMON_IMAGE;
-                }
+              src={item.thumbnailUrl}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 h-full w-full object-cover scale-110"
+              style={{ 
+                filter: 'blur(20px)',
+                transform: 'scale(1.1)',
+                transition: 'opacity 0.3s ease-out'
               }}
-              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-              referrerPolicy="no-referrer"
+              loading="eager"
+              fetchPriority="high"
             />
           ) : (
-            <div className="grid h-full w-full place-items-center">
-            <div
-                className="grid h-12 w-12 place-items-center rounded-xl text-sm font-bold text-white"
-                style={{
-                  background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
-                }}
-              aria-hidden
-            >
-              {initial}
+            // Fallback gradient background if no thumbnail
+            <div className="absolute inset-0 bg-gradient-to-br from-slate-100 to-slate-200" />
+          )}
+
+          {/* Actual Image - Fades in smoothly when loaded */}
+          {activeImage && (
+            <img
+              key={`${activeImage}-${imageIndex}`}
+              src={activeImage}
+              alt={itemName}
+              loading={activeImage.startsWith('https://res.cloudinary.com') ? 'eager' : 'lazy'}
+              fetchPriority={activeImage.startsWith('https://res.cloudinary.com') ? 'high' : 'auto'}
+              onLoad={(e) => {
+                setImageLoaded(true);
+                setImageError(false);
+                // Smooth fade-in from blur to full image
+                e.currentTarget.style.opacity = '1';
+                e.currentTarget.style.transition = 'opacity 0.4s ease-in-out';
+              }}
+              onError={(e) => {
+                console.warn(`[ItemCard] Image failed to load for ${itemName}:`, activeImage?.substring(0, 50));
+                setImageError(true);
+                // Try fallback to common image if current image is not already the fallback
+                if (activeImage !== COMMON_IMAGE && activeImage) {
+                  // If there are other images in the list, try next one
+                  if (imageList.length > 1 && imageIndex < imageList.length - 1) {
+                    setImageIndex(imageIndex + 1);
+                  } else {
+                    // Last resort: use common image
+                    e.currentTarget.src = COMMON_IMAGE;
+                  }
+                } else {
+                  // Already on fallback, keep blur placeholder visible
+                  e.currentTarget.style.display = 'none';
+                }
+              }}
+              className={`h-full w-full object-cover transition-all duration-500 group-hover:scale-105 relative z-10 ${
+                imageLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+              referrerPolicy="no-referrer"
+              decoding="async"
+              // 🚀 SPEED: Add width/height to prevent layout shift and enable browser optimization
+              width="400"
+              height="300"
+              // 🚀 SPEED: Use sizes attribute for responsive images
+              sizes="(max-width: 640px) 170px, (max-width: 768px) 200px, (max-width: 1024px) 220px, 240px"
+            />
+          )}
+
+          {/* Default Image Placeholder - Show when no valid image or all images failed */}
+          {(!hasRealImage || (imageError && imageList.length <= 1) || (imageError && imageIndex >= imageList.length - 1)) && (
+            <div className="grid h-full w-full place-items-center bg-gradient-to-br from-slate-100 to-slate-200">
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className="grid h-16 w-16 place-items-center rounded-xl text-lg font-bold text-white shadow-lg"
+                  style={{
+                    background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
+                  }}
+                  aria-hidden
+                >
+                  {initial}
+                </div>
+                <span className="text-xs text-gray-500 font-medium">NO IMAGE AVAILABLE</span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
           {imageList.length > 1 && (
             <>
@@ -256,7 +349,8 @@ export default function ItemCard({
               </div>
         </div>
 
-        {qtyFromStore <= 0 ? (
+        {/* Add to cart button removed */}
+        {/* {qtyFromStore <= 0 ? (
           <button
             onClick={(e) => {
                   setRipple(e);
@@ -318,11 +412,12 @@ export default function ItemCard({
               <span className="btn-ripple" aria-hidden />
             </button>
           </div>
-        )}
+        )} */}
       </div>
 
-          <div className="flex items-center justify-between text-[11px] font-medium text-gray-500 sm:text-xs">
-            <button
+          <div className="flex items-center justify-center text-[11px] font-medium text-gray-500 sm:text-xs">
+            {/* Customize button hidden */}
+            {/* <button
               type="button"
               onClick={(e) => {
                 setRipple(e);
@@ -336,18 +431,19 @@ export default function ItemCard({
               <Icon name="sliders" className="h-3.5 w-3.5" />
               {t("menu.customize")}
               <span className="btn-ripple" aria-hidden />
-            </button>
+            </button> */}
 
             <span className="rounded-full bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]" style={{ letterSpacing: "0.2em" }}>
-              {t("menu.vat_inc")}
+              VAT inclusive service charge not included
             </span>
           </div>
         </div>
       </div>
 
-      <span ref={liveRef} className="sr-only" aria-live="polite" />
+      {/* <span ref={liveRef} className="sr-only" aria-live="polite" /> */}
 
-      <ModifierModal
+      {/* ModifierModal hidden */}
+      {/* <ModifierModal
         open={showMods}
         item={itemForCart}
         initialSelectedIds={selectedIds}
@@ -358,7 +454,26 @@ export default function ItemCard({
           setSelectedMods(pickedMods || []);
           setShowMods(false);
         }}
-      />
+      /> */}
     </article>
   );
 }
+
+// 🚀 SPEED OPTIMIZATION: Memoize ItemCard to prevent unnecessary re-renders
+// Only re-render if item data actually changes
+export default memo(ItemCard, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if item ID or image changes
+  const prevItemId = prevProps.item?.id || prevProps.item?._raw?.product_id || prevProps.item?._raw?.["pm.ProductID"];
+  const nextItemId = nextProps.item?.id || nextProps.item?._raw?.product_id || nextProps.item?._raw?.["pm.ProductID"];
+  
+  // Check both img and images array (updateItemImage updates item.img and item.images)
+  const prevImage = prevProps.item?.img || prevProps.item?.image || prevProps.item?.images?.[0];
+  const nextImage = nextProps.item?.img || nextProps.item?.image || nextProps.item?.images?.[0];
+  
+  // Re-render if ID changed OR image changed (return false means "should update")
+  if (prevItemId !== nextItemId) return false;
+  if (prevImage !== nextImage) return false;
+  
+  // No changes - skip re-render
+  return true;
+});

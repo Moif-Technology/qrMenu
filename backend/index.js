@@ -2,13 +2,20 @@ import cors from "cors";
 import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { closeDb, connectToDb, pingDb, closePaymentDb, connectToPaymentDb, pingPaymentDb } from "./config/dbConfig.js";
+import { closeDb, connectToDb, pingDb, closePaymentDb, connectToPaymentDb, pingPaymentDb, INVENTORY_DB_NAME, PAYMENT_DB_NAME } from "./config/dbConfig.js";
 import kotSaveRoutes from "./routes/kotSave.routes.js";
 import menuRoutes from "./routes/menu.routes.js";
 import modifierRoutes from "./routes/modifier.routes.js"
 import tableRoutes from "./routes/table.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
+import reservationRoutes from "./routes/reservation.routes.js";
+import waitlistRoutes from "./routes/waitlist.routes.js";
+import qrRoutes from "./routes/qr.routes.js";
+import qrMenuRoutes from "./routes/qrMenu.routes.js";
+import packageRoutes from "./routes/package.routes.js";
+import floorLayoutRoutes from "./routes/floorLayout.routes.js";
 import telrRoutes from "./telr.routes.js";
+import { startAutoMigration, stopAutoMigration, getAutoMigrationStatus } from "./services/imageAutoMigration.service.js";
 const app = express();
 const PORT = process.env.PORT || 5001;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
@@ -17,27 +24,32 @@ app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json({ limit: "1mb" }));
 
 // Rate limiting configuration
-// General API rate limiter: 100 requests per 15 minutes per IP
+// DISABLED in development - React Strict Mode causes double API calls
+// Only enabled in production for security
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
+// Create a no-op middleware for development (no rate limiting)
+const noOpLimiter = (req, res, next) => next();
+
+// Production rate limiters
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: process.env.RATE_LIMIT_MAX ? Number(process.env.RATE_LIMIT_MAX) : 100,
   message: { ok: false, error: "Too many requests, please try again later." },
-  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
-  legacyHeaders: false, // Disable `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    return req.path === '/api/health' || req.path === '/api/health/db';
+  }
 });
 
-// Stricter limit for payment endpoints: 100 requests per 5 minutes per IP
-// Using shorter window (5 min) to allow more frequent payment attempts
-// Increased limit to handle payment callbacks and retries
 const paymentLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes (shorter window)
-  max: process.env.RATE_LIMIT_PAYMENT_MAX ? Number(process.env.RATE_LIMIT_PAYMENT_MAX) : 100, // Increased from 20 to 100
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: process.env.RATE_LIMIT_PAYMENT_MAX ? Number(process.env.RATE_LIMIT_PAYMENT_MAX) : 100,
   message: { ok: false, error: "Too many payment requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip rate limiting for read-only endpoints
   skip: (req) => {
-    // Allow read-only payment queries without rate limiting
     return req.method === 'GET' && (
       req.path.includes('/balance/') || 
       req.path.includes('/paid-items/') ||
@@ -46,9 +58,19 @@ const paymentLimiter = rateLimit({
   },
 });
 
-// Apply rate limiting to API routes
-app.use("/api", apiLimiter);
-app.use("/api/payment", paymentLimiter);
+// Apply rate limiting: DISABLED in development, ENABLED in production
+if (isDevelopment) {
+  console.log("[RATE LIMIT] DISABLED in development mode");
+  app.use("/api", noOpLimiter);
+  app.use("/api/payment", noOpLimiter);
+} else {
+  console.log("[RATE LIMIT] ENABLED in production mode");
+  app.use("/api", apiLimiter);
+  app.use("/api/payment", paymentLimiter);
+}
+
+
+
 
 // 🔎 request logger
 app.use((req, _res, next) => {
@@ -60,16 +82,24 @@ app.use((req, _res, next) => {
 (async () => {
   try {
     await connectToDb();
-    console.log("[DB] Inventory database connection established");
+    console.log(`[DB] ${INVENTORY_DB_NAME} database connection established`);
   } catch (err) {
-    console.error("[DB] Initial Inventory connection failed:", err?.message || err);
+    console.error(`[DB] Initial ${INVENTORY_DB_NAME} connection failed:`, err?.message || err);
   }
   
   try {
     await connectToPaymentDb();
-    console.log("[DB] PaymentGateway database connection established");
+    console.log(`[DB] ${PAYMENT_DB_NAME} database connection established`);
   } catch (err) {
-    console.error("[DB] Initial PaymentGateway connection failed:", err?.message || err);
+    console.error(`[DB] Initial ${PAYMENT_DB_NAME} connection failed:`, err?.message || err);
+  }
+
+  // Start auto-migration service after DB connections are established
+  try {
+    startAutoMigration();
+    console.log(`[AUTO-MIGRATION] ✅ Auto-migration service started`);
+  } catch (err) {
+    console.error(`[AUTO-MIGRATION] ❌ Failed to start auto-migration service:`, err?.message || err);
   }
 })();
 
@@ -114,12 +144,31 @@ app.get("/api/health/db", async (_req, res) => {
   }
 });
 
+// Auto-migration service status endpoint
+app.get("/api/health/auto-migration", async (_req, res) => {
+  try {
+    const status = getAutoMigrationStatus();
+    res.json({
+      ok: true,
+      autoMigration: status
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // API routes
 app.use("/api/menu", menuRoutes);
+app.use("/api/qr-menu", qrMenuRoutes);
+app.use("/api/packages", packageRoutes);
 app.use("/api/pos", kotSaveRoutes); 
 app.use("/api/modifier",modifierRoutes);
 app.use("/api", tableRoutes);
 app.use("/api", paymentRoutes);
+app.use("/api", reservationRoutes);
+app.use("/api", waitlistRoutes);
+app.use("/api", qrRoutes);
+app.use("/api/floor-layout", floorLayoutRoutes);
 app.use(telrRoutes);
 // 404
 app.use((req, res) => {
@@ -144,21 +193,30 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 // Graceful shutdown
 function shutdown(signal) {
   console.log(`[SYS] ${signal} received. Shutting down...`);
+  
+  // Stop auto-migration service
+  try {
+    stopAutoMigration();
+    console.log(`[AUTO-MIGRATION] Service stopped`);
+  } catch (e) {
+    console.error(`[AUTO-MIGRATION] Stop error:`, e?.message || e);
+  }
+  
   server.close(async () => {
     try { 
       await closeDb?.(); 
-      console.log("[DB] Inventory pool closed."); 
+      console.log(`[DB] ${INVENTORY_DB_NAME} pool closed.`); 
     }
     catch (e) { 
-      console.error("[DB] Inventory close error:", e?.message || e); 
+      console.error(`[DB] ${INVENTORY_DB_NAME} close error:`, e?.message || e); 
     }
     
     try { 
       await closePaymentDb?.(); 
-      console.log("[DB] PaymentGateway pool closed."); 
+      console.log(`[DB] ${PAYMENT_DB_NAME} pool closed.`); 
     }
     catch (e) { 
-      console.error("[DB] PaymentGateway close error:", e?.message || e); 
+      console.error(`[DB] ${PAYMENT_DB_NAME} close error:`, e?.message || e); 
     }
     
     finally { process.exit(0); }

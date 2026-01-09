@@ -15,6 +15,59 @@ const {
   FRONTEND_URL = "http://localhost:5173",
 } = process.env;
 
+// Normalize APP_BASE_URL to remove trailing /api if present
+// This prevents double /api/api/ in return URLs
+// Ensure port number is always included (default to 5001 for local network IPs)
+function normalizeAppBaseUrl(baseUrl) {
+  if (!baseUrl) {
+    return "https://api.deynoqr.com/api";
+    // return "http://192.168.0.34:5001/api";
+  }
+  
+  // Remove trailing /api and trailing slashes
+  let normalized = baseUrl.trim().replace(/\/api\/?$/, "").replace(/\/$/, "");
+  
+  // Check if it's an IP address pattern
+  const ipPattern = /^(https?:\/\/)(\d+\.\d+\.\d+\.\d+)(?::(\d+))?(\/.*)?$/;
+  const match = normalized.match(ipPattern);
+  
+  if (match) {
+    // It's an IP address
+    const protocol = match[1];
+    const ip = match[2];
+    const port = match[3];
+    const path = match[4] || "";
+    
+    // If no port specified, add :5001
+    if (!port) {
+      normalized = `${protocol}${ip}:5001${path}`;
+    } else {
+      normalized = `${protocol}${ip}:${port}${path}`;
+    }
+  } else {
+    // Try to parse as URL for other cases (localhost, domain names, etc.)
+    try {
+      const url = new URL(normalized);
+      // If no port and it's http://localhost, add port 5001
+      if (!url.port && url.protocol === "http:" && url.hostname === "localhost") {
+        url.port = "5001";
+        normalized = url.toString().replace(/\/$/, "");
+      }
+    } catch (e) {
+      // If URL parsing fails, return as-is (might be malformed, but we tried)
+      console.warn("[Telr] Could not parse APP_BASE_URL:", baseUrl, e.message);
+    }
+  }
+  
+  return normalized;
+}
+
+const normalizedAppBaseUrl = normalizeAppBaseUrl(APP_BASE_URL);
+
+// Debug log to help troubleshoot
+console.log("[Telr] APP_BASE_URL:", APP_BASE_URL);
+console.log("[Telr] Normalized APP_BASE_URL:", normalizedAppBaseUrl);
+
 const sanitizedStoreId = TELR_STORE_ID?.toString().trim();
 const sanitizedAuthKey = TELR_AUTH_KEY?.toString().trim();
 const rawTestMode = (TELR_TEST_MODE ?? "").toString().trim().toLowerCase();
@@ -230,9 +283,16 @@ router.post("/api/telr/create", async (req, res) => {
       ivp_desc: description,
       ivp_cart: String(cartId),
       ivp_framed: "0",
-      return_auth: `${APP_BASE_URL}/api/telr/return/auth${returnQuery}`,
-      return_can: `${APP_BASE_URL}/api/telr/return/cancel${returnQuery}`,
-      return_decl: `${APP_BASE_URL}/api/telr/return/declined${returnQuery}`,
+      return_auth: `${normalizedAppBaseUrl}/api/telr/return/auth${returnQuery}`,
+      return_can: `${normalizedAppBaseUrl}/api/telr/return/cancel${returnQuery}`,
+      return_decl: `${normalizedAppBaseUrl}/api/telr/return/declined${returnQuery}`,
+    });
+
+    // Debug log return URLs
+    console.log("[Telr] Return URLs:", {
+      return_auth: `${normalizedAppBaseUrl}/api/telr/return/auth${returnQuery}`,
+      return_can: `${normalizedAppBaseUrl}/api/telr/return/cancel${returnQuery}`,
+      return_decl: `${normalizedAppBaseUrl}/api/telr/return/declined${returnQuery}`,
     });
 
     if (customer.email) form.set("bill_email", customer.email);

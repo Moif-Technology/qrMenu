@@ -1,0 +1,73 @@
+{
+  "common": {
+    "table_label": "الطاولة {{id}}",
+    "table_area": "{{area}}",
+    "cart": "السلة",
+    "language": "اللغة",
+    "back_to_top": "العودة إلى الأعلى"
+  },
+  "search": {
+    "placeholder": "ابحث في القائمة مثلًا \"{{example}}\"",
+    "title": "ما الذي تشتهيه اليوم؟",
+    "subtitle": "ابحث باسم الطبق أو المكوّن أو التفضيل الغذائي.",
+    "trending_label": "الأكثر طلبًا الآن",
+    "trending": "شائع الآن",
+    "recent": "عمليات البحث الأخيرة",
+    "examples": ["برجر", "برياني", "أرز مقلي", "موهيتو"]
+  },
+  "menu": {
+    "menu_journey": "رحلة القائمة",
+    "swipe_hint": "اسحب للاستكشاف",
+    "featured": "مميز",
+    "service_standard": "الأسعار تشمل ضريبة القيمة المضافة، يتم التحضير عند الطلب",
+    "sort_by": "ترتيب حسب",
+    "sort_popular": "الأكثر شيوعًا",
+    "sort_price_asc": "السعر: من الأقل إلى الأعلى",
+    "sort_price_desc": "السعر: من الأعلى إلى الأقل",
+    "price": "السعر",
+    "add_to_cart": "أضف إلى السلة",
+    "add": "إضافة",
+    "customize": "تخصيص",
+    "vat_inc": "شامل الضريبة",
+    "toast_added": "{{name}} تمت إضافته إلى الطلب",
+    "toast_suggestion": "ماذا عن {{name}}؟"
+  },
+  "cart": {
+    "your_order": "طلبك",
+    "items_count": "{{count}} عنصر",
+    "items_count_one": "{{count}} عنصر",
+    "items_count_other": "{{count}} عناصر",
+    "empty": "سلتك فارغة",
+    "note_label": "ملاحظة الطلب (اختياري)",
+    "note_placeholder": "أي طلبات خاصة أو حساسية أو تعليمات للطهي...",
+    "clear": "مسح",
+    "preview": "معاينة",
+    "send": "أرسل إلى المطبخ",
+    "sending": "يتم الإرسال...",
+    "subtotal": "الإجمالي الفرعي",
+    "each": "{{price}} لكل قطعة",
+    "qty": "الكمية: {{qty}}"
+  },
+  "modal": {
+    "cancel": "إلغاء",
+    "add_button": "أضف إلى السلة"
+  },
+  "buttons": {
+    "prev": "السابق",
+    "next": "التالي"
+  },
+  "floating_cart": {
+    "view": "عرض السلة",
+    "live": "السلة: {{count}} عنصر، الإجمالي {{total}}"
+  },
+  "topbar": {
+    "tagline": "تجربة ضيافة فاخرة",
+    "help": "المساعدة",
+    "call": "استدعاء النادل",
+    "help_message": "تم إشعار أحد أفراد الطاقم.",
+    "call_message": "سيصل أحد أفراد الطاقم إليك قريبًا.",
+    "orders_in_progress": "{{count}} عناصر قيد التجهيز",
+    "orders_in_progress_one": "{{count}} عنصر قيد التجهيز",
+    "orders_in_progress_other": "{{count}} عناصر قيد التجهيز"
+  }
+}

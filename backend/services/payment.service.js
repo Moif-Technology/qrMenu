@@ -305,13 +305,46 @@ export async function saveEqualSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for equal split payment");
     }
 
-    // CRITICAL: For equal split, there should be ONLY ONE payment entry per kotMasterID
-    // Strategy:
-    // 1. First check for existing MethodID=2 (equal split) → UPDATE it
-    // 2. If no MethodID=2, check for ANY other payment (MethodID 1, 3, or 4) → DELETE it
-    // 3. Then create new MethodID=2 payment
+    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
+    // If a payment method has been started AND money has been paid, we MUST use that same method ID
+    // We cannot switch methods after payment has been made
+    // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
+    const checkAnyPaymentReq = new mssql.Request(tx);
+    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
     
-    // Step 1: Check for existing equal split payment (MethodID=2)
+    const checkAnyPaymentSql = `
+      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+      FROM ${T_PAYMENT}
+      WHERE ${q("TransID")} = @TransID
+      ORDER BY ${q("PaymentID")} ASC
+    `;
+    
+    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
+    const anyExistingPayment = anyPaymentResult.recordset[0];
+    
+    // If there's an existing payment with a DIFFERENT method AND money has been paid, reject this payment
+    if (anyExistingPayment) {
+      const existingMethodID = toInt(anyExistingPayment.MethodID);
+      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
+      
+      // If a different method exists AND payment has been made (PaidAmount > 0), reject
+      if (existingMethodID !== 2 && existingPaidAmount > 0) {
+        const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+        throw new Error(`Cannot use Equal Split (MethodID=2) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
+      }
+      
+      // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
+      if (existingMethodID !== 2 && existingPaidAmount <= 0) {
+        console.log(`[PAYMENT:SVC] Equal split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Equal Split`);
+        const deleteReq = new mssql.Request(tx);
+        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
+        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
+        await deleteReq.query(deleteSql);
+        console.log(`[PAYMENT:SVC] Equal split - Deleted unused payment (MethodID=${existingMethodID})`);
+      }
+    }
+    
+    // Now check specifically for MethodID=2 payment (equal split)
     const existingEqualSplitReq = new mssql.Request(tx);
     existingEqualSplitReq.input("TransID", mssql.BigInt, transId);
     existingEqualSplitReq.input("MethodID", mssql.BigInt, 2);
@@ -323,7 +356,7 @@ export async function saveEqualSplitPayment(payload) {
       ORDER BY ${q("PaymentID")} ASC
     `;
     
-    console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Step 1: Checking for existing MethodID=2 payment: TransID=${transId}`);
+    console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Checking for existing MethodID=2 payment: TransID=${transId}`);
     const existingEqualSplitResult = await existingEqualSplitReq.query(existingEqualSplitSql);
     const existingPayment = existingEqualSplitResult.recordset[0];
     
@@ -336,44 +369,7 @@ export async function saveEqualSplitPayment(payload) {
       console.log(`  - PaidStatus: ${existingPayment.PaidStatus}`);
       console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Will UPDATE this record (not create new)`);
     } else {
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ❌ No MethodID=2 payment found`);
-      
-      // Step 2: Check for ANY other payment (MethodID 1, 3, or 4) and DELETE it
-      // This ensures only ONE payment entry per kotMasterID
-      const checkOtherPaymentReq = new mssql.Request(tx);
-      checkOtherPaymentReq.input("TransID", mssql.BigInt, transId);
-      
-      const checkOtherPaymentSql = `
-        SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("PaidStatus")}
-        FROM ${T_PAYMENT}
-        WHERE ${q("TransID")} = @TransID AND (${q("MethodID")} = 1 OR ${q("MethodID")} = 3 OR ${q("MethodID")} = 4)
-        ORDER BY ${q("PaymentID")} ASC
-      `;
-      
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Step 2: Checking for other payment methods (1, 3, or 4)`);
-      const otherPaymentResult = await checkOtherPaymentReq.query(checkOtherPaymentSql);
-      const otherPayment = otherPaymentResult.recordset[0];
-      
-      if (otherPayment) {
-        console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ⚠️ Found other payment (MethodID=${otherPayment.MethodID}), DELETING it to ensure only one entry`);
-        console.log(`  - PaymentID: ${otherPayment.PaymentID}, PaidStatus: ${otherPayment.PaidStatus}`);
-        
-        // Delete the other payment to ensure only one entry per kotMasterID
-        const deleteReq = new mssql.Request(tx);
-        deleteReq.input("PaymentID", mssql.BigInt, toInt(otherPayment.PaymentID));
-        
-        const deleteSql = `
-          DELETE FROM ${T_PAYMENT}
-          WHERE ${q("PaymentID")} = @PaymentID
-        `;
-        
-        await deleteReq.query(deleteSql);
-        console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ✅ Deleted PaymentID=${otherPayment.PaymentID} (MethodID=${otherPayment.MethodID})`);
-      } else {
-        console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ✅ No other payment found - clean start`);
-      }
-      
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Will CREATE new MethodID=2 payment record`);
+      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ❌ No MethodID=2 payment found - will CREATE new`);
     }
     
     let paymentId;
@@ -587,7 +583,46 @@ export async function saveCustomSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for custom split payment");
     }
 
-    // Check if there's an existing payment record for this kotMasterID (TransID) and MethodID=4
+    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
+    // If a payment method has been started AND money has been paid, we MUST use that same method ID
+    // We cannot switch methods after payment has been made
+    // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
+    const checkAnyPaymentReq = new mssql.Request(tx);
+    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
+    
+    const checkAnyPaymentSql = `
+      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+      FROM ${T_PAYMENT}
+      WHERE ${q("TransID")} = @TransID
+      ORDER BY ${q("PaymentID")} ASC
+    `;
+    
+    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
+    const anyExistingPayment = anyPaymentResult.recordset[0];
+    
+    // If there's an existing payment with a DIFFERENT method AND money has been paid, reject this payment
+    if (anyExistingPayment) {
+      const existingMethodID = toInt(anyExistingPayment.MethodID);
+      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
+      
+      // If a different method exists AND payment has been made (PaidAmount > 0), reject
+      if (existingMethodID !== 4 && existingPaidAmount > 0) {
+        const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+        throw new Error(`Cannot use Custom Split (MethodID=4) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
+      }
+      
+      // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
+      if (existingMethodID !== 4 && existingPaidAmount <= 0) {
+        console.log(`[PAYMENT:SVC] Custom split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Custom Split`);
+        const deleteReq = new mssql.Request(tx);
+        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
+        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
+        await deleteReq.query(deleteSql);
+        console.log(`[PAYMENT:SVC] Custom split - Deleted unused payment (MethodID=${existingMethodID})`);
+      }
+    }
+    
+    // Now check specifically for MethodID=4 payment (custom split)
     const existingPaymentReq = new mssql.Request(tx);
     existingPaymentReq.input("TransID", mssql.BigInt, transId);
     existingPaymentReq.input("MethodID", mssql.BigInt, 4);
@@ -745,14 +780,6 @@ export async function saveItemSplitPayment(payload) {
   try {
     await tx.begin();
 
-    // Calculate amount being paid for selected items
-    let itemsPaidAmount = 0;
-    items.forEach(item => {
-      const itemTotal = toNum(item.lineTotal || 0);
-      itemsPaidAmount += itemTotal;
-    });
-    itemsPaidAmount = r2(itemsPaidAmount);
-
     // Use kotMasterID as TransID (same as other payment methods)
     const transId = toInt(kotMasterID);
     
@@ -766,7 +793,14 @@ export async function saveItemSplitPayment(payload) {
     // If totalBillAmount is provided, use it; otherwise we'll need to query KOTMaster
     let originalBillAmount = r2(toNum(totalBillAmount, 0));
     
+    console.log("[PAYMENT:SVC] Item split - Initial bill amount check:", {
+      totalBillAmount,
+      originalBillAmount,
+      transId
+    });
+    
     if (originalBillAmount <= 0) {
+      console.log("[PAYMENT:SVC] Item split - totalBillAmount not provided or invalid, querying KOTMaster...");
       // Query KOTMaster to get total bill amount
       const kotPool = await connectToDb();
       const kotReq = kotPool.request();
@@ -779,14 +813,119 @@ export async function saveItemSplitPayment(payload) {
       const kotResult = await kotReq.query(kotSql);
       if (kotResult.recordset && kotResult.recordset.length > 0) {
         originalBillAmount = r2(toNum(kotResult.recordset[0].TotalAmount, 0));
+        console.log("[PAYMENT:SVC] Item split - Retrieved bill amount from KOTMaster:", originalBillAmount);
+      } else {
+        console.warn("[PAYMENT:SVC] Item split - KOTMaster record not found for kotMasterID:", transId);
       }
     }
 
     if (originalBillAmount <= 0) {
-      throw new Error("Could not determine total bill amount for this KOT");
+      throw new Error(`Could not determine total bill amount for this KOT. kotMasterID: ${transId}, totalBillAmount: ${totalBillAmount}`);
     }
+    
+    console.log("[PAYMENT:SVC] Item split - Using bill amount:", originalBillAmount);
+    
+    // CRITICAL: Log the items being paid to verify calculation
+    console.log("[PAYMENT:SVC] Item split - Items in payload:", items.map(item => ({
+      kotChildId: item.kotChildId || item.kotChildID,
+      lineTotal: item.lineTotal,
+      desc: item.desc || item.ShortDescription
+    })));
+    
+    // Calculate expected total from items (for validation)
+    const itemsTotal = items.reduce((sum, item) => sum + toNum(item.lineTotal || 0), 0);
+    console.log("[PAYMENT:SVC] Item split - Items total (sum of lineTotal):", itemsTotal);
+    console.log("[PAYMENT:SVC] Item split - Provided totalBillAmount:", totalBillAmount);
+    console.log("[PAYMENT:SVC] Item split - Calculated originalBillAmount:", originalBillAmount);
 
-    // Check if there's an existing payment record for this kotMasterID and MethodID=3
+    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
+    // If a payment method has been started AND money has been paid, we MUST use that same method ID
+    // We cannot switch methods after payment has been made
+    // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
+    const checkAnyPaymentReq = new mssql.Request(tx);
+    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
+    
+    const checkAnyPaymentSql = `
+      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+      FROM ${T_PAYMENT}
+      WHERE ${q("TransID")} = @TransID
+      ORDER BY ${q("PaymentID")} ASC
+    `;
+    
+    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
+    const anyExistingPayment = anyPaymentResult.recordset[0];
+    
+    // If there's an existing payment with a DIFFERENT method, check if we can switch
+    if (anyExistingPayment) {
+      const existingMethodID = toInt(anyExistingPayment.MethodID);
+      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
+      const existingBalanceAmount = toNum(anyExistingPayment.BalanceAmount, 0);
+      const existingPaidStatus = anyExistingPayment.PaidStatus || "PENDING";
+      
+      console.log("[PAYMENT:SVC] Item split - Found existing payment:", {
+        PaymentID: anyExistingPayment.PaymentID,
+        MethodID: existingMethodID,
+        PaidAmount: existingPaidAmount,
+        BalanceAmount: existingBalanceAmount,
+        PaidStatus: existingPaidStatus,
+        BillAmount: toNum(anyExistingPayment.BillAmount, 0),
+        TransID: transId
+      });
+      
+      // If a different method exists AND payment has been made (PaidAmount > 0), check if we can switch
+      if (existingMethodID !== 3 && existingPaidAmount > 0) {
+        // Special case: If it's Pay Full (MethodID=1), allow switching to Item Split
+        // This allows users to use Item Split even if Pay Full was used, useful for:
+        // - Testing scenarios
+        // - Changing payment method preference
+        // - Correcting payment records
+        if (existingMethodID === 1) {
+          const isFullyPaid = existingPaidStatus === "PAID" && existingBalanceAmount <= 0;
+          
+          if (isFullyPaid) {
+            // Pay Full is fully paid - but allow switching to Item Split by deleting Pay Full
+            // This is useful for testing or if user wants to change payment method
+            console.log(`[PAYMENT:SVC] Item split - Found fully paid Pay Full payment, but allowing switch to Item Split (deleting Pay Full record)`);
+            // Delete the Pay Full payment to allow Item Split
+            const deleteReq = new mssql.Request(tx);
+            deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
+            const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
+            await deleteReq.query(deleteSql);
+            console.log(`[PAYMENT:SVC] Item split - Deleted Pay Full payment to allow Item Split`);
+          } else {
+            // Pay Full exists but bill isn't fully paid - allow switching to Item Split
+            console.log(`[PAYMENT:SVC] Item split - Found Pay Full payment but bill is not fully paid (Status: ${existingPaidStatus}, Balance: ${existingBalanceAmount}), allowing switch to Item Split`);
+            // Delete the incomplete Pay Full payment to allow Item Split
+            const deleteReq = new mssql.Request(tx);
+            deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
+            const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
+            await deleteReq.query(deleteSql);
+            console.log(`[PAYMENT:SVC] Item split - Deleted incomplete Pay Full payment to allow Item Split`);
+          }
+        } else {
+          // For other methods (Equal Split, Custom Split), check if fully paid
+          const isFullyPaid = existingPaidStatus === "PAID" && existingBalanceAmount <= 0;
+          if (isFullyPaid) {
+            throw new Error("This bill has already been fully paid. No additional payments can be made.");
+          }
+          // If not fully paid, reject switching between split methods
+          const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+          throw new Error(`Cannot use Item Split (MethodID=3) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
+        }
+      }
+      
+      // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
+      if (existingMethodID !== 3 && existingPaidAmount <= 0) {
+        console.log(`[PAYMENT:SVC] Item split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Item Split`);
+        const deleteReq = new mssql.Request(tx);
+        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
+        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
+        await deleteReq.query(deleteSql);
+        console.log(`[PAYMENT:SVC] Item split - Deleted unused payment (MethodID=${existingMethodID})`);
+      }
+    }
+    
+    // Now check specifically for MethodID=3 payment (item split)
     const existingPaymentReq = new mssql.Request(tx);
     existingPaymentReq.input("TransID", mssql.BigInt, transId);
     existingPaymentReq.input("MethodID", mssql.BigInt, 3);
@@ -801,24 +940,121 @@ export async function saveItemSplitPayment(payload) {
     const existingPaymentResult = await existingPaymentReq.query(existingPaymentSql);
     const existingPayment = existingPaymentResult.recordset[0];
     
+    // Calculate amount being paid for selected items
+    // CRITICAL: First check if there's an existing payment to validate against already-paid items
+    let itemsPaidAmount = 0;
+    const itemsToPay = [];
+    
+    // If there's an existing payment, check which items are already paid
+    let alreadyPaidKotChildIds = new Set();
+    if (existingPayment) {
+      const existingPaymentId = toInt(existingPayment.PaymentID);
+      const checkPaidItemsReq = new mssql.Request(tx);
+      checkPaidItemsReq.input("PaymentID", mssql.BigInt, existingPaymentId);
+      
+      const checkPaidItemsSql = `
+        SELECT kotChildID
+        FROM dbo.PaymentItems
+        WHERE PaymentID = @PaymentID
+      `;
+      
+      try {
+        const paidItemsResult = await checkPaidItemsReq.query(checkPaidItemsSql);
+        if (paidItemsResult.recordset && paidItemsResult.recordset.length > 0) {
+          paidItemsResult.recordset.forEach(row => {
+            alreadyPaidKotChildIds.add(toInt(row.kotChildID));
+          });
+          console.log("[PAYMENT:SVC] Item split - Found already paid items:", Array.from(alreadyPaidKotChildIds));
+        }
+      } catch (err) {
+        console.warn("[PAYMENT:SVC] Could not check paid items (PaymentItems table may not exist):", err.message);
+      }
+    }
+    
+    // Calculate amount only for items that are NOT already paid
+    items.forEach(item => {
+      const kotChildId = toInt(item.kotChildId || item.kotChildID || 0);
+      const itemTotal = toNum(item.lineTotal || 0);
+      
+      if (kotChildId > 0 && alreadyPaidKotChildIds.has(kotChildId)) {
+        console.warn(`[PAYMENT:SVC] Item split - Skipping already paid item: kotChildID=${kotChildId}, amount=${itemTotal}`);
+        // Don't add to itemsPaidAmount - this item is already paid
+      } else {
+        itemsPaidAmount += itemTotal;
+        itemsToPay.push({ kotChildId, itemTotal });
+      }
+    });
+    
+    itemsPaidAmount = r2(itemsPaidAmount);
+    
+    if (itemsPaidAmount <= 0) {
+      throw new Error("No valid items to pay for. All selected items may have already been paid.");
+    }
+    
+    console.log("[PAYMENT:SVC] Item split - Valid items to pay:", itemsToPay.length, "Total amount:", itemsPaidAmount);
+    
     let paymentId;
     let newPaidAmount;
     let newBalanceAmount;
     let paidStatus;
+    let finalBillAmount = originalBillAmount; // Will be set correctly for both new and update cases
 
     if (existingPayment) {
       // Update existing payment record - accumulate paid amount
       paymentId = toInt(existingPayment.PaymentID);
       const currentPaidAmount = toNum(existingPayment.PaidAmount, 0);
-      const storedBillAmount = toNum(existingPayment.BillAmount, originalBillAmount);
+      const storedBillAmount = toNum(existingPayment.BillAmount, 0);
       
-      // Use the stored BillAmount (original total) or update if different
+      // CRITICAL: For item split, ALWAYS use the stored BillAmount from the FIRST payment
+      // This is the original total bill amount and should NEVER change
+      // If storedBillAmount is 0 or invalid, use the provided originalBillAmount
+      // But if storedBillAmount exists, it's the source of truth (from first payment)
+      // NEVER use the new originalBillAmount if storedBillAmount exists - it might be wrong
       const billAmountToUse = storedBillAmount > 0 ? storedBillAmount : originalBillAmount;
+      finalBillAmount = billAmountToUse; // Store for return statement
+      
+      // Validate: The new originalBillAmount should match storedBillAmount (if stored exists)
+      // If they don't match, use storedBillAmount (it's the correct original)
+      if (storedBillAmount > 0 && Math.abs(storedBillAmount - originalBillAmount) > 0.01) {
+        console.warn(`[PAYMENT:SVC] Item split - BillAmount mismatch! Stored: ${storedBillAmount}, Provided: ${originalBillAmount}. Using stored value.`);
+        console.warn(`[PAYMENT:SVC] Item split - This might indicate the frontend is sending incorrect totalBillAmount. Check frontend calculation.`);
+      }
+      
+      // CRITICAL: Verify that BillAmount makes sense - it should be >= currentPaidAmount + itemsPaidAmount
+      // If BillAmount is less than what's being paid, there's a calculation error
+      const totalBeingPaid = currentPaidAmount + itemsPaidAmount;
+      if (billAmountToUse < totalBeingPaid) {
+        console.error(`[PAYMENT:SVC] Item split - CRITICAL ERROR: BillAmount (${billAmountToUse}) < TotalBeingPaid (${totalBeingPaid}). This indicates a calculation error!`);
+        // Don't throw - use the stored BillAmount but log the error
+      }
+      
+      console.log("[PAYMENT:SVC] Item split - Payment calculation:", {
+        storedBillAmount,
+        originalBillAmount,
+        billAmountToUse: billAmountToUse, // This is what we'll use
+        currentPaidAmount,
+        itemsPaidAmount,
+        calculation: `${billAmountToUse} - (${currentPaidAmount} + ${itemsPaidAmount}) = ${billAmountToUse - (currentPaidAmount + itemsPaidAmount)}`
+      });
+      
+      // CRITICAL: Validate that itemsPaidAmount doesn't exceed remaining balance
+      const remainingBalance = r2(billAmountToUse - currentPaidAmount);
+      if (itemsPaidAmount > remainingBalance) {
+        console.warn(`[PAYMENT:SVC] Item split - WARNING: itemsPaidAmount (${itemsPaidAmount}) > remainingBalance (${remainingBalance}). This might indicate duplicate payment.`);
+        // Don't throw error, but log warning - might be legitimate if items include tax/service
+      }
       
       // Add new payment to existing paid amount
       newPaidAmount = r2(currentPaidAmount + itemsPaidAmount);
       
-      // Recalculate balance
+      // CRITICAL: Ensure PaidAmount never exceeds BillAmount
+      if (newPaidAmount > billAmountToUse) {
+        console.error(`[PAYMENT:SVC] Item split - ERROR: newPaidAmount (${newPaidAmount}) > billAmountToUse (${billAmountToUse}). Capping to billAmount.`);
+        newPaidAmount = r2(billAmountToUse);
+      }
+      
+      // Recalculate balance using the ORIGINAL bill amount (stored from first payment)
+      // Formula: Balance = OriginalBillAmount - (AllPaidAmounts)
       newBalanceAmount = r2(billAmountToUse - newPaidAmount);
       if (newBalanceAmount < 0) newBalanceAmount = 0;
       
@@ -864,10 +1100,14 @@ export async function saveItemSplitPayment(payload) {
       
       console.log("[PAYMENT:SVC] Creating new item split payment record:", {
         paymentId,
-        billAmount: originalBillAmount,
-        paidAmount: newPaidAmount,
-        balanceAmount: newBalanceAmount,
-        paidStatus
+        ShopID: 1,
+        TransID: transId,
+        MethodID: 3,
+        BillAmount: originalBillAmount,
+        PaidAmount: newPaidAmount,
+        BalanceAmount: newBalanceAmount,
+        PaidStatus: paidStatus,
+        TableID: tableId ? toInt(tableId) : null
       });
       
       const insertReq = new mssql.Request(tx);
@@ -894,24 +1134,39 @@ export async function saveItemSplitPayment(payload) {
       
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
+        paymentData.TableID = toInt(tableId);
       }
 
       await insertReq.query(buildPaymentInsertSql(!!tableId));
-      console.log("[PAYMENT:SVC] Inserted new item split payment record");
+      console.log("[PAYMENT:SVC] ✅ Inserted new item split payment record with MethodID=3");
     }
 
     // Track which items are paid - insert into PaymentItems table
     // This allows us to query which items have been paid for this kotMasterID
     const T_PAYMENT_ITEMS = "dbo.PaymentItems";
     
+    console.log("[PAYMENT:SVC] Item split - Starting PaymentItems insertion for", items.length, "items");
+    
     // Check if PaymentItems table exists, if not we'll create records in a simpler way
     // For now, let's store paid items in PaymentItems table
+    let itemsInserted = 0;
+    let itemsSkipped = 0;
+    let itemsErrors = 0;
+    
     for (const item of items) {
       const kotChildId = toInt(item.kotChildId || item.kotChildID || 0);
-      if (kotChildId <= 0) continue;
+      if (kotChildId <= 0) {
+        console.warn("[PAYMENT:SVC] Item split - Skipping item with invalid kotChildID:", item);
+        itemsSkipped++;
+        continue;
+      }
       
       const itemAmount = r2(toNum(item.lineTotal || 0));
-      if (itemAmount <= 0) continue;
+      if (itemAmount <= 0) {
+        console.warn("[PAYMENT:SVC] Item split - Skipping item with invalid amount:", { kotChildId, itemAmount });
+        itemsSkipped++;
+        continue;
+      }
 
       // Check if this item is already tracked
       const checkItemReq = new mssql.Request(tx);
@@ -954,15 +1209,52 @@ export async function saveItemSplitPayment(payload) {
           `;
           
           await insertItemReq.query(insertItemSql);
-          console.log("[PAYMENT:SVC] Tracked paid item:", { kotChildId, itemAmount });
+          console.log("[PAYMENT:SVC] ✅ Tracked paid item:", { PaymentItemID: nextItemId, PaymentID: paymentId, kotChildId, itemAmount });
+          itemsInserted++;
+        } else {
+          console.log("[PAYMENT:SVC] Item already tracked in PaymentItems, skipping:", { kotChildId, PaymentID: paymentId });
+          itemsSkipped++;
         }
       } catch (err) {
-        // If PaymentItems table doesn't exist, log warning but continue
-        console.warn("[PAYMENT:SVC] PaymentItems table may not exist, skipping item tracking:", err.message);
+        // Log error but don't fail the entire transaction - payment is still valid
+        console.error("[PAYMENT:SVC] ❌ Error inserting PaymentItem:", {
+          error: err.message,
+          kotChildId,
+          itemAmount,
+          PaymentID: paymentId,
+          stack: err.stack
+        });
+        itemsErrors++;
+        // Don't throw - allow payment to complete even if PaymentItems insert fails
+        // This ensures the Payment record is still saved
       }
+    }
+    
+    console.log("[PAYMENT:SVC] Item split - PaymentItems insertion summary:", {
+      total: items.length,
+      inserted: itemsInserted,
+      skipped: itemsSkipped,
+      errors: itemsErrors
+    });
+    
+    // If no items were inserted and there were errors, log a warning
+    if (itemsInserted === 0 && itemsErrors > 0) {
+      console.warn("[PAYMENT:SVC] ⚠️ WARNING: No PaymentItems were inserted due to errors. Payment record was saved, but item tracking may be incomplete.");
     }
 
     await tx.commit();
+
+    console.log("[PAYMENT:SVC] ✅ Item split payment completed successfully:", {
+      paymentId,
+      MethodID: 3,
+      BillAmount: finalBillAmount,
+      PaidAmount: newPaidAmount,
+      BalanceAmount: newBalanceAmount,
+      PaidStatus: paidStatus,
+      itemsPaid: itemsPaidAmount,
+      itemsInserted,
+      tableId: tableId ? toInt(tableId) : null
+    });
 
     return {
       ok: true,
@@ -970,10 +1262,15 @@ export async function saveItemSplitPayment(payload) {
       ShopID: 1,
       TransID: transId,
       MethodID: 3,
-      BillAmount: originalBillAmount,
+      BillAmount: finalBillAmount,
       PaidAmount: newPaidAmount,
       BalanceAmount: newBalanceAmount,
       PaidStatus: paidStatus,
+      // Also include lowercase versions for frontend compatibility
+      billAmount: finalBillAmount,
+      paidAmount: newPaidAmount,
+      balanceAmount: newBalanceAmount,
+      paidStatus: paidStatus,
       itemsPaid: itemsPaidAmount,
       tableId: tableId ? toInt(tableId) : null
     };
@@ -1124,8 +1421,10 @@ export async function getTableBalance(tableId, kotMasterID = null) {
         // CRITICAL: When balance = 0 and status = PAID, payment is complete
         // Return balance = 0 (not the original bill amount)
         // For equal split: Only show split info if balance > 0 (payment not complete)
+        // Also return originalBillAmount so frontend can use it for subsequent payments
         return {
-          balance: balance > 0 ? r2(balance) : 0, // Always return actual balance (0 when paid)
+          balance: balance > 0 ? r2(balance) : 0,
+          originalBillAmount: originalBillAmount > 0 ? r2(originalBillAmount) : null, // Always return actual balance (0 when paid)
           hasPendingPayment: paidStatus === "PENDING" && balance > 0,
           isFullyPaid: balance <= 0 || paidStatus === "PAID",
           hasUnpaidKots: false,

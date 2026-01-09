@@ -40,7 +40,7 @@ function buildMssqlConfig(cfg) {
 // ---- Inventory Database Config ----
 const inventoryDbConfig = buildMssqlConfig({
   ...baseConfig,
-  database: "Inventory"
+  database: "Moifcore"
 });
 
 // ---- PaymentGateway Database Config ----
@@ -132,3 +132,7 @@ export async function pingPaymentDb() {
   const rows = await queryPaymentDb("SELECT DB_NAME() AS db");
   return { db: rows?.[0]?.db || null };
 }
+
+// Export database names for logging purposes
+export const INVENTORY_DB_NAME = inventoryDbConfig.database;
+export const PAYMENT_DB_NAME = paymentGatewayDbConfig.database;

@@ -69,5 +69,74 @@
     "orders_in_progress": "{{count}} عناصر قيد التجهيز",
     "orders_in_progress_one": "{{count}} عنصر قيد التجهيز",
     "orders_in_progress_other": "{{count}} عناصر قيد التجهيز"
+  },
+
+
+  "reservation": {
+    "page_title": "حجز طاولة",
+    "page_subtitle": "اختر التاريخ والوقت وعدد الأشخاص ثم أكمل بياناتك",
+    "reservation_details": "تفاصيل الحجز",
+    "guest_details": "بياناتك",
+
+    "date": "التاريخ",
+    "time": "الوقت",
+    "select_time": "اختر الوقت",
+    "choose_time": "اختر وقتك",
+    "select_period": "اختر الفترة",
+    "back": "رجوع",
+    "guests": "عدد الأشخاص",
+    "area": "منطقة الجلوس",
+
+    "time_periods": {
+      "morning": "الصباح",
+      "afternoon": "بعد الظهر",
+      "evening": "المساء",
+      "lateNight": "منتصف الليل"
+    },
+
+    "full_name": "اسمك الكامل",
+    "phone": "رقم هاتفك",
+    "email": "بريدك الإلكتروني",
+    "optional": "اختياري",
+
+    "choose_area": "اختر المنطقة",
+    "loading_areas": "جاري التحميل...",
+
+    "occasion": "مناسبة خاصة",
+    "occasion_clear": "إزالة",
+    "occasions": {
+      "birthday": "عيد ميلاد",
+      "anniversary": "ذكرى سنوية",
+      "business": "عمل",
+      "dateNight": "موعد خاص",
+      "family": "عائلي",
+      "celebration": "احتفال",
+      "casual": "عادي"
+    },
+
+    "notes": "طلبات خاصة",
+    "notes_placeholder": "أي قيود غذائية، حساسية، مكان جلوس مفضل، أو طلبات خاصة...",
+
+    "submit": "إتمام الحجز",
+    "submitting": "جاري الإرسال...",
+
+    "quick_note_title": "كيف يعمل الحجز",
+    "quick_note_text": "سنتواصل معك قريبًا لتأكيد حجزك. إذا لم يتوفر الوقت المطلوب، سنقترح بديلاً مناسبًا.",
+
+    "success_title": "تم إرسال الحجز! ✅",
+    "success_text": "شكرًا لك على حجزك. سنتواصل معك قريبًا لتأكيد موعدك.",
+    "back_home": "العودة للرئيسية",
+
+    "errors": {
+      "date": "اختر تاريخ الحجز",
+      "time": "اختر وقت الحجز",
+      "guests": "حدد عدد الأشخاص",
+      "area": "اختر منطقة الجلوس",
+      "name": "اكتب اسمك",
+      "phone": "اكتب رقم هاتفك"
+    }
   }
+
 }
+
+

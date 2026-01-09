@@ -1,0 +1,63 @@
+USE [Moifcore];
+GO
+
+/* =========================================================
+   1) ProductMaster -> QrProductMaster (UPDATE ONLY)
+   Sync ONLY: Description, DescriptionArabic, ProductType
+   ========================================================= */
+
+IF OBJECT_ID('dbo.trg_PM_To_QRPM_UpdateOnly_DescType', 'TR') IS NOT NULL
+    DROP TRIGGER dbo.trg_PM_To_QRPM_UpdateOnly_DescType;
+GO
+
+CREATE TRIGGER dbo.trg_PM_To_QRPM_UpdateOnly_DescType
+ON dbo.ProductMaster
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE qm
+    SET
+        qm.Description       = CAST(i.Description AS nvarchar(255)),
+        qm.DescriptionArabic = CAST(i.DescriptionArabic AS nvarchar(255)),
+        qm.ProductType       = CAST(i.ProductType AS nvarchar(50)),
+        qm.ModOn             = GETDATE(),
+        qm.ModBy             = CAST(i.ModBy AS nvarchar(100))
+    FROM dbo.QrProductMaster qm
+    INNER JOIN inserted i
+        ON i.ProductID = qm.ProductID;
+END
+GO
+
+
+/* =========================================================
+   2) ProductChild -> QrProductChild (UPDATE ONLY)
+   Sync ONLY: UnitPrice, Tax1Amount, Tax2Amount, PackQty
+   ========================================================= */
+
+IF OBJECT_ID('dbo.trg_PC_To_QRPC_UpdateOnly_PriceTax', 'TR') IS NOT NULL
+    DROP TRIGGER dbo.trg_PC_To_QRPC_UpdateOnly_PriceTax;
+GO
+
+CREATE TRIGGER dbo.trg_PC_To_QRPC_UpdateOnly_PriceTax
+ON dbo.ProductChild
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE qc
+    SET
+        qc.UnitPrice  = CAST(i.UnitPrice AS decimal(18,2)),
+        qc.Tax1Amount = CAST(i.Tax1Amount AS decimal(18,2)),
+        qc.Tax2Amount = CAST(i.Tax2Amount AS decimal(18,2)),
+        qc.PackQty    = CAST(i.PackQty AS decimal(18,2)),
+        qc.ModOn      = GETDATE(),
+        qc.ModBy      = CAST(i.ModBy AS nvarchar(100))
+    FROM dbo.QrProductChild qc
+    INNER JOIN inserted i
+        ON i.ProductID = qc.ProductID
+       AND ISNULL(qc.StationID,0) = CAST(ISNULL(i.StationID,0) AS int);
+END
+GO
