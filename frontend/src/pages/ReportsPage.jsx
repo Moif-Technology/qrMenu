@@ -4,7 +4,27 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
 import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
 import BottomNav from "../component/reservation/BottomNav";
-import StatusSelector from "../component/reservation/StatusSelector";
+import { 
+  ArrowLeft, 
+  Home, 
+  Search, 
+  ListFilter, 
+  Clock, 
+  Globe, 
+  CheckCircle2, 
+  Hand, 
+  Armchair, 
+  LogOut, 
+  XCircle, 
+  UserX, 
+  Phone, 
+  Users, 
+  Hash,
+  ChevronRight,
+  Loader2,
+  Calendar,
+  CalendarRange
+} from "lucide-react";
 
 // Toggle this to use mock data instead of API
 const USE_MOCK_DATA = false;
@@ -12,8 +32,10 @@ const USE_MOCK_DATA = false;
 export default function ReportsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [selectedPeriod, setSelectedPeriod] = useState("lunch"); // lunch, sunset, dinner
+  const [dateMode, setDateMode] = useState("single"); // "single" or "range"
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
+  const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
+  const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
   const [statusFilter, setStatusFilter] = useState("all"); // all, upcoming, cancelled, no-show
   const [searchQuery, setSearchQuery] = useState("");
   const [reservations, setReservations] = useState([]);
@@ -21,77 +43,47 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [processingId, setProcessingId] = useState(null);
-  const [showStatusSelector, setShowStatusSelector] = useState(false);
-  const [selectedReservation, setSelectedReservation] = useState(null);
   const prevLocationRef = useRef(location.pathname);
-
-  // Time period definitions with SVG icons
-  const timePeriods = {
-    lunch: { 
-      label: "Lunch", 
-      start: 11, 
-      end: 14, 
-      icon: (
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
-          <path d="M7 2v20" />
-          <path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3v0" />
-          <path d="M21 15c0 2.5-2.5 4-5 4s-5-1.5-5-4" />
-        </svg>
-      ), 
-      color: "#F59E0B" 
-    }, // 11:00 AM - 2:00 PM
-    sunset: { 
-      label: "Sunset", 
-      start: 16, 
-      end: 18, 
-      icon: (
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="5" />
-          <line x1="12" y1="1" x2="12" y2="3" />
-          <line x1="12" y1="21" x2="12" y2="23" />
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-          <line x1="1" y1="12" x2="3" y2="12" />
-          <line x1="21" y1="12" x2="23" y2="12" />
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-          <path d="M12 17v4" />
-          <path d="M8 21h8" />
-        </svg>
-      ), 
-      color: "#F97316" 
-    }, // 4:00 PM - 6:00 PM
-    dinner: { 
-      label: "Dinner", 
-      start: 18, 
-      end: 23, 
-      icon: (
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="8" r="7" />
-          <path d="M12 15v7" />
-          <path d="M5 12H2a10 10 0 0 0 20 0h-3" />
-          <line x1="12" y1="15" x2="12" y2="22" />
-        </svg>
-      ), 
-      color: "#A855F7" 
-    } // 6:00 PM - 11:00 PM
-  };
 
   // Define loadReservations BEFORE using it in useEffect hooks
   const loadReservations = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      let data;
-      if (USE_MOCK_DATA) {
-        // Use mock data
-        data = getMockReservations({ date: selectedDate });
-        data = data.reservations || [];
+      let data = [];
+      
+      if (dateMode === "single") {
+        // Single date mode
+        if (USE_MOCK_DATA) {
+          data = getMockReservations({ date: selectedDate });
+          data = data.reservations || [];
+        } else {
+          data = await getAllReservations({ date: selectedDate });
+          data = Array.isArray(data) ? data : (data?.reservations || []);
+        }
       } else {
-        // Use real API
-        data = await getAllReservations({ date: selectedDate });
-        data = Array.isArray(data) ? data : (data?.reservations || []);
+        // Date range mode - fetch data for each day in range
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const allData = [];
+        
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          const dateStr = d.toISOString().split("T")[0];
+          try {
+            let dayData;
+            if (USE_MOCK_DATA) {
+              dayData = getMockReservations({ date: dateStr });
+              dayData = dayData.reservations || [];
+            } else {
+              dayData = await getAllReservations({ date: dateStr });
+              dayData = Array.isArray(dayData) ? dayData : (dayData?.reservations || []);
+            }
+            allData.push(...dayData);
+          } catch (err) {
+            console.error(`Failed to load data for ${dateStr}:`, err);
+          }
+        }
+        data = allData;
       }
       
       // Ensure data is an array
@@ -99,16 +91,8 @@ export default function ReportsPage() {
         data = [];
       }
       
-      // Filter by time period
-      const period = timePeriods[selectedPeriod];
-      let filtered = data.filter(res => {
-        if (!res.reservationTime) return false;
-        const [hours] = res.reservationTime.split(":");
-        const hour = parseInt(hours);
-        return hour >= period.start && hour < period.end;
-      });
-      
-      // Store all reservations (filtered by period only) for status counts
+      // Store all reservations
+      let filtered = data;
       setAllReservations(filtered);
       
       // Filter by status
@@ -144,6 +128,10 @@ export default function ReportsPage() {
             return status === 'LEFT';
           }
           
+          if (statusFilter === 'online') {
+            return ((res.bookingSource || res.BookingSource) || '').toUpperCase() === 'GUEST_ONLINE';
+          }
+          
           return status === statusFilter.toUpperCase();
         });
       }
@@ -162,7 +150,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedDate, selectedPeriod, statusFilter]);
+  }, [dateMode, selectedDate, startDate, endDate, statusFilter]);
   
   // Calculate status counts for filter badges
   const getStatusCount = useCallback((filter) => {
@@ -198,6 +186,10 @@ export default function ReportsPage() {
       
       if (filter === 'left') {
         return status === 'LEFT';
+      }
+      
+      if (filter === 'online') {
+        return ((res.bookingSource || res.BookingSource) || '').toUpperCase() === 'GUEST_ONLINE';
       }
       
       return status === filter.toUpperCase();
@@ -291,6 +283,12 @@ export default function ReportsPage() {
     }
   }, [loadReservations]);
 
+  // Format number with commas for thousands
+  const formatNumber = (num) => {
+    if (num === null || num === undefined) return "0";
+    return Number(num).toLocaleString('en-US');
+  };
+
   // Format time for display
   const formatTime = (timeString) => {
     if (!timeString) return "—";
@@ -310,31 +308,17 @@ export default function ReportsPage() {
     return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
   };
 
-  // Get status color
-  const getStatusColor = (status) => {
-    const statusLower = (status || "").toLowerCase();
-    switch (statusLower) {
-      case 'booked':
-      case 'pending':
-      case 'hold': return '#ff9800';
-      case 'confirmed': return '#2196f3';
-      case 'arrived': return '#9c27b0';
-      case 'seated': return '#4caf50';
-      case 'checked_in': return '#4caf50';
-      case 'left': return '#f59e0b';
-      case 'cancelled': return '#f44336';
-      case 'no-show': return '#9e9e9e';
-      default: return '#666';
-    }
-  };
-
   // Calculate statistics
   const safeReservations = Array.isArray(reservations) ? reservations : [];
   const stats = {
     total: safeReservations.length,
-    totalGuests: safeReservations.reduce((sum, r) => sum + (r.numberOfGuests || r.NumberOfGuests || 0), 0),
+    // FIX: Convert to number to prevent string concatenation
+    totalGuests: safeReservations.reduce((sum, r) => {
+      const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+      return sum + (isNaN(guests) ? 0 : guests);
+    }, 0),
     confirmed: safeReservations.filter(r => (r.status || r.Status || "").toUpperCase() === "CONFIRMED" || !r.status).length,
-    cancelled: safeReservations.filter(r => (r.status || r.Status || "").toUpperCase() === "CANCELLED").length
+    seated: safeReservations.filter(r => (r.status || r.Status || "").toUpperCase() === "SEATED").length
   };
 
   const handleMarkArrived = async (reservation) => {
@@ -513,467 +497,281 @@ export default function ReportsPage() {
     }
   };
 
-
-  const S = {
-    page: {
-      minHeight: "100vh",
-      background: "radial-gradient(120% 60% at 50% 0%, rgba(201,26,77,0.16), transparent 55%), #fdf8fa",
-      display: "flex",
-      flexDirection: "column",
-      paddingBottom: 80
-    },
-    header: {
-      background: "#ffffff",
-      borderBottom: "1px solid #e5e7eb",
-      padding: "14px 16px",
-      display: "flex",
-      alignItems: "center",
-      gap: 12,
-      position: "sticky",
-      top: 0,
-      zIndex: 20,
-      boxShadow: "0 1px 6px rgba(0,0,0,0.06)"
-    },
-    backBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 14,
-      border: "1px solid #e5e7eb",
-      background: "#f9fafb",
-      cursor: "pointer",
-      display: "grid",
-      placeItems: "center"
-    },
-    titleWrap: { display: "flex", flexDirection: "column", gap: 4, flex: 1 },
-    title: { margin: 0, fontSize: 20, fontWeight: 800, color: "#111827" },
-    subtitle: { margin: 0, fontSize: 13.5, fontWeight: 600, color: "#6b7280" },
-
-    container: { maxWidth: 1200, width: "100%", margin: "0 auto" },
-    content: { padding: 16, display: "grid", gap: 16 },
-
-    card: {
-      background: "#fff",
-      borderRadius: 18,
-      border: "1px solid #e5e7eb",
-      boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
-      padding: 20
-    },
-
-    // Period selector
-    periodSelector: {
-      display: "grid",
-      gridTemplateColumns: "repeat(3, 1fr)",
-      gap: 12,
-      marginBottom: 16
-    },
-    periodButton: (isActive, color) => ({
-      padding: "16px 12px",
-      borderRadius: "14px",
-      border: isActive ? `2px solid ${color}` : "1px solid #e5e7eb",
-      background: isActive ? `${color}15` : "#fff",
-      cursor: "pointer",
-      transition: "all 0.2s",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 8,
-      textAlign: "center"
-    }),
-    periodIcon: (isActive, color) => ({
-      color: isActive ? color : "#6b7280",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center"
-    }),
-    periodLabel: (isActive, color) => ({
-      fontSize: "14px",
-      fontWeight: isActive ? "800" : "700",
-      color: isActive ? color : "#374151"
-    }),
-
-    // Date selector
-    dateSelector: {
-      display: "flex",
-      gap: 8,
-      marginBottom: 20,
-      alignItems: "center"
-    },
-    dateInput: {
-      padding: "12px 14px",
-      borderRadius: "12px",
-      border: "1px solid #d1d5db",
-      fontSize: "14px",
-      fontWeight: "600",
-      outline: "none",
-      background: "#fff",
-      flex: 1
-    },
-
-    // Statistics cards
-    statsGrid: {
-      display: "grid",
-      gridTemplateColumns: "repeat(2, 1fr)",
-      gap: 12,
-      marginBottom: 20
-    },
-    statCard: {
-      padding: "16px",
-      borderRadius: "14px",
-      background: "linear-gradient(135deg, rgba(122,0,38,0.08), rgba(201,26,77,0.08))",
-      border: "1px solid #FBE6EC"
-    },
-    statValue: {
-      fontSize: "24px",
-      fontWeight: "800",
-      color: "#C91A4D",
-      marginBottom: "4px"
-    },
-    statLabel: {
-      fontSize: "12px",
-      fontWeight: "700",
-      color: "#6b7280",
-      textTransform: "uppercase",
-      letterSpacing: "0.5px"
-    },
-
-    // Reservations list
-    listHeader: {
-      fontSize: "16px",
-      fontWeight: "800",
-      color: "#111827",
-      marginBottom: "12px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between"
-    },
-    reservationItem: {
-      padding: "16px",
-      borderRadius: "12px",
-      border: "1px solid #e5e7eb",
-      background: "#f9fafb",
-      marginBottom: "10px",
-      display: "grid",
-      gridTemplateColumns: "1fr auto",
-      gap: "12px",
-      alignItems: "center"
-    },
-    reservationInfo: {
-      display: "flex",
-      flexDirection: "column",
-      gap: "6px"
-    },
-    reservationName: {
-      fontSize: "16px",
-      fontWeight: "800",
-      color: "#111827"
-    },
-    reservationDetails: {
-      fontSize: "13px",
-      fontWeight: "600",
-      color: "#6b7280",
-      display: "flex",
-      gap: "12px",
-      flexWrap: "wrap"
-    },
-    reservationTime: {
-      fontSize: "18px",
-      fontWeight: "800",
-      color: "#C91A4D",
-      textAlign: "right"
-    },
-    statusBadge: (status) => {
-      const statusUpper = (status || "").toUpperCase();
-      const isConfirmed = statusUpper === "CONFIRMED" || !status;
-      const isCancelled = statusUpper === "CANCELLED";
-      return {
-        padding: "4px 10px",
-        borderRadius: "8px",
-        fontSize: "11px",
-        fontWeight: "700",
-        textTransform: "uppercase",
-        background: isCancelled ? "#fef2f2" : (isConfirmed ? "#f0fdf4" : "#fef3c7"),
-        color: isCancelled ? "#b91c1c" : (isConfirmed ? "#166534" : "#92400e")
-      };
-    },
-
-    emptyState: {
-      textAlign: "center",
-      padding: "40px 20px",
-      color: "#6b7280"
-    },
-    emptyTitle: { fontSize: "16px", fontWeight: "700", marginBottom: "8px", color: "#374151" },
-    emptyText: { fontSize: "14px", fontWeight: "600" }
-  };
-
   return (
-    <div style={S.page}>
+    <div className="min-h-screen bg-gradient-to-b from-rose-50/50 to-white pb-24">
       {/* Header */}
-      <div style={S.header}>
-        <button onClick={() => navigate("/reservation")} style={S.backBtn} aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
-          </svg>
-        </button>
-
-        <div style={S.titleWrap}>
-          <h1 style={S.title}>Reports</h1>
-          <p style={S.subtitle}>{formatDate(selectedDate)} • {timePeriods[selectedPeriod].label}</p>
+      <header className="sticky top-0 z-20 bg-white border-b shadow-sm">
+        <div className="mx-auto max-w-4xl px-4 py-4 flex items-center gap-3">
+          <button
+            onClick={() => navigate("/reservation")}
+            className="shrink-0 w-11 h-11 rounded-xl border border-gray-200 bg-transparent hover:bg-rose-50 hover:border-rose-300 transition-all flex items-center justify-center"
+            aria-label="Back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold text-gray-900 truncate">Daily Reports</h1>
+            <p className="text-sm text-gray-500">
+              Complete overview of all reservations
+            </p>
+          </div>
+          <button
+            onClick={() => navigate("/reservation")}
+            className="shrink-0 w-11 h-11 rounded-xl border border-gray-200 bg-transparent hover:bg-rose-50 hover:border-rose-300 transition-all flex items-center justify-center"
+            aria-label="Home"
+          >
+            <Home className="w-5 h-5" />
+          </button>
         </div>
-        <button
-          onClick={() => navigate("/reservation")}
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 14,
-            border: "1px solid #e5e7eb",
-            background: "#f9fafb",
-            cursor: "pointer",
-            display: "grid",
-            placeItems: "center",
-            color: "#6b7280",
-            transition: "all 0.2s"
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "#FBE6EC";
-            e.currentTarget.style.borderColor = "#C91A4D";
-            e.currentTarget.style.color = "#C91A4D";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "#f9fafb";
-            e.currentTarget.style.borderColor = "#e5e7eb";
-            e.currentTarget.style.color = "#6b7280";
-          }}
-          aria-label="Home"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-            <polyline points="9 22 9 12 15 12 15 22" />
-          </svg>
-        </button>
-      </div>
+      </header>
 
-      {/* Period Selector - Keep this at top */}
-      <div style={{
-        padding: "1rem 1.5rem",
-        backgroundColor: "#fff",
-        borderBottom: "1px solid #e5e7eb"
-      }}>
-        <div style={{
-          display: "flex",
-          gap: "12px",
-          flexWrap: "wrap",
-          marginBottom: "12px"
-        }}>
-          {Object.entries(timePeriods).map(([key, period]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSelectedPeriod(key)}
-              style={{
-                padding: "12px 16px",
-                borderRadius: "12px",
-                border: selectedPeriod === key ? "2px solid #C91A4D" : "1px solid #e5e7eb",
-                backgroundColor: selectedPeriod === key ? "#FBE6EC" : "#fff",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                transition: "all 0.2s",
-                flex: "1",
-                minWidth: "120px",
-                justifyContent: "center"
-              }}
-              onMouseEnter={(e) => {
-                if (selectedPeriod !== key) {
-                  e.currentTarget.style.borderColor = "#C91A4D";
-                  e.currentTarget.style.backgroundColor = "#f9fafb";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (selectedPeriod !== key) {
-                  e.currentTarget.style.borderColor = "#e5e7eb";
-                  e.currentTarget.style.backgroundColor = "#fff";
-                }
-              }}
-            >
-              <div style={{ color: period.color }}>{period.icon}</div>
-              <div style={{
-                fontSize: "14px",
-                fontWeight: selectedPeriod === key ? "700" : "600",
-                color: selectedPeriod === key ? "#C91A4D" : "#374151"
-              }}>
-                {period.label}
-              </div>
-            </button>
-          ))}
-        </div>
+      {/* Main Content */}
+      <div className="mx-auto max-w-4xl px-4 py-6 space-y-6">
         {/* Date Selector */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "12px"
-        }}>
-          <label style={{ fontSize: "13px", fontWeight: "700", color: "#374151", minWidth: "50px" }}>
-            Date:
-          </label>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            style={{
-              padding: "8px 12px",
-              border: "1px solid #d1d5db",
-              borderRadius: "8px",
-              fontSize: "14px",
-              outline: "none",
-              flex: 1,
-              maxWidth: "200px"
-            }}
-          />
-        </div>
-      </div>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+          {/* Toggle between single date and range */}
+          <div className="flex items-center gap-2 mb-4">
+            <button
+              onClick={() => setDateMode("single")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                dateMode === "single"
+                  ? "text-white shadow-sm"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+              style={dateMode === "single" ? { backgroundColor: '#C91A4D' } : {}}
+            >
+              <Calendar className="w-4 h-4" />
+              Single Date
+            </button>
+            <button
+              onClick={() => setDateMode("range")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                dateMode === "range"
+                  ? "text-white shadow-sm"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+              style={dateMode === "range" ? { backgroundColor: '#C91A4D' } : {}}
+            >
+              <CalendarRange className="w-4 h-4" />
+              Date Range
+            </button>
+          </div>
 
-      {/* Filters - Same as ReservationListPage */}
-      <div style={{
-        padding: "1rem 1.5rem",
-        backgroundColor: "#fff",
-        borderBottom: "1px solid #e5e7eb"
-      }}>
-        {/* Search */}
-        <input
-          type="text"
-          placeholder="Search guest, phone, table..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{
-            width: "100%",
-            padding: "0.75rem 1rem",
-            border: "1px solid #d1d5db",
-            borderRadius: "10px",
-            fontSize: "0.875rem",
-            outline: "none",
-            marginBottom: "0.75rem"
-          }}
-        />
-        
-        {/* Status Filter Label */}
-        <div style={{
-          fontSize: "13px",
-          fontWeight: "700",
-          color: "#374151",
-          marginBottom: "8px",
-          marginTop: "4px"
-        }}>
-          Filter by Status:
+          {/* Date input(s) */}
+          {dateMode === "single" ? (
+            <div className="flex items-center gap-3">
+              <label htmlFor="report-date" className="text-sm font-semibold text-gray-700 min-w-[80px]">
+                Report Date:
+              </label>
+              <input
+                id="report-date"
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="flex-1 px-4 py-2.5 rounded-xl border-2 border-gray-200 text-sm font-medium focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all hover:border-gray-300"
+              />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <label htmlFor="start-date" className="text-sm font-semibold text-gray-700 min-w-[80px]">
+                  From Date:
+                </label>
+                <input
+                  id="start-date"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  max={endDate}
+                  className="flex-1 px-4 py-2.5 rounded-xl border-2 border-gray-200 text-sm font-medium focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all hover:border-gray-300"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <label htmlFor="end-date" className="text-sm font-semibold text-gray-700 min-w-[80px]">
+                  To Date:
+                </label>
+                <input
+                  id="end-date"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  min={startDate}
+                  className="flex-1 px-4 py-2.5 rounded-xl border-2 border-gray-200 text-sm font-medium focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all hover:border-gray-300"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Info banner */}
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <p className="text-sm text-gray-500 flex items-center gap-2">
+              <span 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium"
+                style={{ backgroundColor: '#FBE6EC', color: '#C91A4D' }}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                Full Day
+              </span>
+              {dateMode === "single" ? (
+                <span>Showing all reservations for {formatDate(selectedDate)}</span>
+              ) : (
+                <span>Showing all reservations from {formatDate(startDate)} to {formatDate(endDate)}</span>
+              )}
+            </p>
+          </div>
         </div>
-        
-        {/* Quick Filter Buttons */}
-        <div style={{
-          display: "flex",
-          gap: "0.5rem",
-          flexWrap: "wrap"
-        }}>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-rose-500 to-pink-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-lg bg-gradient-to-br from-rose-500 to-pink-500 text-white mb-2">
+              <Calendar className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{formatNumber(stats.total)}</p>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Reservations</p>
+          </div>
+
+          <div className="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-blue-500 to-cyan-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 text-white mb-2">
+              <Users className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{formatNumber(stats.totalGuests)}</p>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Guests</p>
+          </div>
+
+          <div className="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 text-white mb-2">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{formatNumber(stats.confirmed)}</p>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Confirmed</p>
+          </div>
+
+          <div className="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-amber-500 to-orange-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white mb-2">
+              <Armchair className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{formatNumber(stats.seated)}</p>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Seated</p>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search guest, phone, table..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 rounded-xl bg-gray-50 border-0 text-sm focus:outline-none focus:ring-1 focus:ring-rose-500"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Filter by Status</p>
+            <div className="flex flex-wrap gap-2">
           {[
-            { value: "all", label: "All", icon: "📋" },
-            { value: "upcoming", label: "Upcoming", icon: "⏰" },
-            { value: "confirmed", label: "Confirmed", icon: "✓" },
-            { value: "arrived", label: "Arrived", icon: "👋" },
-            { value: "seated", label: "Seated", icon: "🪑" },
-            { value: "left", label: "Left", icon: "👋" },
-            { value: "cancelled", label: "Cancelled", icon: "❌" },
-            { value: "no-show", label: "No Show", icon: "🚫" }
-          ].map((filterOption) => {
-            const count = getStatusCount(filterOption.value);
-            const isActive = statusFilter === filterOption.value;
+                { value: "all", label: "All", icon: <ListFilter className="w-3.5 h-3.5" /> },
+                { value: "upcoming", label: "Upcoming", icon: <Clock className="w-3.5 h-3.5" /> },
+                { value: "online", label: "Online", icon: <Globe className="w-3.5 h-3.5" /> },
+                { value: "confirmed", label: "Confirmed", icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
+                { value: "arrived", label: "Arrived", icon: <Hand className="w-3.5 h-3.5" /> },
+                { value: "seated", label: "Seated", icon: <Armchair className="w-3.5 h-3.5" /> },
+                { value: "left", label: "Left", icon: <LogOut className="w-3.5 h-3.5" /> },
+                { value: "cancelled", label: "Cancelled", icon: <XCircle className="w-3.5 h-3.5" /> },
+                { value: "no-show", label: "No Show", icon: <UserX className="w-3.5 h-3.5" /> }
+              ].map((filter) => {
+                const isActive = statusFilter === filter.value;
+                const count = getStatusCount(filter.value);
             
             return (
               <button
-                key={filterOption.value}
-                onClick={() => setStatusFilter(filterOption.value)}
-                style={{
-                  padding: "0.5rem 1rem",
-                  borderRadius: "20px",
-                  border: isActive ? "2px solid #C91A4D" : "1px solid #d1d5db",
-                  backgroundColor: isActive ? "#FBE6EC" : "#fff",
-                  color: isActive ? "#C91A4D" : "#374151",
-                  fontSize: "0.8125rem",
-                  fontWeight: isActive ? "700" : "600",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.375rem",
-                  transition: "all 0.2s",
-                  whiteSpace: "nowrap",
-                  boxShadow: isActive ? "0 2px 8px rgba(201, 26, 77, 0.2)" : "none"
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.borderColor = "#C91A4D";
-                    e.currentTarget.style.backgroundColor = "#f9fafb";
-                    e.currentTarget.style.transform = "translateY(-1px)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.borderColor = "#d1d5db";
-                    e.currentTarget.style.backgroundColor = "#fff";
-                    e.currentTarget.style.transform = "translateY(0)";
-                  }
-                }}
+                    key={filter.value}
+                    onClick={() => setStatusFilter(filter.value)}
+                    className={`
+                      inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold
+                      transition-all duration-200 whitespace-nowrap
+                      ${
+                        isActive
+                          ? "border-2 shadow-md"
+                          : "border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:-translate-y-0.5"
+                      }
+                    `}
+                    style={isActive ? {
+                      borderColor: '#C91A4D',
+                      backgroundColor: '#FBE6EC',
+                      color: '#C91A4D',
+                      boxShadow: '0 4px 6px -1px rgba(201, 26, 77, 0.2)'
+                    } : {}}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.borderColor = '#C91A4D';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.borderColor = '#D1D5DB';
+                      }
+                    }}
               >
-                <span>{filterOption.icon}</span>
-                <span>{filterOption.label}</span>
-                {/* Count Badge */}
-                <span style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: "20px",
-                  height: "20px",
-                  padding: "0 6px",
-                  borderRadius: "10px",
-                  background: isActive 
-                    ? "linear-gradient(135deg, #7A0026, #C91A4D)" 
-                    : "#e5e7eb",
-                  color: isActive ? "#fff" : "#6b7280",
-                  fontSize: "0.6875rem",
-                  fontWeight: "800",
-                  marginLeft: "2px"
-                }}>
+                    {filter.icon}
+                    <span>{filter.label}</span>
+                    <span 
+                      className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full text-[11px] font-extrabold ml-0.5"
+                      style={isActive ? {
+                        background: 'linear-gradient(135deg, #7A0026, #C91A4D)',
+                        color: '#FFFFFF',
+                        boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+                      } : {
+                        backgroundColor: '#E5E7EB',
+                        color: '#6B7280'
+                      }}
+                    >
                   {count}
                 </span>
               </button>
             );
           })}
-        </div>
-      </div>
-
-      {/* List */}
-      <div style={{
-        flex: 1,
-        padding: "1rem 1.5rem",
-        overflow: "auto",
-        WebkitOverflowScrolling: "touch"
-      }}>
-        {loading ? (
-          <div style={{
-            padding: "2rem",
-            textAlign: "center",
-            color: "#666"
-          }}>
-            Loading...
+            </div>
           </div>
-        ) : (Array.isArray(reservations) ? reservations : []).length === 0 ? (
-          <div style={{
-            padding: "2rem",
-            textAlign: "center",
-            color: "#666"
-          }}>
-            No reservations found
+        </div>
+
+        {/* Reservation List */}
+        {loading ? (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center">
+            <Loader2 className="w-16 h-16 text-rose-600 animate-spin mx-auto mb-4" />
+            <p className="text-gray-600">Loading reservations...</p>
+          </div>
+        ) : (Array.isArray(reservations) ? reservations : [])
+          .filter(reservation => {
+            // Apply search filter
+            if (searchQuery) {
+              const query = searchQuery.toLowerCase();
+              const matchesSearch = (
+                (reservation.customerName || reservation.CustomerName || '').toLowerCase().includes(query) ||
+                (reservation.customerPhone || reservation.CustomerPhone || '').includes(query) ||
+                String(reservation.tableId || reservation.TableID || '').includes(query)
+              );
+              if (!matchesSearch) return false;
+            }
+            return true;
+          }).length === 0 ? (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center">
+            <div className="w-16 h-16 rounded-full bg-gray-100 mx-auto mb-4 flex items-center justify-center">
+              <Users className="w-8 h-8 text-gray-400" />
+            </div>
+            <h3 className="font-semibold text-gray-900 mb-1">No reservations found</h3>
+            <p className="text-sm text-gray-500">
+              Try adjusting your filters or selecting a different date/time period.
+            </p>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <div className="space-y-3">
             {(Array.isArray(reservations) ? reservations : [])
               .filter(reservation => {
                 // Apply search filter
@@ -990,183 +788,151 @@ export default function ReportsPage() {
               })
               .map((reservation, index) => {
               const reservationId = reservation.reservationId || reservation.ReservationID;
+              const status = (reservation.status || reservation.Status || '').toUpperCase();
+              
+              // Status configuration
+              const statusConfig = {
+                BOOKED: { label: "Booked", className: "border-amber-300 bg-amber-50 text-amber-700" },
+                PENDING: { label: "Pending", className: "border-amber-300 bg-amber-50 text-amber-700" },
+                CONFIRMED: { label: "Confirmed", className: "border-blue-300 bg-blue-50 text-blue-700" },
+                ARRIVED: { label: "Arrived", className: "border-purple-300 bg-purple-50 text-purple-700" },
+                SEATED: { label: "Seated", className: "border-emerald-300 bg-emerald-50 text-emerald-700" },
+                LEFT: { label: "Left", className: "border-orange-300 bg-orange-50 text-orange-700" },
+                CANCELLED: { label: "Cancelled", className: "bg-red-100 text-red-700 border-red-200" },
+                NO_SHOW: { label: "No Show", className: "bg-gray-100 text-gray-600" }
+              };
+              
+              const statusInfo = statusConfig[status] || { label: status || 'Unknown', className: 'bg-gray-100 text-gray-600' };
+              const isProcessing = processingId === reservationId;
+              
+              // Check what actions can be performed
+              const canMarkArrived = !["ARRIVED", "SEATED", "CANCELLED", "LEFT", "NO_SHOW"].includes(status);
+              const canSeat = ["ARRIVED", "CONFIRMED", "BOOKED", "PENDING", ""].includes(status) && !["SEATED", "CANCELLED", "LEFT"].includes(status);
+              const canMarkLeft = ["SEATED", "ARRIVED", "CHECKED_IN"].includes(status) && !["LEFT", "CANCELLED"].includes(status);
+              
               return (
                 <div
                   key={reservationId || index}
-                  onClick={() => {
-                    navigate(`/reservation-details?id=${reservationId}`);
-                  }}
-                  style={{
-                    padding: "1rem",
-                    backgroundColor: "#fff",
-                    borderRadius: "10px",
-                    border: "1px solid #e5e7eb",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: "1rem",
-                    cursor: "pointer",
-                    transition: "all 0.2s"
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "#C91A4D";
-                    e.currentTarget.style.boxShadow = "0 2px 8px rgba(201, 26, 77, 0.15)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "#e5e7eb";
-                    e.currentTarget.style.boxShadow = "none";
-                  }}
+                  onClick={() => navigate(`/reservation-details?id=${reservationId}`)}
+                  className="group bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md hover:border-rose-300 transition-all duration-200 cursor-pointer"
                 >
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.75rem",
-                      marginBottom: "0.5rem"
-                    }}>
-                      <div style={{
-                        fontSize: "1rem",
-                        fontWeight: "600"
-                      }}>
-                        {reservation.customerName || reservation.CustomerName || 'Guest'}
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        {/* Name and badges row */}
+                        <div className="flex items-center gap-2 flex-wrap mb-2">
+                          <h3 className="font-semibold text-gray-900 truncate">
+                            {reservation.customerName || reservation.CustomerName || 'Guest'}
+                          </h3>
+                          <span className={`text-[10px] font-semibold px-2 py-1 rounded border ${statusInfo.className}`}>
+                            {statusInfo.label}
+                          </span>
+                          {(reservation.bookingSource || reservation.BookingSource) === 'GUEST_ONLINE' && (
+                            <span className="border-emerald-300 bg-emerald-50 text-emerald-700 text-[10px] font-semibold px-2 py-1 rounded border inline-flex items-center gap-1">
+                              <Globe className="w-3 h-3" />
+                              Online
+                            </span>
+                          )}
+                          {((reservation.isWalkIn || reservation.IsWalkIn) || (reservation.bookingSource || reservation.BookingSource) === 'WALKIN') && (
+                            <span className="border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-semibold px-2 py-1 rounded border inline-flex items-center gap-1">
+                              <Users className="w-3 h-3" />
+                              Walk-in
+                            </span>
+                          )}
+                        </div>
+                        {/* Details row */}
+                        <div className="flex items-center gap-4 text-sm text-gray-500 flex-wrap">
+                          <span className="inline-flex items-center gap-1">
+                            <Phone className="w-3.5 h-3.5" />
+                            {reservation.customerPhone || reservation.CustomerPhone || '—'}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Users className="w-3.5 h-3.5" />
+                            {reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || '—'} guests
+                          </span>
+                          <span className="inline-flex items-center gap-1 font-medium text-gray-900">
+                            <Clock className="w-3.5 h-3.5" />
+                            {formatTime(reservation.reservationTime || reservation.ReservationTime)}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Hash className="w-3.5 h-3.5" />
+                            {reservation.tableId || reservation.TableID || 'Unassigned'}
+                          </span>
+                        </div>
+                        {/* Special requests */}
+                        {reservation.specialRequests && (
+                          <p className="mt-2 text-sm text-gray-400 italic line-clamp-1">
+                            {reservation.specialRequests}
+                          </p>
+                        )}
                       </div>
-                      <div style={{
-                        padding: "0.25rem 0.75rem",
-                        backgroundColor: getStatusColor(reservation.status || reservation.Status) + "20",
-                        color: getStatusColor(reservation.status || reservation.Status),
-                        borderRadius: "6px",
-                        fontSize: "0.75rem",
-                        fontWeight: "600"
-                      }}>
-                        {reservation.status || reservation.Status || 'PENDING'}
+                      {/* Time display and arrow */}
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-rose-600">
+                            {formatTime(reservation.reservationTime || reservation.ReservationTime)}
+                          </p>
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-rose-600 transition-colors" />
                       </div>
                     </div>
-                    <div style={{
-                      fontSize: "0.8125rem",
-                      color: "#6b7280",
-                      display: "flex",
-                      gap: "1rem",
-                      flexWrap: "wrap"
-                    }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-                        </svg>
-                        {reservation.customerPhone || reservation.CustomerPhone || '-'}
-                      </span>
-                      <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                          <circle cx="9" cy="7" r="4" />
-                          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                        </svg>
-                        {reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || '-'} guests
-                      </span>
-                      <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="10" />
-                          <polyline points="12 6 12 12 16 14" />
-                        </svg>
-                        {reservation.reservationTime || reservation.ReservationTime || '-'}
-                      </span>
-                      <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <rect x="3" y="3" width="18" height="18" rx="2" />
-                          <line x1="9" y1="9" x2="15" y2="9" />
-                          <line x1="9" y1="15" x2="15" y2="15" />
-                        </svg>
-                        Table {reservation.tableId || reservation.TableID || 'Unassigned'}
-                      </span>
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100" onClick={(e) => e.stopPropagation()}>
+                      {canMarkArrived && (
+                        <button
+                          onClick={() => handleMarkArrived(reservation)}
+                          disabled={isProcessing}
+                          className={`h-8 px-4 text-xs rounded-lg border transition-all ${
+                            isProcessing
+                              ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                              : "bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100 hover:text-purple-800"
+                          }`}
+                        >
+                          {isProcessing ? (
+                            <>
+                              <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />
+                              Processing...
+                            </>
+                          ) : "Mark Arrived"}
+                        </button>
+                      )}
+                      {canSeat && (
+                        <button
+                          onClick={() => handleSeat(reservation)}
+                          disabled={isProcessing}
+                          className={`h-8 px-4 text-xs rounded-lg border transition-all ${
+                            isProcessing
+                              ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                              : "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                          }`}
+                        >
+                          {isProcessing ? (
+                            <>
+                              <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />
+                              Processing...
+                            </>
+                          ) : "Seat Now"}
+                        </button>
+                      )}
+                      {canMarkLeft && (
+                        <button
+                          onClick={() => handleMarkLeft(reservation)}
+                          disabled={isProcessing}
+                          className={`h-8 px-4 text-xs rounded-lg border transition-all ${
+                            isProcessing
+                              ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                              : "bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:text-orange-800"
+                          }`}
+                        >
+                          {isProcessing ? (
+                            <>
+                              <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />
+                              Processing...
+                            </>
+                          ) : "Mark Left"}
+                        </button>
+                      )}
                     </div>
-                    {reservation.specialRequests && (
-                      <div style={{
-                        fontSize: "0.8125rem",
-                        color: "#9ca3af",
-                        marginTop: "0.5rem",
-                        fontStyle: "italic"
-                      }}>
-                        {reservation.specialRequests}
-                      </div>
-                    )}
-                  </div>
-                  <div 
-                    style={{
-                      display: "flex",
-                      gap: "0.5rem",
-                      flexDirection: "column"
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {(reservation.status || reservation.Status || '').toUpperCase() !== 'ARRIVED' && 
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'SEATED' && 
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'CANCELLED' &&
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'LEFT' && (
-                      <button
-                        onClick={() => handleMarkArrived(reservation)}
-                        disabled={processingId === reservationId}
-                        style={{
-                          padding: "0.5rem 1rem",
-                          backgroundColor: processingId === reservationId ? "#ccc" : "#9c27b0",
-                          color: "white",
-                          border: "none",
-                          borderRadius: "8px",
-                          fontSize: "0.75rem",
-                          cursor: processingId === reservationId ? "not-allowed" : "pointer",
-                          fontWeight: "600",
-                          opacity: processingId === reservationId ? 0.6 : 1
-                        }}
-                      >
-                        {processingId === reservationId ? "Processing..." : "Mark Arrived"}
-                      </button>
-                    )}
-                    {((reservation.status || reservation.Status || '').toUpperCase() === 'ARRIVED' || 
-                       (reservation.status || reservation.Status || '').toUpperCase() === 'CONFIRMED' ||
-                       !reservation.status) && 
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'SEATED' && 
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'CANCELLED' &&
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'LEFT' && (
-                      <button
-                        onClick={() => handleSeat(reservation)}
-                        disabled={processingId === reservationId}
-                        style={{
-                          padding: "0.5rem 1rem",
-                          backgroundColor: processingId === reservationId ? "#ccc" : "#4caf50",
-                          color: "white",
-                          border: "none",
-                          borderRadius: "8px",
-                          fontSize: "0.75rem",
-                          cursor: processingId === reservationId ? "not-allowed" : "pointer",
-                          fontWeight: "600",
-                          opacity: processingId === reservationId ? 0.6 : 1
-                        }}
-                      >
-                        {processingId === reservationId ? "Processing..." : "Seat Now"}
-                      </button>
-                    )}
-                    {((reservation.status || reservation.Status || '').toUpperCase() === 'SEATED' || 
-                       (reservation.status || reservation.Status || '').toUpperCase() === 'ARRIVED' ||
-                       (reservation.status || reservation.Status || '').toUpperCase() === 'CHECKED_IN') && 
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'LEFT' &&
-                     (reservation.status || reservation.Status || '').toUpperCase() !== 'CANCELLED' && (
-                      <button
-                        onClick={() => handleMarkLeft(reservation)}
-                        disabled={processingId === reservationId}
-                        style={{
-                          padding: "0.5rem 1rem",
-                          backgroundColor: processingId === reservationId ? "#ccc" : "#f59e0b",
-                          color: "white",
-                          border: "none",
-                          borderRadius: "8px",
-                          fontSize: "0.75rem",
-                          cursor: processingId === reservationId ? "not-allowed" : "pointer",
-                          fontWeight: "600",
-                          opacity: processingId === reservationId ? 0.6 : 1
-                        }}
-                      >
-                        {processingId === reservationId ? "Processing..." : "Mark Left"}
-                      </button>
-                    )}
                   </div>
                 </div>
               );
@@ -1175,27 +941,8 @@ export default function ReportsPage() {
         )}
       </div>
 
+      {/* Bottom Navigation */}
       <BottomNav />
-
-      {/* Status Selector Modal */}
-      {showStatusSelector && selectedReservation && (
-        <StatusSelector
-          reservation={selectedReservation}
-          onStatusChange={handleStatusChange}
-          onClose={() => {
-            setShowStatusSelector(false);
-            setSelectedReservation(null);
-          }}
-        />
-      )}
-      
-      {/* Add CSS for spin animation */}
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 }

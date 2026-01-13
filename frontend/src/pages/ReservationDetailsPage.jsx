@@ -416,11 +416,48 @@ export default function ReservationDetailsPage() {
   const time = reservation.reservationTime || reservation.ReservationTime || "";
   // Prefer status from BookingChild, fallback to bookingStatus from BookingMaster
   const status = reservation.status || reservation.bookingStatus || reservation.Status || reservation.BookingStatus || "";
-  const tableId = reservation.tableId || reservation.TableID;
-  const table = tableId ? "Table " + tableId : "Unassigned";
+  
+  // Table information - check multiple fields for proper display
+  // First check if tables array exists (for getReservationById response)
+  let tableId = reservation.tableId || reservation.TableID;
+  let tableName = reservation.tableName || reservation.TableName;
+  let tableNo = reservation.tableNo || reservation.TableNO;
+  let tableInfo = reservation.tableInfo || reservation.TableInfo;
+  
+  // If tables array exists, extract from first table
+  if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
+    const firstTable = reservation.tables[0];
+    tableId = firstTable.tableId || firstTable.tableID || firstTable.TableID || tableId;
+    tableName = firstTable.tableName || firstTable.TableName || tableName;
+    tableNo = firstTable.tableNo || firstTable.TableNO || tableNo;
+  }
+  
+  // Determine table display text
+  let table = "Unassigned";
+  if (tableName) {
+    table = tableName;
+  } else if (tableInfo) {
+    table = tableInfo;
+  } else if (tableNo) {
+    table = `Table ${tableNo}`;
+  } else if (tableId && tableId !== 0) {
+    table = `Table ${tableId}`;
+  }
+  
   const comments = reservation.specialRequests || reservation.SpecialRequests || "";
-  const areaId = reservation.areaId || reservation.AreaID;
-  const area = areaId ? "Area " + areaId : "—";
+  
+  // Area information - check multiple fields
+  let areaId = reservation.areaId || reservation.AreaID;
+  let areaName = reservation.areaName || reservation.AreaName;
+  
+  // If tables array exists, extract area info from first table
+  if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
+    const firstTable = reservation.tables[0];
+    areaId = firstTable.areaId || firstTable.areaID || firstTable.AreaID || areaId;
+    areaName = firstTable.areaName || firstTable.AreaName || areaName;
+  }
+  
+  const area = areaName || (areaId ? `Area ${areaId}` : "—");
 
   return (
     <div style={S.page}>

@@ -220,7 +220,8 @@ router.post("/reservation/create", async (req, res) => {
       hostessId: req.body.hostessId || null,
       hostessName: req.body.hostessName || null,
       isWalkIn: req.body.isWalkIn || false,
-      bookingSource: req.body.bookingSource || "ONLINE"
+      bookingSource: req.body.bookingSource || "ONLINE",
+      initialStatus: req.body.initialStatus || null // Pass initial status for walk-ins
     };
 
     console.log(`[RESERVATION][${reqId}] Transformed data:`, {
@@ -236,22 +237,12 @@ router.post("/reservation/create", async (req, res) => {
     });
     
     // Validate required fields before calling service
-    // Allow null tableId for guest reservations (GUEST_ONLINE source)
+    // TableId is now OPTIONAL - can be assigned later when guest arrives
+    // This allows creating reservations without table assignment
     const isGuestReservation = reservationData.bookingSource === "GUEST_ONLINE";
-    if (!reservationData.tableId && !isGuestReservation) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing required field: tableId"
-      });
-    }
     
-    // For guest reservations, require areaId instead
-    if (isGuestReservation && !reservationData.areaId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing required field: areaId (required for guest reservations)"
-      });
-    }
+    // No validation for tableId - it's optional for all reservations
+    // Tables can be assigned later when changing status to ARRIVED/SEATED
     if (!reservationData.date) {
       return res.status(400).json({
         ok: false,
@@ -728,10 +719,13 @@ router.get("/reservation", async (req, res) => {
     
     // If no date provided, use today's date
     const selectedDate = date || new Date().toISOString().split('T')[0];
+    
+    console.log('[RESERVATION] GET /reservation query params:', { status, date, tableId, selectedDate });
 
     const pool = await connectToDb();
     const request = pool.request();
     request.input("selectedDate", mssql.Date, selectedDate);
+    console.log('[RESERVATION] Set selectedDate parameter:', selectedDate);
     
     if (tableId) {
       request.input("tableId", mssql.BigInt, BigInt(Number(tableId)));
@@ -860,7 +854,10 @@ router.get("/reservation", async (req, res) => {
 
     sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
 
+    console.log('[RESERVATION] Executing SQL query...');
+    console.log('[RESERVATION] SQL preview:', sql.substring(0, 500) + '...');
     const result = await request.query(sql);
+    console.log('[RESERVATION] Query returned:', result.recordset.length, 'rows');
     
     const reservations = result.recordset.map((row) => {
       // Use GuestName/GuestPhone from BookingMaster if available, otherwise fall back to CustomerMaster
@@ -914,6 +911,7 @@ router.get("/reservation", async (req, res) => {
         confirmationSent: row.confirmationSent || false,
         reminderSent: row.reminderSent || false,
         isWalkIn: row.isWalkIn || false,
+        bookingSource: row.bookingSource || "ONLINE", // Added bookingSource field
         walkInArrivalTime: row.walkInArrivalTime,
         tableNotes: row.tableNotes || "",
         seatedTime: row.seatedTime,
@@ -1355,23 +1353,20 @@ router.put("/reservation/update-status/:bookingId", async (req, res) => {
       });
     }
 
-    // Map frontend statuses to backend statuses
+    // NO STATUS MAPPINGS - Every status remains exactly as set
+    // Each status is independent and won't be converted to another status
     const statusMapping = {
-      'NO_ANSWER': 'LEFT_MESSAGE',
-      'WRONG_NUMBER': 'CANCELLED',
-      'PARTIALLY_ARRIVED': 'ARRIVED',
-      'LATE': 'ARRIVED',
-      'CANCELLED_NOTIFY': 'CANCELLED',
-      'PARTIALLY_SEATED': 'CHECKED_IN',
-      'SEATED': 'CHECKED_IN',
-      'PAID': 'CHECKED_IN',
-      'BUS_TABLE': 'CHECKED_IN'
-      // Note: 'LEFT' is now a valid status, not mapped
+      // All mappings removed - statuses stay as-is
     };
 
     const statusUpper = status.toUpperCase();
-    // Include HOLD and LEFT as valid statuses
-    const validStatuses = ['BOOKED', 'CONFIRMED', 'LEFT_MESSAGE', 'ARRIVED', 'CHECKED_IN', 'CANCELLED', 'NO_SHOW', 'SEATED', 'PENDING', 'HOLD', 'LEFT'];
+    // All valid statuses - NO MAPPINGS, each status stays exactly as set
+    const validStatuses = [
+      'BOOKED', 'CONFIRMED', 'LEFT_MESSAGE', 'ARRIVED', 'CHECKED_IN', 'CANCELLED', 
+      'NO_SHOW', 'SEATED', 'PENDING', 'HOLD', 'LEFT', 'BUS_TABLE', 'PAID', 
+      'PARTIALLY_SEATED', 'NO_ANSWER', 'WRONG_NUMBER', 'PARTIALLY_ARRIVED', 
+      'LATE', 'CANCELLED_NOTIFY'
+    ];
     
     // Map status if needed, otherwise use as-is
     let statusToUse = statusMapping[statusUpper] || statusUpper;
@@ -1678,23 +1673,25 @@ router.get("/reservation/customers/search", async (req, res) => {
     const pool = await connectToDb();
     const { q: searchQuery } = req.query;
     
-    // If no search query, return recent customers (limit 50)
+    // If no search query, return all customers with visit count (limit 200)
     if (!searchQuery || searchQuery.trim().length === 0) {
       const result = await pool.request().query(`
-        SELECT TOP 50
-          [CustomerID] AS id,
-          [CustomerName] AS name,
-          [MobileNo] AS phone,
-          [Email] AS email,
-          [CrOn] AS createdDate
-        FROM dbo.[CustomerMaster]
-        WHERE [CustomerName] IS NOT NULL 
-          AND [CustomerName] <> ''
-          AND [CustomerName] <> '0'
-          AND [MobileNo] IS NOT NULL
-          AND [MobileNo] <> ''
-          AND [MobileNo] <> '0'
-        ORDER BY [CrOn] DESC
+        SELECT TOP 200
+          cm.[CustomerID] AS id,
+          cm.[CustomerName] AS name,
+          cm.[MobileNo] AS phone,
+          cm.[Email] AS email,
+          cm.[CrOn] AS createdDate,
+          (SELECT COUNT(*) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS visitCount,
+          (SELECT MAX([BookingDate]) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS lastVisit
+        FROM dbo.[CustomerMaster] cm
+        WHERE cm.[CustomerName] IS NOT NULL 
+          AND cm.[CustomerName] <> ''
+          AND cm.[CustomerName] <> '0'
+          AND cm.[MobileNo] IS NOT NULL
+          AND cm.[MobileNo] <> ''
+          AND cm.[MobileNo] <> '0'
+        ORDER BY cm.[CrOn] DESC
       `);
       
       return res.json({
@@ -1708,24 +1705,26 @@ router.get("/reservation/customers/search", async (req, res) => {
     const result = await pool.request()
       .input('searchQuery', mssql.NVarChar, query)
       .query(`
-        SELECT TOP 20
-          [CustomerID] AS id,
-          [CustomerName] AS name,
-          [MobileNo] AS phone,
-          [Email] AS email,
-          [CrOn] AS createdDate
-        FROM dbo.[CustomerMaster]
+        SELECT TOP 50
+          cm.[CustomerID] AS id,
+          cm.[CustomerName] AS name,
+          cm.[MobileNo] AS phone,
+          cm.[Email] AS email,
+          cm.[CrOn] AS createdDate,
+          (SELECT COUNT(*) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS visitCount,
+          (SELECT MAX([BookingDate]) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS lastVisit
+        FROM dbo.[CustomerMaster] cm
         WHERE (
-          [CustomerName] LIKE @searchQuery 
-          OR [MobileNo] LIKE @searchQuery
+          cm.[CustomerName] LIKE @searchQuery 
+          OR cm.[MobileNo] LIKE @searchQuery
         )
-        AND [CustomerName] IS NOT NULL 
-        AND [CustomerName] <> ''
-        AND [CustomerName] <> '0'
-        AND [MobileNo] IS NOT NULL
-        AND [MobileNo] <> ''
-        AND [MobileNo] <> '0'
-        ORDER BY [CrOn] DESC
+        AND cm.[CustomerName] IS NOT NULL 
+        AND cm.[CustomerName] <> ''
+        AND cm.[CustomerName] <> '0'
+        AND cm.[MobileNo] IS NOT NULL
+        AND cm.[MobileNo] <> ''
+        AND cm.[MobileNo] <> '0'
+        ORDER BY cm.[CrOn] DESC
       `);
     
     res.json({
@@ -1738,6 +1737,76 @@ router.get("/reservation/customers/search", async (req, res) => {
       ok: false,
       error: "Failed to search customers",
       customers: []
+    });
+  }
+});
+
+/**
+ * PUT /api/reservation/customers/:customerId
+ * Update customer information
+ * Body: { name, phone, email }
+ */
+router.put("/reservation/customers/:customerId", async (req, res) => {
+  const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const customerId = req.params.customerId;
+  const { name, phone, email } = req.body;
+  
+  console.log(`[CUSTOMER_UPDATE][${reqId}] PUT /api/reservation/customers/${customerId}`, { name, phone, email });
+  
+  try {
+    if (!name || !phone) {
+      return res.status(400).json({
+        ok: false,
+        error: "Name and phone are required"
+      });
+    }
+    
+    const pool = await connectToDb();
+    const request = pool.request();
+    
+    request.input('customerId', mssql.BigInt, parseInt(customerId));
+    request.input('name', mssql.NVarChar(100), name.trim());
+    request.input('phone', mssql.VarChar(20), phone.trim());
+    request.input('email', mssql.VarChar(100), email ? email.trim() : null);
+    request.input('modBy', mssql.VarChar(50), 'SYSTEM');
+    
+    const updateQuery = `
+      UPDATE dbo.[CustomerMaster]
+      SET 
+        [CustomerName] = @name,
+        [MobileNo] = @phone,
+        [Email] = @email,
+        [ModBy] = @modBy,
+        [ModOn] = GETDATE()
+      WHERE [CustomerID] = @customerId
+    `;
+    
+    const result = await request.query(updateQuery);
+    
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Customer not found"
+      });
+    }
+    
+    console.log(`[CUSTOMER_UPDATE][${reqId}] Customer updated successfully`);
+    
+    res.json({
+      ok: true,
+      message: "Customer updated successfully",
+      customer: {
+        id: parseInt(customerId),
+        name,
+        phone,
+        email
+      }
+    });
+  } catch (error) {
+    console.error(`[CUSTOMER_UPDATE][${reqId}] Error:`, error);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to update customer"
     });
   }
 });

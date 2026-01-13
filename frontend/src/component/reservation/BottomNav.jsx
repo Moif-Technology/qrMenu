@@ -1,6 +1,7 @@
 // frontend/src/component/reservation/BottomNav.jsx
 import { useNavigate, useLocation } from "react-router-dom";
 import { useReservationStore } from "../../store/reservationStore";
+import { CalendarPlus, Users, List, BarChart3 } from "lucide-react";
 
 // Import walk icon PNG - make sure walk-icon.png exists in frontend/src/assets/
 import walkIcon from "../../assets/walk.png";
@@ -8,232 +9,211 @@ import walkIcon from "../../assets/walk.png";
 // Use the imported walk icon image
 const walkIconSrc = walkIcon;
 
+// Walking icon component (keeping original with image fallback)
+function WalkInIcon({ className, isActive }) {
+  return (
+    <div className={`relative w-7 h-7 flex items-center justify-center ${className || ''}`}>
+      {/* Walking icon image - add walk.png to frontend/src/assets/ */}
+      {walkIconSrc ? (
+        <img 
+          src={walkIconSrc} 
+          alt="walk"
+          onError={(e) => {
+            e.target.style.display = 'none';
+            const fallback = e.target.parentElement.querySelector('.walk-fallback');
+            if (fallback) fallback.style.display = 'block';
+          }}
+          style={{
+            width: "22px",
+            height: "22px",
+            objectFit: "contain"
+          }}
+        />
+      ) : null}
+      {/* Fallback SVG if image not found */}
+      <svg 
+        className="walk-fallback"
+        width="22" 
+        height="22" 
+        viewBox="0 0 24 24" 
+        fill="none" 
+        stroke="currentColor" 
+        strokeWidth={isActive ? "2.5" : "2"}
+        strokeLinecap="round" 
+        strokeLinejoin="round"
+        style={{ display: walkIconSrc ? "none" : "block" }}
+      >
+        <circle cx="7.5" cy="4" r="2" fill="currentColor" />
+        <path d="M7.5 6v3.5" />
+        <path d="M6 9.5l-1.5 2.5v3.5" />
+        <path d="M9 9.5l1.5 2.5v3.5" />
+        <path d="M4.5 15.5l1 2" />
+        <path d="M10.5 15.5l-1 2" />
+      </svg>
+      {/* Plus sign overlay - matching original style */}
+      <div
+        className="absolute -top-0.5 -right-2.5 w-4 h-4 rounded-full flex items-center justify-center shadow-sm"
+        style={{ backgroundColor: "#C91A4D", zIndex: 10 }}
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#ffffff"
+          strokeWidth="3"
+          strokeLinecap="round"
+        >
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function BottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { waitlistCount } = useReservationStore();
 
   // Determine active route
-  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const navItems = [
     {
       id: 'walkin',
       label: 'Walk-in',
-      icon: (
-        <div style={{ position: "relative", width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          {/* Walking icon image - add walk.png to frontend/src/assets/ */}
-          {walkIconSrc ? (
-            <img 
-              src={walkIconSrc} 
-              alt="walk"
-              onError={(e) => {
-                e.target.style.display = 'none';
-                const fallback = e.target.parentElement.querySelector('.walk-fallback');
-                if (fallback) fallback.style.display = 'block';
-              }}
-              style={{
-                width: "22px",
-                height: "22px",
-                objectFit: "contain"
-              }}
-            />
-          ) : null}
-          {/* Fallback SVG if image not found */}
-          <svg 
-            className="walk-fallback"
-            width="22" 
-            height="22" 
-            viewBox="0 0 24 24" 
-            fill="none" 
-            stroke="currentColor" 
-            strokeWidth="2" 
-            strokeLinecap="round" 
-            strokeLinejoin="round"
-            style={{ display: walkIconSrc ? "none" : "block" }}
-          >
-            <circle cx="7.5" cy="4" r="2" fill="currentColor" />
-            <path d="M7.5 6v3.5" strokeWidth="2" />
-            <path d="M6 9.5l-1.5 2.5v3.5" strokeWidth="2" />
-            <path d="M9 9.5l1.5 2.5v3.5" strokeWidth="2" />
-            <path d="M4.5 15.5l1 2" strokeWidth="2" />
-            <path d="M10.5 15.5l-1 2" strokeWidth="2" />
-          </svg>
-          {/* Plus sign overlay - more visible */}
-          <div style={{
-            position: "absolute",
-            top: "-2px",
-            right: "-10px",
-            width: "16px",
-            height: "16px",
-            borderRadius: "50%",
-            backgroundColor: "#C91A4D",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-            zIndex: 10
-          }}>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="3" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </div>
-        </div>
-      ),
-      onClick: () => navigate("/walk-in"),
-      active: isActive("/walk-in"),
-      color: '#C91A4D'
+      icon: WalkInIcon,
+      href: "/walk-in",
+      active: isActive("/walk-in")
     },
     {
       id: 'reservation',
       label: 'Reservation',
-      icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-          <line x1="16" y1="2" x2="16" y2="6" />
-          <line x1="8" y1="2" x2="8" y2="6" />
-          <line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-      ),
-      onClick: () => navigate("/reservation-form"),
-      active: isActive("/reservation-form"),
-      color: '#C91A4D'
+      icon: CalendarPlus,
+      href: "/reservation-form",
+      active: isActive("/reservation-form")
     },
     {
-      id: 'waitlist',
-      label: 'Waitlist',
-      icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-      ),
-      onClick: () => navigate("/waitlist"),
-      active: isActive("/waitlist"),
-      color: '#A80F3D',
-      badge: waitlistCount > 0 ? waitlistCount : null
+      id: 'customers',
+      label: 'Customers',
+      icon: Users,
+      href: "/customers",
+      active: isActive("/customers")
     },
     {
       id: 'list',
       label: 'List',
-      icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <line x1="8" y1="6" x2="21" y2="6" />
-          <line x1="8" y1="12" x2="21" y2="12" />
-          <line x1="8" y1="18" x2="21" y2="18" />
-          <line x1="3" y1="6" x2="3.01" y2="6" />
-          <line x1="3" y1="12" x2="3.01" y2="12" />
-          <line x1="3" y1="18" x2="3.01" y2="18" />
-        </svg>
-      ),
-      onClick: () => navigate("/reservation-list"),
-      active: isActive("/reservation-list"),
-      color: '#7A0026'
+      icon: List,
+      href: "/reservation-list",
+      active: isActive("/reservation-list")
     },
     {
       id: 'reports',
       label: 'Reports',
-      icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <line x1="18" y1="20" x2="18" y2="10" />
-          <line x1="12" y1="20" x2="12" y2="4" />
-          <line x1="6" y1="20" x2="6" y2="14" />
-        </svg>
-      ),
-      onClick: () => navigate("/reports"),
-      active: isActive("/reports"),
-      color: '#9F1239'
+      icon: BarChart3,
+      href: "/reports",
+      active: isActive("/reports")
     }
   ];
 
   return (
-    <nav style={{
-      position: "fixed",
-      bottom: 0,
-      left: 0,
-      right: 0,
-      backgroundColor: "#ffffff",
-      borderTop: "1px solid #e5e7eb",
-      boxShadow: "0 -2px 10px rgba(0,0,0,0.05)",
-      zIndex: 100,
-      padding: "0.5rem 0 calc(0.5rem + env(safe-area-inset-bottom))",
-      display: "flex",
-      justifyContent: "space-around",
-      alignItems: "center"
-    }}>
-      {navItems.map((item) => (
-        <button
-          key={item.id}
-          onClick={item.onClick}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.25rem",
-            padding: "0.5rem 0.75rem",
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            position: "relative",
-            minWidth: "60px",
-            minHeight: "60px",
-            touchAction: "manipulation",
-            WebkitTapHighlightColor: "transparent"
-          }}
-        >
-          <div style={{
-            position: "relative",
-            color: item.active ? item.color : "#6b7280",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "all 0.2s"
-          }}>
-            {item.icon}
-            {item.badge && (
-              <span style={{
-                position: "absolute",
-                top: "-8px",
-                right: "-8px",
-                backgroundColor: "#ef4444",
-                color: "#fff",
-                borderRadius: "50%",
-                width: "18px",
-                height: "18px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "0.625rem",
-                fontWeight: "700",
-                border: "2px solid #fff"
-              }}>
-                {item.badge}
-              </span>
-            )}
-          </div>
-          <span style={{
-            fontSize: "0.6875rem",
-            fontWeight: item.active ? "700" : "500",
-            color: item.active ? item.color : "#6b7280"
-          }}>
-            {item.label}
-          </span>
-          {item.active && (
-            <div style={{
-              position: "absolute",
-              bottom: 0,
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: "28px",
-              height: "3px",
-              backgroundColor: item.color,
-              borderRadius: "3px 3px 0 0"
-            }} />
-          )}
-        </button>
-      ))}
+    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
+      <div className="mx-auto max-w-4xl px-2 sm:px-4 md:px-6 pb-[env(safe-area-inset-bottom)]">
+        <div className="flex items-center justify-around py-1.5 sm:py-2 md:py-3">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = item.active;
+            
+            return (
+              <button
+                key={item.id}
+                onClick={() => navigate(item.href)}
+                className={`
+                  relative flex items-center justify-center transition-all duration-200 ease-out
+                  active:scale-95 group rounded-2xl
+                  flex-col gap-0.5 px-3 py-2
+                  sm:flex-row sm:gap-2.5 sm:px-5 sm:py-3
+                  md:px-6 md:py-3.5
+                  ${
+                    active
+                      ? 'sm:text-white sm:shadow-lg sm:shadow-rose-500/25'
+                      : 'text-gray-500 hover:bg-rose-50/50 sm:hover:bg-gray-100 sm:hover:text-white'
+                  }
+                `}
+                style={{
+                  // Mobile: colored text on light background
+                  // Tablet+: white text on colored background
+                  color: active ? '#C91A4D' : undefined,
+                  backgroundColor: active ? '#FBE6EC' : undefined,
+                  ...(typeof window !== 'undefined' && window.innerWidth >= 640 && active ? {
+                    backgroundColor: '#C91A4D',
+                    color: '#FFFFFF'
+                  } : {})
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) {
+                    e.currentTarget.style.color = '#C91A4D';
+                    if (window.innerWidth >= 640) {
+                      e.currentTarget.style.backgroundColor = '#C91A4D';
+                      e.currentTarget.style.color = '#FFFFFF';
+                    }
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) {
+                    e.currentTarget.style.backgroundColor = '';
+                    e.currentTarget.style.color = '';
+                  }
+                }}
+              >
+                {/* Icon with badge */}
+                <div className="relative">
+                  <Icon 
+                    className={`transition-transform duration-200 ${
+                      active ? 'scale-110' : 'group-hover:scale-105'
+                    }`}
+                    isActive={active}
+                  />
+                  {/* Badge for waitlist count */}
+                  {item.badge && item.badge > 0 && (
+                    <span 
+                      className={`absolute -top-2 -right-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold shadow-md z-10 border-2 border-white ${
+                        active ? 'sm:bg-white sm:text-[#C91A4D]' : ''
+                      }`}
+                      style={{
+                        backgroundColor: '#C91A4D',
+                        color: '#FFFFFF',
+                        ...(typeof window !== 'undefined' && window.innerWidth >= 640 && active ? {
+                          backgroundColor: '#FFFFFF',
+                          color: '#C91A4D'
+                        } : {})
+                      }}
+                    >
+                      {item.badge > 99 ? "99+" : item.badge}
+                    </span>
+                  )}
+                </div>
+                {/* Label */}
+                <span className={`
+                  whitespace-nowrap transition-all duration-200
+                  text-[10px] sm:text-sm md:text-base
+                  ${active ? 'font-semibold sm:font-bold' : 'font-medium'}
+                `}>
+                  {item.label}
+                </span>
+                {/* Mobile active indicator dot */}
+                {active && (
+                  <span 
+                    className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full sm:hidden"
+                    style={{ backgroundColor: '#C91A4D' }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </nav>
   );
 }

@@ -7,6 +7,8 @@ import { connectToDb } from "../config/dbConfig.js";
 const T_QR_PRODUCT_MASTER = "dbo.QrProductMaster";
 const T_QR_PRODUCT_CHILD = "dbo.QrProductChild";
 const T_IMAGES = "dbo.ImageMaster";
+const T_PRODUCT_MASTER = "dbo.ProductMaster";
+const T_PACKAGE_ITEMS = "dbo.PackageItems";
 
 const q = (n) => `[${n}]`;
 
@@ -73,12 +75,11 @@ export async function getPackageContents(packageProductId) {
     SELECT
       qpm.${q("ID")},
       qpm.${q("ProductID")},
-      qpm.${q("ParentPackageID")},
       qpm.${q("Description")},
       qpm.${q("DescriptionArabic")},
       qpm.${q("ShortDescription")},
       qpm.${q("Specification")},
-      qpm.${q("DisplayOrder")},
+      pi.${q("DisplayOrder")},
       -- Get product price from QrProductChild
       (
         SELECT TOP 1 (qpc.${q("UnitPrice")} + qpc.${q("Tax1Amount")})
@@ -108,10 +109,11 @@ export async function getPackageContents(packageProductId) {
           AND im.${q("CloudinaryUrl")} <> ''
         ORDER BY im.${q("ID")} DESC
       ) AS cloudinaryUrl
-    FROM ${T_QR_PRODUCT_MASTER} qpm
-    WHERE qpm.${q("ParentPackageID")} = @packageProductId
+    FROM ${T_PACKAGE_ITEMS} pi
+    INNER JOIN ${T_QR_PRODUCT_MASTER} qpm ON pi.${q("ItemProductID")} = qpm.${q("ProductID")}
+    WHERE pi.${q("PackageProductID")} = @packageProductId
       AND qpm.${q("IsActive")} = 1
-    ORDER BY qpm.${q("DisplayOrder")} ASC, qpm.${q("Description")} ASC
+    ORDER BY pi.${q("DisplayOrder")} ASC, qpm.${q("Description")} ASC
   `;
   
   request.input("packageProductId", mssql.BigInt, packageProductId);
@@ -156,12 +158,11 @@ export async function getPackageDetails(packageProductId) {
           AND im.${q("CloudinaryUrl")} <> ''
         ORDER BY im.${q("ID")} DESC
       ) AS cloudinaryUrl,
-      -- Count items in package
+      -- Count items in package (from junction table)
       (
         SELECT COUNT(*)
-        FROM ${T_QR_PRODUCT_MASTER} sub
-        WHERE sub.${q("ParentPackageID")} = qpm.${q("ProductID")}
-          AND sub.${q("IsActive")} = 1
+        FROM ${T_PACKAGE_ITEMS} pi
+        WHERE pi.${q("PackageProductID")} = qpm.${q("ProductID")}
       ) AS itemCount
     FROM ${T_QR_PRODUCT_MASTER} qpm
     WHERE qpm.${q("ProductID")} = @packageProductId
@@ -199,17 +200,19 @@ export async function markAsPackageHeader(productId, isPackageHeader = true) {
 }
 
 /**
- * Add a product to a package
+ * Add a product to a package using junction table
+ * Allows the same product to belong to multiple packages
  */
 export async function addProductToPackage(productId, packageProductId, displayOrder = 0) {
   const pool = await connectToDb();
-  const request = pool.request();
   
-  // Verify that packageProductId is actually a package header
+  console.log("[PACKAGE][ADD] Adding product", productId, "to package", packageProductId);
+  
+  // 1. Verify that packageProductId is actually a package header
   const verifyRequest = pool.request();
   verifyRequest.input("packageProductId", mssql.BigInt, packageProductId);
   const verify = await verifyRequest.query(`
-    SELECT ${q("IsPackageHeader")}
+    SELECT ${q("IsPackageHeader")}, ${q("QrGroupID")}, ${q("QrSubgroupID")}
     FROM ${T_QR_PRODUCT_MASTER}
     WHERE ${q("ProductID")} = @packageProductId
   `);
@@ -218,43 +221,171 @@ export async function addProductToPackage(productId, packageProductId, displayOr
     throw new Error("Target product is not a package header");
   }
   
-  const sql = `
-    UPDATE ${T_QR_PRODUCT_MASTER}
-    SET 
-      ${q("ParentPackageID")} = @packageProductId,
-      ${q("DisplayOrder")} = @displayOrder,
-      ${q("ModOn")} = GETDATE()
+  const packageInfo = verify.recordset[0];
+  
+  // 2. Check if product exists in QrProductMaster
+  const checkRequest = pool.request();
+  checkRequest.input("productId", mssql.BigInt, productId);
+  const checkResult = await checkRequest.query(`
+    SELECT ${q("ProductID")}
+    FROM ${T_QR_PRODUCT_MASTER}
     WHERE ${q("ProductID")} = @productId
-  `;
+  `);
   
-  request.input("productId", mssql.BigInt, productId);
-  request.input("packageProductId", mssql.BigInt, packageProductId);
-  request.input("displayOrder", mssql.Int, displayOrder);
+  if (checkResult.recordset.length === 0) {
+    // Product doesn't exist in QrProductMaster, need to copy from ProductMaster
+    console.log("[PACKAGE][ADD] Product not in QrProductMaster, copying from ProductMaster");
+    
+    // Get product details from ProductMaster
+    const getProductRequest = pool.request();
+    getProductRequest.input("productId", mssql.BigInt, productId);
+    const productResult = await getProductRequest.query(`
+      SELECT 
+        pm.${q("ProductID")},
+        pm.${q("Description")},
+        pm.${q("DescriptionArabic")},
+        pm.${q("ProductType")},
+        pc.${q("UnitPrice")},
+        pc.${q("Tax1Amount")},
+        pc.${q("Tax2Amount")},
+        pc.${q("PackQty")}
+      FROM ${T_PRODUCT_MASTER} pm
+      LEFT JOIN dbo.ProductChild pc ON pc.${q("ProductID")} = pm.${q("ProductID")}
+      WHERE pm.${q("ProductID")} = @productId
+    `);
+    
+    if (productResult.recordset.length === 0) {
+      throw new Error(`Product ${productId} not found in ProductMaster`);
+    }
+    
+    const product = productResult.recordset[0];
+    
+    // Insert into QrProductMaster (WITHOUT ParentPackageID - we use junction table instead)
+    const insertQpmRequest = pool.request();
+    insertQpmRequest.input("productId", mssql.BigInt, productId);
+    insertQpmRequest.input("qrGroupId", mssql.BigInt, packageInfo.QrGroupID);
+    insertQpmRequest.input("qrSubgroupId", mssql.BigInt, packageInfo.QrSubgroupID);
+    insertQpmRequest.input("description", mssql.NVarChar, product.Description || "");
+    insertQpmRequest.input("descriptionArabic", mssql.NVarChar, product.DescriptionArabic || product.Description || "");
+    insertQpmRequest.input("productType", mssql.NVarChar, product.ProductType || "");
+    
+    await insertQpmRequest.query(`
+      INSERT INTO ${T_QR_PRODUCT_MASTER} (
+        ${q("ProductID")},
+        ${q("QrGroupID")},
+        ${q("QrSubgroupID")},
+        ${q("Description")},
+        ${q("DescriptionArabic")},
+        ${q("ProductType")},
+        ${q("IsPackageHeader")},
+        ${q("IsActive")},
+        ${q("SortOrder")}
+      )
+      VALUES (
+        @productId,
+        @qrGroupId,
+        @qrSubgroupId,
+        @description,
+        @descriptionArabic,
+        @productType,
+        0,
+        1,
+        0
+      )
+    `);
+    
+    console.log("[PACKAGE][ADD] Inserted product into QrProductMaster");
+    
+    // Insert into QrProductChild if pricing exists
+    if (product.UnitPrice != null) {
+      const insertQpcRequest = pool.request();
+      insertQpcRequest.input("productId", mssql.BigInt, productId);
+      insertQpcRequest.input("unitPrice", mssql.Decimal(18, 2), product.UnitPrice || 0);
+      insertQpcRequest.input("tax1Amount", mssql.Decimal(18, 2), product.Tax1Amount || 0);
+      insertQpcRequest.input("tax2Amount", mssql.Decimal(18, 2), product.Tax2Amount || 0);
+      insertQpcRequest.input("packQty", mssql.Decimal(18, 2), product.PackQty || 1);
+      
+      await insertQpcRequest.query(`
+        INSERT INTO ${T_QR_PRODUCT_CHILD} (
+          ${q("ProductID")},
+          ${q("UnitPrice")},
+          ${q("Tax1Amount")},
+          ${q("Tax2Amount")},
+          ${q("PackQty")}
+        )
+        VALUES (
+          @productId,
+          @unitPrice,
+          @tax1Amount,
+          @tax2Amount,
+          @packQty
+        )
+      `);
+      
+      console.log("[PACKAGE][ADD] Inserted product into QrProductChild");
+    }
+  } else {
+    console.log("[PACKAGE][ADD] Product exists in QrProductMaster");
+  }
   
-  await request.query(sql);
+  // 3. Add to junction table (allows same item in multiple packages!)
+  const insertJunctionRequest = pool.request();
+  insertJunctionRequest.input("packageProductId", mssql.BigInt, packageProductId);
+  insertJunctionRequest.input("itemProductId", mssql.BigInt, productId);
+  insertJunctionRequest.input("displayOrder", mssql.Int, displayOrder);
+  
+  try {
+    await insertJunctionRequest.query(`
+      INSERT INTO ${T_PACKAGE_ITEMS} (
+        ${q("PackageProductID")},
+        ${q("ItemProductID")},
+        ${q("DisplayOrder")}
+      )
+      VALUES (
+        @packageProductId,
+        @itemProductId,
+        @displayOrder
+      )
+    `);
+    console.log("[PACKAGE][ADD] Added item to package via junction table");
+  } catch (err) {
+    // If unique constraint error, update display order instead
+    if (err.number === 2627) { // Unique constraint violation
+      console.log("[PACKAGE][ADD] Item already in package, updating display order");
+      await insertJunctionRequest.query(`
+        UPDATE ${T_PACKAGE_ITEMS}
+        SET ${q("DisplayOrder")} = @displayOrder
+        WHERE ${q("PackageProductID")} = @packageProductId
+          AND ${q("ItemProductID")} = @itemProductId
+      `);
+    } else {
+      throw err;
+    }
+  }
+  
+  console.log("[PACKAGE][ADD] Successfully added product to package");
   return { success: true, productId, packageProductId, displayOrder };
 }
 
 /**
- * Remove a product from a package
+ * Remove a product from a package (delete from junction table)
+ * Requires both productId and packageProductId since item can be in multiple packages
  */
-export async function removeProductFromPackage(productId) {
+export async function removeProductFromPackage(productId, packageProductId) {
   const pool = await connectToDb();
   const request = pool.request();
   
   const sql = `
-    UPDATE ${T_QR_PRODUCT_MASTER}
-    SET 
-      ${q("ParentPackageID")} = NULL,
-      ${q("DisplayOrder")} = 0,
-      ${q("ModOn")} = GETDATE()
-    WHERE ${q("ProductID")} = @productId
+    DELETE FROM ${T_PACKAGE_ITEMS}
+    WHERE ${q("ItemProductID")} = @productId
+      AND ${q("PackageProductID")} = @packageProductId
   `;
   
   request.input("productId", mssql.BigInt, productId);
+  request.input("packageProductId", mssql.BigInt, packageProductId);
   
   await request.query(sql);
-  return { success: true, productId };
+  return { success: true, productId, packageProductId };
 }
 
 /**
@@ -281,6 +412,7 @@ export async function updatePackageItemOrder(productId, displayOrder) {
 
 /**
  * Create a new package from scratch
+ * This creates a "virtual" package product directly in QR tables without touching ProductMaster
  */
 export async function createPackage({
   description,
@@ -311,30 +443,44 @@ export async function createPackage({
     }
     
     const qrGroupId = groupResult.recordset[0].QrGroupID;
+    console.log("[PACKAGE][CREATE] Found QrGroupID:", qrGroupId);
     
-    // 2. Insert into ProductMaster to get ProductID
-    // Only insert Description - ProductMaster has minimal columns
+    // 2. Generate ProductID from a high range to avoid conflicts
+    // Use ProductIDs starting from 900000000000 for packages
+    const getMaxIdSql = `
+      SELECT ISNULL(MAX(${q("ProductID")}), 900000000000) + 1 AS NextId
+      FROM ${T_PRODUCT_MASTER}
+      WHERE ${q("ProductID")} >= 900000000000
+    `;
+    const maxIdRequest = new mssql.Request(transaction);
+    const maxIdResult = await maxIdRequest.query(getMaxIdSql);
+    const newProductId = maxIdResult.recordset[0].NextId;
+    
+    console.log("[PACKAGE][CREATE] Generated ProductID:", newProductId);
+    
+    // 3. Create minimal ProductMaster entry (required by FK constraint)
     const insertProductSql = `
-      INSERT INTO dbo.ProductMaster (
+      INSERT INTO ${T_PRODUCT_MASTER} (
+        ${q("ProductID")},
         ${q("Description")},
         ${q("DescriptionArabic")}
       )
-      OUTPUT INSERTED.${q("ProductID")}
       VALUES (
+        @productId,
         @description,
         @descriptionArabic
       )
     `;
     
     const productRequest = new mssql.Request(transaction);
+    productRequest.input("productId", mssql.BigInt, newProductId);
     productRequest.input("description", mssql.NVarChar, description);
     productRequest.input("descriptionArabic", mssql.NVarChar, descriptionArabic || description);
-    const productResult = await productRequest.query(insertProductSql);
-    const newProductId = productResult.recordset[0].ProductID;
+    await productRequest.query(insertProductSql);
     
-    console.log("[PACKAGE][CREATE] Created ProductMaster with ProductID:", newProductId);
+    console.log("[PACKAGE][CREATE] Created minimal ProductMaster entry (required by FK)");
     
-    // 3. Insert into QrProductMaster as package header
+    // 4. Insert into QrProductMaster as package header
     const insertQrProductSql = `
       INSERT INTO ${T_QR_PRODUCT_MASTER} (
         ${q("ProductID")},
@@ -371,7 +517,9 @@ export async function createPackage({
     qrProductRequest.input("shortDescription", mssql.NVarChar, shortDescription || description);
     await qrProductRequest.query(insertQrProductSql);
     
-    // 4. Insert into QrProductChild with price
+    console.log("[PACKAGE][CREATE] Created QrProductMaster entry");
+    
+    // 5. Insert into QrProductChild with price
     const insertPriceSql = `
       INSERT INTO ${T_QR_PRODUCT_CHILD} (
         ${q("ProductID")},
@@ -390,7 +538,9 @@ export async function createPackage({
     priceRequest.input("price", mssql.Decimal(18, 2), price);
     await priceRequest.query(insertPriceSql);
     
-    // 5. Insert image if provided
+    console.log("[PACKAGE][CREATE] Created QrProductChild with price");
+    
+    // 6. Insert image if provided
     if (cloudinaryUrl) {
       const insertImageSql = `
         INSERT INTO ${T_IMAGES} (

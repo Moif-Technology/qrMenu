@@ -260,7 +260,53 @@ export default function MenuPage() {
         console.log("✅ Mapped groups:", groupsOnly);
         setCats(groupsOnly);
         
-        if (groupsOnly.length > 0) {
+        // Check if we should return to packages subgroup
+        const returnToSubgroup = sessionStorage.getItem('returnToSubgroup');
+        const returnToPackages = sessionStorage.getItem('returnToPackages');
+        
+        if (returnToPackages === 'true' && returnToSubgroup) {
+          // Clear the flags
+          sessionStorage.removeItem('returnToSubgroup');
+          sessionStorage.removeItem('returnToPackages');
+          
+          // Find the group that contains this subgroup
+          const groupWithSubgroup = raw.find(g => 
+            g.subgroups && g.subgroups.some(sg => String(sg.subgroupId) === String(returnToSubgroup))
+          );
+          
+          if (groupWithSubgroup) {
+            console.log("✅ Returning to packages subgroup:", returnToSubgroup);
+            const subgroup = groupWithSubgroup.subgroups.find(sg => String(sg.subgroupId) === String(returnToSubgroup));
+            
+            // Set the subgroup as active
+            setSelectedGroupId(groupWithSubgroup.groupId);
+            
+            // Show subgroups for this group
+            const subgroupTabs = groupWithSubgroup.subgroups.map(sg => ({
+              id: `subgroup_${sg.subgroupId}`,
+              name: sg.name || sg.SubgroupDescription || `Subgroup ${sg.subgroupId}`,
+              type: 'subgroup',
+              subgroupId: sg.subgroupId,
+              isPackage: sg.name?.toLowerCase().includes('package') || sg.SubgroupDescription?.toLowerCase().includes('package')
+            }));
+            setCats(subgroupTabs);
+            
+            // Set the packages subgroup as active
+            const packagesSubgroupId = `subgroup_${returnToSubgroup}`;
+            setActiveCat(packagesSubgroupId);
+            setIsPackageSubgroup(true);
+            
+            // loadItems will be triggered by the useEffect and will automatically load package headers
+          } else {
+            // Fallback to first group
+            if (groupsOnly.length > 0) {
+              const firstGroupId = groupsOnly[0].id;
+              setActiveCat(firstGroupId);
+              setSelectedGroupId(groupsOnly[0].groupId);
+              console.log("✅ Set first group as active:", firstGroupId);
+            }
+          }
+        } else if (groupsOnly.length > 0) {
           const firstGroupId = groupsOnly[0].id;
           setActiveCat(firstGroupId);
           setSelectedGroupId(groupsOnly[0].groupId);
@@ -317,7 +363,8 @@ export default function MenuPage() {
           name: subgroup.name || subgroup.SubgroupDescription || `Subgroup ${subgroup.subgroupId}`,
           type: 'subgroup',
           subgroupId: subgroup.subgroupId,
-          groupId: groupId
+          groupId: groupId,
+          isPackage: (subgroup.name || subgroup.SubgroupDescription || '').toLowerCase().includes('package')
         }));
         console.log("✅ Mapped subgroups:", subgroups);
         // Set subgroups - they will be visible in CategoryTabs
@@ -410,9 +457,9 @@ export default function MenuPage() {
           
           // Check if this is a PACKAGES subgroup
           const currentSubgroup = cats.find(c => c.id === activeCat);
-          const isPackages = currentSubgroup?.name?.toLowerCase().includes('package');
+          const isPackages = currentSubgroup?.isPackage || currentSubgroup?.name?.toLowerCase().includes('package');
           
-          console.log("🔄 Is package subgroup?", isPackages, "Subgroup name:", currentSubgroup?.name);
+          console.log("🔄 Is package subgroup?", isPackages, "Subgroup:", currentSubgroup);
           
           if (isPackages) {
             // Load package headers instead of regular products
@@ -1663,35 +1710,19 @@ export default function MenuPage() {
           
           <div className="relative mx-auto max-w-6xl px-4 sm:px-6 pb-16">
             {/* Premium Packages Header */}
-            <div className="mb-8 text-center">
-              <div className="inline-flex items-center gap-3 rounded-full border-2 border-[rgba(201,26,77,0.2)] bg-gradient-to-r from-[rgba(201,26,77,0.08)] to-[rgba(168,15,61,0.08)] px-6 py-3 shadow-lg backdrop-blur-sm">
-                <svg className="w-6 h-6 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                </svg>
-                <span 
-                  className="text-xl font-black uppercase tracking-wider"
-                  style={{ 
-                    background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))",
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                    backgroundClip: "text"
-                  }}
-                >
-                  Premium Packages
-                </span>
-                <svg className="w-6 h-6 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                </svg>
-              </div>
-            </div>
-            
+           
             {/* Package Listing Grid */}
             <div className="grid gap-6 md:gap-8 [grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1fr))]">
               {packageHeaders.map((pkg) => (
                 <PackageListingCard
                   key={pkg.ProductID}
                   packageData={pkg}
-                  onClick={() => navigate(`/package/${pkg.ProductID}`)}
+                  onClick={() => navigate(`/package/${pkg.ProductID}`, { 
+                    state: { 
+                      fromPackages: true,
+                      subgroupId: pkg.QrSubgroupID 
+                    } 
+                  })}
                 />
               ))}
             </div>

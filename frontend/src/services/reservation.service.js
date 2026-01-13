@@ -210,3 +210,25 @@ export async function getCustomerHistory() {
   }
 }
 
+/**
+ * Update customer information
+ * @param {number|string} customerId - Customer ID
+ * @param {Object} customerData - Customer data to update
+ * @param {string} customerData.name - Customer name
+ * @param {string} customerData.phone - Customer phone
+ * @param {string} [customerData.email] - Customer email (optional)
+ * @returns {Promise<Object>} Updated customer
+ */
+export async function updateCustomer(customerId, customerData) {
+  try {
+    console.log("[Reservation Service] Updating customer:", customerId, customerData);
+    const response = await API.put(`/reservation/customers/${customerId}`, customerData);
+    console.log("[Reservation Service] Update customer response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("[Reservation Service] Update customer error:", error);
+    console.error("[Reservation Service] Error response:", error?.response?.data);
+    throw error;
+  }
+}
+

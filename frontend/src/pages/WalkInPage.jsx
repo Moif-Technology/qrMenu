@@ -15,17 +15,23 @@ export default function WalkInPage() {
   const location = useLocation();
   const { tables, updateTableStatus, selectedAreaId, areas, setAreas, waitlist, setWaitlist } = useReservationStore();
   
+  // Check if customer data was passed from Customers page
+  const prefilledCustomer = location.state?.customerData;
+  
+  // Hardcoded hostesses for now
   // Hardcoded hostesses for now
   const hostesses = [
-    { id: 1, name: "Sarah Johnson" },
-    { id: 2, name: "Emily Chen" },
-    { id: 3, name: "Michael Brown" },
-    { id: 4, name: "Jessica Martinez" }
+    { id: 1, name: "HANA" },
+    { id: 2, name: "YOUSSRA" },
+    { id: 3, name: "TAKOUA" },
+    { id: 4, name: "SANDOS" },
+    { id: 5, name: "NOUR" },
+    { id: 6, name: "ANISA" },
   ];
   
   const [formData, setFormData] = useState({
-    guestName: "",
-    phone: "",
+    guestName: prefilledCustomer?.name || "",
+    phone: prefilledCustomer?.phone || "",
     partySize: 1,
     seatingPreference: "",
     notes: "",
@@ -130,6 +136,28 @@ export default function WalkInPage() {
     // Clear any field errors
     setFieldErrors({});
   };
+
+  // Load areas on mount
+  useEffect(() => {
+    let mounted = true;
+    
+    const loadAreas = async () => {
+      try {
+        const areasData = await getAreas();
+        if (mounted && areasData && areasData.length > 0) {
+          setAreas(areasData);
+        }
+      } catch (err) {
+        console.error("Failed to load areas:", err);
+      }
+    };
+    
+    loadAreas();
+    
+    return () => {
+      mounted = false;
+    };
+  }, [setAreas]); // Only run once on mount (setAreas is stable)
 
   // Load customer history for autocomplete
   useEffect(() => {
@@ -392,6 +420,9 @@ export default function WalkInPage() {
   // Handle table selection in the modal (temporary selection)
   const handleTableSelectInModal = (table) => {
     const tableId = table.id || table.number || table.tableNo;
+    const tableName = table.tableName || table.name || `Table ${table.number || table.tableNo || table.id}`;
+    const tableStatus = (table.status || '').toLowerCase();
+    
     const isSelected = tempSelectedTables.some(t => {
       const tId = t.id || t.number;
       return String(tId) === String(tableId) || 
@@ -409,6 +440,27 @@ export default function WalkInPage() {
                String(t.number) !== String(table.tableNo);
       }));
     } else {
+      // Check if table is occupied or has running orders
+      if (tableStatus === 'occupied') {
+        alert(
+          `⚠️ ${tableName} is Currently Occupied\n\n` +
+          `This table has guests seated or running orders.\n` +
+          `Please choose an available table or wait for this table to be cleared.`
+        );
+        return;
+      }
+      
+      // Optionally warn for reserved tables
+      if (tableStatus === 'reserved') {
+        if (!confirm(
+          `⚠️ ${tableName} is Reserved\n\n` +
+          `This table is reserved for today.\n` +
+          `Do you want to seat the walk-in guest here anyway?`
+        )) {
+          return;
+        }
+      }
+      
       setTempSelectedTables(prev => {
         const alreadyExists = prev.some(t => {
           const tId = t.id || t.number;
@@ -423,7 +475,8 @@ export default function WalkInPage() {
           number: table.number || table.tableNo || table.id,
           name: table.tableName || table.name || `Table ${table.number || table.tableNo || table.id}`,
           capacity: table.capacity || table.seats || 0,
-          areaId: table.areaId
+          areaId: table.areaId,
+          status: table.status
         }];
       });
     }

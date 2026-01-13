@@ -1,6 +1,10 @@
 // frontend/src/component/reservation/WalkInEditModal.jsx
 import { useState, useEffect } from "react";
 import { updateReservation } from "../../services/reservation.service";
+import { getAreas } from "../../services/menu.service";
+import { getTablesByArea } from "../../services/table.service";
+import { getFloorLayoutByArea } from "../../services/floorLayout.service";
+import FloorMapContainer from "./FloorMapContainer";
 
 export default function WalkInEditModal({ 
   reservation, 
@@ -12,31 +16,192 @@ export default function WalkInEditModal({
     phone: "",
     partySize: 2,
     notes: "",
-    hostessId: null
+    hostessId: null,
+    areaId: null
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [areas, setAreas] = useState([]);
+  const [selectedTables, setSelectedTables] = useState([]);
+  const [tempSelectedTables, setTempSelectedTables] = useState([]);
+  const [showFloorMapModal, setShowFloorMapModal] = useState(false);
+  const [displayTables, setDisplayTables] = useState([]);
+  const [floorLayout, setFloorLayout] = useState(null);
+  const [loadingFloorMap, setLoadingFloorMap] = useState(false);
 
   // Hardcoded hostesses (same as WalkInPage)
   const hostesses = [
-    { id: 1, name: "Sarah Johnson" },
-    { id: 2, name: "Emily Chen" },
-    { id: 3, name: "Michael Brown" },
-    { id: 4, name: "Jessica Martinez" }
+    { id: 1, name: "HANA" },
+    { id: 2, name: "YOUSSRA" },
+    { id: 3, name: "TAKOUA" },
+    { id: 4, name: "SANDOS" },
+    { id: 5, name: "NOUR" },
+    { id: 6, name: "ANISA" }
   ];
 
-  // Load reservation data
+  // Load areas on mount
+  useEffect(() => {
+    loadAreas();
+  }, []);
+
+  // Load reservation data and tables
   useEffect(() => {
     if (reservation) {
+      const areaId = reservation.areaId || reservation.AreaID || null;
+      const tableId = reservation.tableId || reservation.TableID || null;
+      const tableInfo = reservation.tableInfo || reservation.TableInfo || reservation.tableName || reservation.TableName || null;
+      
       setFormData({
         guestName: reservation.customerName || reservation.CustomerName || "",
         phone: reservation.customerPhone || reservation.CustomerPhone || "",
         partySize: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
         notes: reservation.specialRequests || reservation.SpecialRequests || "",
-        hostessId: reservation.hostessId || reservation.HostessID || null
+        hostessId: reservation.hostessId || reservation.HostessID || null,
+        areaId: areaId
       });
+
+      // Set initial table selection if exists
+      if (tableId && tableInfo) {
+        setSelectedTables([{
+          id: tableId,
+          number: tableId,
+          name: tableInfo,
+          capacity: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
+          areaId: areaId
+        }]);
+      }
     }
   }, [reservation]);
+
+  const loadAreas = async () => {
+    try {
+      const result = await getAreas();
+      if (result.ok && result.areas) {
+        setAreas(result.areas);
+      }
+    } catch (err) {
+      console.error("Failed to load areas:", err);
+    }
+  };
+
+  // Handle area change - load tables
+  const handleAreaChange = async (e) => {
+    const areaId = e.target.value;
+    setFormData(prev => ({ ...prev, areaId: areaId || null }));
+    
+    if (areaId) {
+      try {
+        const tablesResult = await getTablesByArea(areaId);
+        if (tablesResult.ok) {
+          setDisplayTables(tablesResult.tables || []);
+        }
+      } catch (err) {
+        console.error("Failed to load tables:", err);
+      }
+    } else {
+      setDisplayTables([]);
+      setSelectedTables([]);
+    }
+  };
+
+  // Handle table selection in modal
+  const handleTableSelectInModal = (table) => {
+    const tableId = table.id || table.number || table.tableNo;
+    const tableName = table.tableName || table.name || `Table ${table.number || table.tableNo || table.id}`;
+    const tableStatus = (table.status || '').toLowerCase();
+    
+    const isSelected = tempSelectedTables.some(t => {
+      const tId = t.id || t.number;
+      return String(tId) === String(tableId);
+    });
+    
+    if (isSelected) {
+      setTempSelectedTables(prev => prev.filter(t => {
+        const tId = t.id || t.number;
+        return String(tId) !== String(tableId);
+      }));
+    } else {
+      // Check if table is occupied
+      if (tableStatus === 'occupied') {
+        alert(
+          `⚠️ ${tableName} is Currently Occupied\n\n` +
+          `This table has guests seated or running orders.\n` +
+          `Please choose an available table or wait for this table to be cleared.`
+        );
+        return;
+      }
+      
+      // Warn for reserved tables
+      if (tableStatus === 'reserved') {
+        if (!confirm(
+          `⚠️ ${tableName} is Reserved\n\n` +
+          `This table is reserved for today.\n` +
+          `Do you want to move the reservation here anyway?`
+        )) {
+          return;
+        }
+      }
+      
+      setTempSelectedTables(prev => {
+        const alreadyExists = prev.some(t => String(t.id || t.number) === String(tableId));
+        if (alreadyExists) return prev;
+        
+        return [...prev, {
+          id: table.id || table.number || table.tableNo,
+          number: table.number || table.tableNo || table.id,
+          name: tableName,
+          capacity: table.capacity || table.seats || 0,
+          areaId: table.areaId,
+          status: table.status
+        }];
+      });
+    }
+  };
+
+  // Open floor map modal
+  const handleOpenFloorMap = async () => {
+    if (!formData.areaId) {
+      alert("Please select an area first");
+      return;
+    }
+
+    setLoadingFloorMap(true);
+    try {
+      // Load tables
+      const tablesResult = await getTablesByArea(formData.areaId);
+      if (tablesResult.ok) {
+        setDisplayTables(tablesResult.tables || []);
+      }
+
+      // Load floor layout
+      const layoutResult = await getFloorLayoutByArea(formData.areaId);
+      if (layoutResult.ok && layoutResult.layout) {
+        setFloorLayout(layoutResult.layout);
+      }
+
+      // Set temp selection to current selection
+      setTempSelectedTables([...selectedTables]);
+      setShowFloorMapModal(true);
+    } catch (err) {
+      console.error("Failed to load floor map:", err);
+      alert("Failed to load floor map");
+    } finally {
+      setLoadingFloorMap(false);
+    }
+  };
+
+  // Confirm table selection
+  const handleConfirmTableSelection = () => {
+    setSelectedTables(tempSelectedTables);
+    setShowFloorMapModal(false);
+    setTimeout(() => setTempSelectedTables([]), 300);
+  };
+
+  // Cancel table selection
+  const handleCancelTableSelection = () => {
+    setTempSelectedTables([]);
+    setShowFloorMapModal(false);
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -68,6 +233,10 @@ export default function WalkInEditModal({
         hostessId: formData.hostessId ? parseInt(formData.hostessId) : null,
         hostessName: formData.hostessId 
           ? (hostesses.find(h => h.id === formData.hostessId)?.name || null) 
+          : null,
+        areaId: formData.areaId ? parseInt(formData.areaId) : null,
+        tableIds: selectedTables.length > 0 
+          ? selectedTables.map(t => t.id || t.number) 
           : null
       };
 
@@ -341,6 +510,134 @@ export default function WalkInEditModal({
             </div>
           </div>
 
+          {/* Area Selection */}
+          <div>
+            <label style={{
+              display: "block",
+              marginBottom: "8px",
+              fontWeight: "700",
+              fontSize: "14px",
+              color: "#374151"
+            }}>
+              Seating Area
+            </label>
+            <select
+              name="areaId"
+              value={formData.areaId || ""}
+              onChange={handleAreaChange}
+              style={{
+                width: "100%",
+                padding: "12px",
+                borderRadius: "10px",
+                border: "1px solid #d1d5db",
+                fontSize: "15px",
+                outline: "none",
+                boxSizing: "border-box",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                appearance: "none",
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23C91A4D' d='M6 9L1 4h10z'/%3E%3C/svg%3E")`,
+                backgroundRepeat: "no-repeat",
+                backgroundPosition: "right 12px center",
+                paddingRight: "36px"
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = "#C91A4D";
+                e.currentTarget.style.boxShadow = "0 0 0 3px rgba(201, 26, 77, 0.15)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = "#d1d5db";
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              <option value="">No area selected</option>
+              {areas.map((area) => (
+                <option key={area.areaId || area.AreaID} value={area.areaId || area.AreaID}>
+                  {area.areaName || area.AreaName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Table Selection */}
+          <div>
+            <label style={{
+              display: "block",
+              marginBottom: "8px",
+              fontWeight: "700",
+              fontSize: "14px",
+              color: "#374151"
+            }}>
+              Table Assignment
+            </label>
+            <div style={{
+              display: "flex",
+              gap: "8px",
+              alignItems: "stretch"
+            }}>
+              <div style={{
+                flex: 1,
+                padding: "12px",
+                borderRadius: "10px",
+                border: "1px solid #d1d5db",
+                fontSize: "14px",
+                color: selectedTables.length > 0 ? "#111827" : "#9ca3af",
+                background: "#f9fafb",
+                display: "flex",
+                alignItems: "center",
+                minHeight: "44px"
+              }}>
+                {selectedTables.length > 0 
+                  ? selectedTables.map(t => t.name || `Table ${t.number}`).join(", ")
+                  : "No tables selected"
+                }
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenFloorMap}
+                disabled={!formData.areaId || loadingFloorMap}
+                style={{
+                  padding: "12px 16px",
+                  background: !formData.areaId || loadingFloorMap 
+                    ? "#e5e7eb" 
+                    : "linear-gradient(135deg, #7A0026, #C91A4D)",
+                  color: !formData.areaId || loadingFloorMap ? "#9ca3af" : "#fff",
+                  border: "none",
+                  borderRadius: "10px",
+                  fontSize: "14px",
+                  fontWeight: "700",
+                  cursor: !formData.areaId || loadingFloorMap ? "not-allowed" : "pointer",
+                  transition: "all 0.2s",
+                  whiteSpace: "nowrap"
+                }}
+                onMouseEnter={(e) => {
+                  if (formData.areaId && !loadingFloorMap) {
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (formData.areaId && !loadingFloorMap) {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "none";
+                  }
+                }}
+              >
+                {loadingFloorMap ? "Loading..." : "Select Table"}
+              </button>
+            </div>
+            {!formData.areaId && (
+              <div style={{
+                marginTop: "6px",
+                fontSize: "12px",
+                color: "#6b7280",
+                fontStyle: "italic"
+              }}>
+                Select an area first to choose tables
+              </div>
+            )}
+          </div>
+
           {/* Hostess */}
           <div>
             <label style={{
@@ -527,6 +824,226 @@ export default function WalkInEditModal({
           }
         `}</style>
       </div>
+
+      {/* Floor Map Modal */}
+      {showFloorMapModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1001,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "16px",
+            background: "rgba(0, 0, 0, 0.6)",
+            backdropFilter: "blur(4px)"
+          }}
+          onClick={handleCancelTableSelection}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: "20px",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+              width: "100%",
+              maxWidth: "900px",
+              maxHeight: "90vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column"
+            }}
+          >
+            {/* Header */}
+            <div style={{
+              padding: "20px",
+              background: "linear-gradient(135deg, #7A0026, #C91A4D)",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between"
+            }}>
+              <div>
+                <div style={{ fontSize: "20px", fontWeight: "800", marginBottom: "4px" }}>
+                  Select Tables
+                </div>
+                <div style={{ fontSize: "13px", opacity: 0.9 }}>
+                  Choose tables for this reservation
+                </div>
+              </div>
+              <button
+                onClick={handleCancelTableSelection}
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "12px",
+                  border: "none",
+                  background: "rgba(255,255,255,0.2)",
+                  color: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "all 0.2s"
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.3)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.2)"}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Floor Map */}
+            <div style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "16px"
+            }}>
+              <FloorMapContainer
+                layout={floorLayout}
+                tables={displayTables}
+                selectedTables={tempSelectedTables}
+                onTableClick={handleTableSelectInModal}
+              />
+            </div>
+
+            {/* Footer with selection info and actions */}
+            <div style={{
+              padding: "16px",
+              borderTop: "1px solid #e5e7eb",
+              background: tempSelectedTables.length > 0 ? "#FBE6EC" : "#f9fafb",
+              transition: "all 0.2s"
+            }}>
+              {tempSelectedTables.length > 0 ? (
+                <div>
+                  <div style={{
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    color: "#7A0026",
+                    marginBottom: "8px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px"
+                  }}>
+                    Selected Tables ({tempSelectedTables.length})
+                  </div>
+                  <div style={{
+                    display: "flex",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                    marginBottom: "12px"
+                  }}>
+                    {tempSelectedTables.map((table, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: "6px 12px",
+                          background: "linear-gradient(135deg, #7A0026, #C91A4D)",
+                          color: "#fff",
+                          borderRadius: "8px",
+                          fontSize: "13px",
+                          fontWeight: "700",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px"
+                        }}
+                      >
+                        {table.name || `Table ${table.number}`}
+                        <button
+                          type="button"
+                          onClick={() => handleTableSelectInModal(table)}
+                          style={{
+                            background: "rgba(255,255,255,0.2)",
+                            border: "none",
+                            borderRadius: "4px",
+                            width: "18px",
+                            height: "18px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            padding: 0
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{
+                display: "flex",
+                gap: "12px"
+              }}>
+                <button
+                  type="button"
+                  onClick={handleCancelTableSelection}
+                  style={{
+                    flex: 1,
+                    padding: "14px",
+                    background: "#f9fafb",
+                    color: "#6b7280",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: "12px",
+                    fontSize: "15px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "#f9fafb"}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmTableSelection}
+                  disabled={tempSelectedTables.length === 0}
+                  style={{
+                    flex: 1,
+                    padding: "14px",
+                    background: tempSelectedTables.length === 0 
+                      ? "#d1d5db" 
+                      : "linear-gradient(135deg, #7A0026, #C91A4D)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "12px",
+                    fontSize: "15px",
+                    fontWeight: "700",
+                    cursor: tempSelectedTables.length === 0 ? "not-allowed" : "pointer",
+                    boxShadow: tempSelectedTables.length === 0 
+                      ? "none" 
+                      : "0 4px 12px rgba(201, 26, 77, 0.3)",
+                    transition: "all 0.2s"
+                  }}
+                  onMouseEnter={(e) => {
+                    if (tempSelectedTables.length > 0) {
+                      e.currentTarget.style.transform = "translateY(-1px)";
+                      e.currentTarget.style.boxShadow = "0 6px 16px rgba(201, 26, 77, 0.4)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (tempSelectedTables.length > 0) {
+                      e.currentTarget.style.transform = "translateY(0)";
+                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
+                    }
+                  }}
+                >
+                  Done ({tempSelectedTables.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

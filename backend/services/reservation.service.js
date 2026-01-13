@@ -245,12 +245,12 @@ export async function createReservation(reservationData) {
   // Convert all table IDs to numbers
   tableIds = tableIds.map(id => parseInt(id)).filter(id => !isNaN(id) && id > 0);
   
-  // Check if this is a guest reservation (no tables selected)
-  const isGuestReservation = bookingSource === "GUEST_ONLINE" && tableIds.length === 0;
+  // Check if this is a reservation without tables (tables will be assigned later)
+  const isGuestReservation = tableIds.length === 0;
   
   console.log("[RESERVATION] Validating input:", {
     tableIds,
-    isGuestReservation,
+    hasNoTables: isGuestReservation,
     bookingSource,
     date,
     time,
@@ -259,15 +259,10 @@ export async function createReservation(reservationData) {
     guests
   });
 
-  // Validation - allow guest reservations without tables
-  if (!tableIds.length && !isGuestReservation) {
-    throw new Error("Missing required field: tableId (at least one table must be selected)");
-  }
+  // Allow creating reservations without tables - they can be assigned later when guest arrives
+  // No validation error for missing tableIds or areaId - both can be assigned later
   
-  // For guest reservations, require areaId
-  if (isGuestReservation && (!areaId || parseInt(areaId) <= 0)) {
-    throw new Error("Missing required field: areaId (required for guest reservations)");
-  }
+  // Validate required fields for creating a reservation
   if (!date || date.trim() === '') {
     throw new Error("Missing required field: date");
   }
@@ -544,21 +539,24 @@ export async function createReservation(reservationData) {
       }
     }
 
-    // 6. Insert BookingChild for each table (or one entry for guest reservations)
+    // 6. Insert BookingChild for each table (or with TableID = 0 if no table assigned yet)
     const bookingChildIDs = [];
     
     if (isGuestReservation) {
-      // Guest reservation: Create single BookingChild without TableID
+      // No tables selected - Create BookingChild with TableID = 0 (unassigned)
+      // Table will be assigned later when guest arrives
       const bookingChildID = await getNextIdTx("BookingChild", tx);
       bookingChildIDs.push(bookingChildID);
-      console.log("[RESERVATION] Creating guest reservation BookingChild (no table):", bookingChildID);
+      console.log("[RESERVATION] No tables selected - creating BookingChild with TableID = 0 (unassigned):", bookingChildID);
 
       const bookingChildReq = new mssql.Request(tx);
       bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
       bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-      bookingChildReq.input("TableID", mssql.BigInt, null); // No table assigned yet
-      bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId);
-      bookingChildReq.input("Status", mssql.VarChar(50), "PENDING"); // PENDING status for guest reservations
+      bookingChildReq.input("TableID", mssql.BigInt, 0); // 0 = No table assigned yet
+      bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId || 0); // 0 if no area selected
+      // Use initialStatus if provided, otherwise default to "BOOKED"
+      const bookingStatus = initialStatus || "BOOKED";
+      bookingChildReq.input("Status", mssql.VarChar(50), bookingStatus);
       bookingChildReq.input("Notes", mssql.NVarChar(500), specialRequests || null);
       bookingChildReq.input("SeatedTime", mssql.DateTime, null);
       bookingChildReq.input("VacatedTime", mssql.DateTime, null);
@@ -579,7 +577,7 @@ export async function createReservation(reservationData) {
       `;
 
       await bookingChildReq.query(bookingChildSql);
-      console.log("[RESERVATION] Guest reservation BookingChild created successfully");
+      console.log("[RESERVATION] BookingChild created with TableID = 0 (unassigned)");
     } else {
       // Regular reservation: Create BookingChild for each table
       for (let i = 0; i < tableIds.length; i++) {
@@ -806,8 +804,38 @@ export async function createGuestReservation(guestData) {
     await bookingMasterReq.query(bookingMasterSql);
     console.log("[GUEST RESERVATION] Inserted BookingMaster:", bookingID, "Status: PENDING");
 
-    // Note: No BookingChild records created for guest reservations
-    // Staff will assign tables later when reviewing pending reservations
+    // 8. Create BookingChild with TableID = 0 (unassigned) so reservation appears in list
+    // Staff will assign actual tables later when guest arrives
+    const bookingChildID = await getNextIdTx("BookingChild", tx);
+    console.log("[GUEST RESERVATION] Creating BookingChild with TableID = 0 (unassigned):", bookingChildID);
+
+    const bookingChildReq = new mssql.Request(tx);
+    bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
+    bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
+    bookingChildReq.input("TableID", mssql.BigInt, 0); // 0 = No table assigned yet
+    bookingChildReq.input("AreaID", mssql.BigInt, parseInt(areaId) || 0); // Use preferred area if provided
+    bookingChildReq.input("Status", mssql.VarChar(50), "PENDING");
+    bookingChildReq.input("Notes", mssql.NVarChar(500), fullSpecialRequests || null);
+    bookingChildReq.input("SeatedTime", mssql.DateTime, null);
+    bookingChildReq.input("VacatedTime", mssql.DateTime, null);
+    bookingChildReq.input("CreatedOn", mssql.DateTime, enteredDate);
+    bookingChildReq.input("ModifiedOn", mssql.DateTime, null);
+
+    const bookingChildSql = `
+      INSERT INTO ${T_BOOKINGC} (
+        ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
+        ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
+        ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
+      )
+      VALUES (
+        @BookingChildID, @BookingID, @TableID,
+        @AreaID, @Status, @Notes,
+        @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
+      )
+    `;
+
+    await bookingChildReq.query(bookingChildSql);
+    console.log("[GUEST RESERVATION] BookingChild created with TableID = 0 (unassigned)");
 
     await tx.commit();
 

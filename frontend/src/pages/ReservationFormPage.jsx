@@ -23,6 +23,9 @@ export default function ReservationFormPage() {
   const searchParams = new URLSearchParams(location.search);
   const editBookingId = searchParams.get('edit');
   const isEditMode = !!editBookingId;
+  
+  // Check if customer data was passed from Customers page
+  const prefilledCustomer = location.state?.customerData;
 
   // Hardcoded hostesses for now
   const hostesses = [
@@ -47,9 +50,9 @@ export default function ReservationFormPage() {
   ];
 
   const [formData, setFormData] = useState({
-    firstName: "",
-    phone: "",
-    email: "",
+    firstName: prefilledCustomer?.name || "",
+    phone: prefilledCustomer?.phone || "",
+    email: prefilledCustomer?.email || "",
     cover: 2, // Party size
     section: "", // Area/Floor selection
     comments: "",
@@ -2080,7 +2083,8 @@ export default function ReservationFormPage() {
                     { id: "morning", label: "Morning", timeRange: "7:00 AM - 11:30 AM", color: "#F59E0B", icon: "☀️" },
                     { id: "afternoon", label: "Afternoon", timeRange: "12:00 PM - 5:30 PM", color: "#F97316", icon: "🌤️" },
                     { id: "evening", label: "Evening", timeRange: "6:00 PM - 11:30 PM", color: "#A855F7", icon: "🌙" },
-                    { id: "lateNight", label: "Late Night", timeRange: "12:00 AM - 3:00 AM", color: "#6366F1", icon: "🌃" }
+                    { id: "lateNight", label: "Late Night", timeRange: "12:00 AM - 3:00 AM", color: "#6366F1", icon: "🌃" },
+                    { id: "custom", label: "Custom Time", timeRange: "Enter any time", color: "#10B981", icon: "🕐" }
                   ].map((period) => (
                     <button
                       key={period.id}
@@ -2141,6 +2145,263 @@ export default function ReservationFormPage() {
               ) : (
                 /* Step 2: Time Selection */
                 (() => {
+                  // If custom time is selected, show elegant time picker
+                  if (selectedTimePeriod === "custom") {
+                    const [customHour = "12", customMinute = "00"] = (formData.reservationTime || "12:00").split(":");
+                    
+                    return (
+                      <div>
+                        {/* Header */}
+                        <div style={{ 
+                          textAlign: "center", 
+                          marginBottom: "24px",
+                          padding: "20px",
+                          background: "linear-gradient(135deg, #10B981, #059669)",
+                          borderRadius: "16px",
+                          color: "#fff"
+                        }}>
+                          <div style={{ fontSize: "14px", fontWeight: "600", opacity: 0.9, marginBottom: "8px" }}>
+                            Select Custom Time
+                          </div>
+                          <div style={{ fontSize: "48px", fontWeight: "800", fontFamily: "monospace", letterSpacing: "4px" }}>
+                            {customHour}:{customMinute}
+                          </div>
+                          <div style={{ fontSize: "13px", fontWeight: "600", opacity: 0.9, marginTop: "4px" }}>
+                            {parseInt(customHour) >= 12 ? "PM" : "AM"}
+                          </div>
+                        </div>
+
+                        {/* Time Selectors */}
+                        <div style={{ marginBottom: "24px" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: "12px", alignItems: "center" }}>
+                            {/* Hour Selector */}
+                            <div>
+                              <label style={{
+                                display: "block",
+                                marginBottom: "8px",
+                                fontWeight: "700",
+                                fontSize: "13px",
+                                color: "#6b7280",
+                                textAlign: "center",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.5px"
+                              }}>
+                                Hour
+                              </label>
+                              <select
+                                value={customHour}
+                                onChange={(e) => {
+                                  const newTime = `${e.target.value}:${customMinute}`;
+                                  setFormData(prev => ({ ...prev, reservationTime: newTime }));
+                                }}
+                                style={{
+                                  width: "100%",
+                                  padding: "16px 12px",
+                                  borderRadius: "14px",
+                                  border: "2px solid #10B981",
+                                  fontSize: "24px",
+                                  fontWeight: "800",
+                                  fontFamily: "monospace",
+                                  textAlign: "center",
+                                  outline: "none",
+                                  background: "#fff",
+                                  cursor: "pointer",
+                                  transition: "all 0.2s",
+                                  color: "#111827",
+                                  appearance: "none",
+                                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2310B981' d='M6 9L1 4h10z'/%3E%3C/svg%3E")`,
+                                  backgroundRepeat: "no-repeat",
+                                  backgroundPosition: "center right 12px"
+                                }}
+                                onFocus={(e) => {
+                                  e.currentTarget.style.boxShadow = "0 0 0 4px rgba(16, 185, 129, 0.2)";
+                                  e.currentTarget.style.borderColor = "#059669";
+                                }}
+                                onBlur={(e) => {
+                                  e.currentTarget.style.boxShadow = "none";
+                                  e.currentTarget.style.borderColor = "#10B981";
+                                }}
+                              >
+                                {Array.from({ length: 24 }, (_, i) => (
+                                  <option key={i} value={String(i).padStart(2, "0")}>
+                                    {String(i).padStart(2, "0")}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Separator */}
+                            <div style={{ 
+                              fontSize: "36px", 
+                              fontWeight: "800", 
+                              color: "#10B981",
+                              fontFamily: "monospace"
+                            }}>
+                              :
+                            </div>
+
+                            {/* Minute Input */}
+                            <div>
+                              <label style={{
+                                display: "block",
+                                marginBottom: "8px",
+                                fontWeight: "700",
+                                fontSize: "13px",
+                                color: "#6b7280",
+                                textAlign: "center",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.5px"
+                              }}>
+                                Minute
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="59"
+                                value={customMinute}
+                                onChange={(e) => {
+                                  let value = e.target.value;
+                                  // Ensure value is between 0-59
+                                  if (value === "") {
+                                    value = "00";
+                                  } else {
+                                    const numValue = parseInt(value);
+                                    if (numValue < 0) value = "00";
+                                    else if (numValue > 59) value = "59";
+                                    else value = String(numValue).padStart(2, "0");
+                                  }
+                                  const newTime = `${customHour}:${value}`;
+                                  setFormData(prev => ({ ...prev, reservationTime: newTime }));
+                                }}
+                                onBlur={(e) => {
+                                  // Ensure proper formatting on blur
+                                  let value = e.target.value;
+                                  if (value === "" || isNaN(value)) {
+                                    value = "00";
+                                  } else {
+                                    value = String(parseInt(value)).padStart(2, "0");
+                                  }
+                                  const newTime = `${customHour}:${value}`;
+                                  setFormData(prev => ({ ...prev, reservationTime: newTime }));
+                                  e.currentTarget.style.boxShadow = "none";
+                                  e.currentTarget.style.borderColor = "#10B981";
+                                }}
+                                style={{
+                                  width: "100%",
+                                  padding: "16px 12px",
+                                  borderRadius: "14px",
+                                  border: "2px solid #10B981",
+                                  fontSize: "24px",
+                                  fontWeight: "800",
+                                  fontFamily: "monospace",
+                                  textAlign: "center",
+                                  outline: "none",
+                                  background: "#fff",
+                                  cursor: "text",
+                                  transition: "all 0.2s",
+                                  color: "#111827",
+                                  appearance: "textfield"
+                                }}
+                                onFocus={(e) => {
+                                  e.currentTarget.style.boxShadow = "0 0 0 4px rgba(16, 185, 129, 0.2)";
+                                  e.currentTarget.style.borderColor = "#059669";
+                                  e.currentTarget.select();
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Quick Time Buttons */}
+                        <div style={{ marginBottom: "24px" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "700", color: "#6b7280", marginBottom: "10px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                            Quick Select
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
+                            {[
+                              { time: "12:00", label: "Noon" },
+                              { time: "13:00", label: "1 PM" },
+                              { time: "18:00", label: "6 PM" },
+                              { time: "20:00", label: "8 PM" }
+                            ].map(({ time, label }) => (
+                              <button
+                                key={time}
+                                type="button"
+                                onClick={() => setFormData(prev => ({ ...prev, reservationTime: time }))}
+                                style={{
+                                  padding: "10px 8px",
+                                  borderRadius: "10px",
+                                  border: formData.reservationTime === time ? "2px solid #10B981" : "1px solid #e5e7eb",
+                                  background: formData.reservationTime === time ? "#f0fdf4" : "#fff",
+                                  fontSize: "12px",
+                                  fontWeight: "700",
+                                  color: formData.reservationTime === time ? "#059669" : "#6b7280",
+                                  cursor: "pointer",
+                                  transition: "all 0.2s"
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (formData.reservationTime !== time) {
+                                    e.currentTarget.style.background = "#f9fafb";
+                                    e.currentTarget.style.borderColor = "#10B981";
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (formData.reservationTime !== time) {
+                                    e.currentTarget.style.background = "#fff";
+                                    e.currentTarget.style.borderColor = "#e5e7eb";
+                                  }
+                                }}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Confirm Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (formData.reservationTime) {
+                              setShowTimeModal(false);
+                            }
+                          }}
+                          style={{
+                            width: "100%",
+                            padding: "16px",
+                            borderRadius: "14px",
+                            border: "none",
+                            background: "linear-gradient(135deg, #7A0026, #C91A4D)",
+                            color: "#fff",
+                            fontSize: "16px",
+                            fontWeight: "800",
+                            cursor: "pointer",
+                            transition: "all 0.2s",
+                            boxShadow: "0 4px 12px rgba(201, 26, 77, 0.3)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "8px"
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = "translateY(-2px)";
+                            e.currentTarget.style.boxShadow = "0 6px 20px rgba(201, 26, 77, 0.4)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = "translateY(0)";
+                            e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
+                          }}
+                        >
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                            <polyline points="22 4 12 14.01 9 11.01" />
+                          </svg>
+                          Confirm Time
+                        </button>
+                      </div>
+                    );
+                  }
+
                   let times = [];
                   let periodLabel = "";
                   let periodColor = "";

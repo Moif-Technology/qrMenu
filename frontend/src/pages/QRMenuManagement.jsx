@@ -11,6 +11,7 @@ import {
   Package,
   Folder,
   FolderTree,
+  Loader2,
 } from "lucide-react";
 import {
   getAllProductsFromMaster,
@@ -1568,12 +1569,19 @@ function PackageManagementTab({ groups, subgroups, loading }) {
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [showCreatePackageModal, setShowCreatePackageModal] = useState(false);
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState("");
+  const [selectedSubgroupFilter, setSelectedSubgroupFilter] = useState("");
+  const [productSearchTerm, setProductSearchTerm] = useState("");
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [normalGroups, setNormalGroups] = useState([]);
+  const [normalSubgroups, setNormalSubgroups] = useState([]);
+  const [selectedProductIds, setSelectedProductIds] = useState([]); // Multi-select state
+  const [isAddingItems, setIsAddingItems] = useState(false); // Loading state for adding items
   const [newPackageForm, setNewPackageForm] = useState({
     name: "",
     nameArabic: "",
     description: "",
     price: "",
-    image: null,
   });
 
   // Filter subgroups to only show "PACKAGES" subgroups
@@ -1592,6 +1600,60 @@ function PackageManagementTab({ groups, subgroups, loading }) {
       loadPackageContents();
     }
   }, [selectedPackage]);
+
+  // Load normal groups and subgroups on mount for filtering
+  useEffect(() => {
+    loadNormalGroupsAndSubgroups();
+  }, []);
+
+  const loadNormalGroupsAndSubgroups = async () => {
+    try {
+      // EXACT SAME LOGIC AS ProductsTab (lines 483-527)
+      const allProductsData = await getAllProductsFromMaster({});
+      console.log("[LOAD-FILTERS] Loaded products:", allProductsData.length);
+      console.log("[LOAD-FILTERS] Sample product fields:", allProductsData[0]);
+      
+      // Extract unique groups - EXACT COPY from ProductsTab
+      const groups = Array.from(
+        new Map(
+          allProductsData
+            .filter((p) => p.GroupID)
+            .map((p) => [
+              p.GroupID,
+              {
+                GroupID: p.GroupID,
+                GroupDescription: p.NormalGroupDescription || p.NormalGroupCode || `Group ${p.GroupID}`,
+                GroupCode: p.NormalGroupCode,
+              },
+            ])
+        ).values()
+      ).sort((a, b) => (a.GroupDescription || "").localeCompare(b.GroupDescription || ""));
+      
+      // Extract unique subgroups - EXACT COPY from ProductsTab
+      const subgroups = Array.from(
+        new Map(
+          allProductsData
+            .filter((p) => p.SubGroupID)
+            .map((p) => [
+              p.SubGroupID,
+              {
+                SubGroupID: p.SubGroupID,
+                SubgroupDescription: p.NormalSubgroupDescription || p.NormalSubgroupCode || `Subgroup ${p.SubGroupID}`,
+                SubgroupCode: p.NormalSubgroupCode,
+                GroupID: p.GroupID,
+              },
+            ])
+        ).values()
+      ).sort((a, b) => (a.SubgroupDescription || "").localeCompare(b.SubgroupDescription || ""));
+      
+      setNormalGroups(groups);
+      setNormalSubgroups(subgroups);
+      console.log("[LOAD-FILTERS] Groups loaded:", groups.length, "- Sample:", groups.slice(0, 3).map(g => g.GroupDescription));
+      console.log("[LOAD-FILTERS] Subgroups loaded:", subgroups.length);
+    } catch (err) {
+      console.error("Error loading groups/subgroups:", err);
+    }
+  };
 
   const loadPackageHeaders = async () => {
     try {
@@ -1614,12 +1676,28 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     }
   };
 
-  const loadAllProductsList = async () => {
+  const loadAllProductsList = async (groupId = null, subgroupId = null, searchTerm = "") => {
     try {
-      const products = await getAllProductsFromMaster({});
+      setLoadingProducts(true);
+      const params = {};
+      if (groupId) {
+        params.groupId = groupId;
+      }
+      if (subgroupId) {
+        params.subgroupId = subgroupId;
+      }
+      if (searchTerm && searchTerm.trim()) {
+        params.searchTerm = searchTerm.trim();
+      }
+      console.log("[LOAD-PRODUCTS] Params:", params);
+      const products = await getAllProductsFromMaster(params);
+      console.log("[LOAD-PRODUCTS] Loaded:", products?.length || 0, "products");
       setAllProducts(products || []);
     } catch (err) {
       console.error("Error loading products:", err);
+      setAllProducts([]);
+    } finally {
+      setLoadingProducts(false);
     }
   };
 
@@ -1657,7 +1735,7 @@ function PackageManagementTab({ groups, subgroups, loading }) {
       
       alert("✅ Package created successfully!");
       setShowCreatePackageModal(false);
-      setNewPackageForm({ name: "", nameArabic: "", description: "", price: "", image: null });
+      setNewPackageForm({ name: "", nameArabic: "", description: "", price: "" });
       loadPackageHeaders();
     } catch (err) {
       console.error("[CREATE-PACKAGE] Error:", err);
@@ -1685,6 +1763,75 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     } catch (err) {
       alert("Error removing item: " + err.message);
     }
+  };
+
+  // Add multiple items at once
+  const handleAddMultipleItems = async () => {
+    if (selectedProductIds.length === 0) {
+      alert("Please select at least one item");
+      return;
+    }
+
+    // Prevent multiple clicks
+    if (isAddingItems) {
+      console.log("[ADD-ITEMS] Already adding items, ignoring click");
+      return;
+    }
+
+    setIsAddingItems(true);
+    
+    try {
+      const startOrder = packageContents.length + 1;
+      const count = selectedProductIds.length;
+      
+      console.log(`[ADD-ITEMS] Adding ${count} items to package...`);
+      
+      // Add items one by one (correct signature: productId, packageProductId, displayOrder)
+      for (let i = 0; i < selectedProductIds.length; i++) {
+        console.log(`[ADD-ITEMS] Adding item ${i + 1}/${count}...`);
+        await addProductToPackage(
+          selectedProductIds[i],
+          selectedPackage.ProductID,
+          startOrder + i
+        );
+      }
+
+      console.log("[ADD-ITEMS] All items added, refreshing...");
+      
+      // Refresh package contents
+      await loadPackageContents(selectedPackage.ProductID);
+      
+      // Reset and close modal
+      setSelectedProductIds([]);
+      setShowAddItemModal(false);
+      setIsAddingItems(false);
+      
+      alert(`✅ ${count} items added successfully!`);
+    } catch (err) {
+      console.error("Failed to add items to package:", err);
+      setIsAddingItems(false);
+      alert("❌ Failed to add items: " + (err.response?.data?.error || err.message));
+    }
+  };
+
+  // Toggle product selection
+  const toggleProductSelection = (productId) => {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId)
+        ? prev.filter((id) => id !== productId)
+        : [...prev, productId]
+    );
+  };
+
+  // Select all visible products
+  const handleSelectAll = () => {
+    const allVisibleIds = allProducts.map((p) => p.ProductID);
+    setSelectedProductIds(allVisibleIds);
+  };
+
+  // Deselect all
+  const handleDeselectAll = () => {
+    setSelectedProductIds([]);
   };
 
   return (
@@ -1777,13 +1924,14 @@ function PackageManagementTab({ groups, subgroups, loading }) {
             </h3>
             <button
               onClick={() => {
+                setSelectedProductIds([]); // Reset selection
                 loadAllProductsList();
                 setShowAddItemModal(true);
               }}
               className="btn"
             >
               <Plus className="w-5 h-5 mr-2" />
-              Add Item
+              Add Items
             </button>
           </div>
 
@@ -1830,39 +1978,219 @@ function PackageManagementTab({ groups, subgroups, loading }) {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAddItemModal(false)} />
           <div className="absolute inset-0 flex items-center justify-center p-4">
             <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden max-h-[80vh] flex flex-col">
-              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-                <h3 className="text-xl font-semibold">Add Item to Package</h3>
-                <button onClick={() => setShowAddItemModal(false)} className="text-gray-400 hover:text-gray-600">
-                  <X className="w-6 h-6" />
-                </button>
+              <div className="p-6 border-b border-gray-200">
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h3 className="text-xl font-semibold">Add Items to Package</h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {selectedProductIds.length} item(s) selected
+                    </p>
+                  </div>
+                  <button onClick={() => {
+                    setShowAddItemModal(false);
+                    setSelectedProductIds([]);
+                  }} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+                
+                {/* Search Input */}
+                <div className="mb-3">
+                  <div className="relative">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none z-20">
+                      <Search className="w-5 h-5 text-gray-400" />
+                    </div>
+                    <input
+                      type="text"
+                      value={productSearchTerm}
+                      onChange={(e) => {
+                        setProductSearchTerm(e.target.value);
+                        loadAllProductsList(
+                          selectedGroupFilter || null,
+                          selectedSubgroupFilter || null,
+                          e.target.value
+                        );
+                      }}
+                      placeholder="Search products by name..."
+                      className="input w-full pl-10"
+                    />
+                  </div>
+                </div>
+                
+                {/* Group & Subgroup Filters */}
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <select
+                    value={selectedGroupFilter}
+                    onChange={(e) => {
+                      setSelectedGroupFilter(e.target.value);
+                      setSelectedSubgroupFilter(""); // Reset subgroup when group changes
+                      loadAllProductsList(
+                        e.target.value || null,
+                        null,
+                        productSearchTerm
+                      );
+                    }}
+                    className="input"
+                  >
+                    <option value="">All Groups</option>
+                    {normalGroups.map((group) => (
+                      <option key={group.GroupID} value={group.GroupID}>
+                        {group.GroupDescription}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <select
+                    value={selectedSubgroupFilter}
+                    onChange={(e) => {
+                      setSelectedSubgroupFilter(e.target.value);
+                      loadAllProductsList(
+                        selectedGroupFilter || null,
+                        e.target.value || null,
+                        productSearchTerm
+                      );
+                    }}
+                    className="input"
+                    disabled={!selectedGroupFilter}
+                  >
+                    <option value="">All Subgroups</option>
+                    {normalSubgroups
+                      .filter(sg => !selectedGroupFilter || sg.GroupID === parseInt(selectedGroupFilter))
+                      .map((subgroup) => (
+                        <option key={subgroup.SubGroupID} value={subgroup.SubGroupID}>
+                          {subgroup.SubgroupDescription}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                
+                {/* Clear All Button */}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => {
+                      setSelectedGroupFilter("");
+                      setSelectedSubgroupFilter("");
+                      setProductSearchTerm("");
+                      loadAllProductsList(null, null, "");
+                    }}
+                    className="btn-ghost text-sm"
+                  >
+                    <X className="w-4 h-4 mr-1" />
+                    Clear All Filters
+                  </button>
+                </div>
               </div>
-              <div className="p-6 overflow-y-auto">
-                {allProducts.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">Loading products...</div>
+              
+              <div className="p-6 overflow-y-auto flex-1">
+                {loadingProducts ? (
+                  <div className="text-center py-8">
+                    <Loader2 className="w-8 h-8 text-rose-600 animate-spin mx-auto mb-2" />
+                    <p className="text-gray-500">Loading products...</p>
+                  </div>
+                ) : allProducts.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    {productSearchTerm || selectedGroupFilter ? (
+                      <div>
+                        <p className="font-medium mb-2">No products found</p>
+                        <p className="text-sm">Try adjusting your search or filter</p>
+                      </div>
+                    ) : (
+                      <p>No products available</p>
+                    )}
+                  </div>
                 ) : (
-                  <div className="space-y-2">
-                    {allProducts.slice(0, 50).map((product) => (
-                      <div
-                        key={product.ProductID}
-                        className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
-                      >
-                        <div>
-                          <p className="font-medium text-gray-900">{product.Description}</p>
-                          <p className="text-sm text-gray-600">ID: {product.ProductID}</p>
-                        </div>
+                  <div>
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="text-sm text-gray-600">
+                        Found <strong>{allProducts.length}</strong> product(s)
+                        {selectedGroupFilter && " in selected group"}
+                        {selectedSubgroupFilter && " in selected subgroup"}
+                        {productSearchTerm && ` matching "${productSearchTerm}"`}
+                      </p>
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => {
-                            const order = prompt("Display order (1, 2, 3...):", (packageContents.length + 1).toString());
-                            if (order) handleAddItemToPackage(product.ProductID, parseInt(order));
-                          }}
-                          className="btn-ghost"
+                          onClick={handleSelectAll}
+                          className="btn-ghost text-sm"
                         >
-                          Add
+                          Select All
+                        </button>
+                        <button
+                          onClick={handleDeselectAll}
+                          className="btn-ghost text-sm"
+                        >
+                          Clear
                         </button>
                       </div>
-                    ))}
+                    </div>
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                      {allProducts.map((product) => {
+                        const isSelected = selectedProductIds.includes(product.ProductID);
+                        return (
+                          <div
+                            key={product.ProductID}
+                            onClick={() => toggleProductSelection(product.ProductID)}
+                            className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                              isSelected
+                                ? "border-rose-500 bg-rose-50"
+                                : "border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {}} // Handled by parent div onClick
+                              className="w-5 h-5 text-rose-600 border-gray-300 rounded focus:ring-rose-500"
+                            />
+                            <div className="flex-1">
+                              <p className="font-medium text-gray-900">{product.Description}</p>
+                              <p className="text-sm text-gray-600">
+                                ID: {product.ProductID}
+                                {product.NormalGroupDescription && ` • ${product.NormalGroupDescription}`}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
+              </div>
+              
+              {/* Footer with Add Button */}
+              <div className="p-6 border-t border-gray-200 bg-gray-50">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-600">
+                    {selectedProductIds.length} item(s) selected
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowAddItemModal(false);
+                        setSelectedProductIds([]);
+                      }}
+                      className="btn-ghost"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleAddMultipleItems}
+                      disabled={selectedProductIds.length === 0 || isAddingItems}
+                      className="btn disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isAddingItems ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          Adding...
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-5 h-5 mr-2" />
+                          Add {selectedProductIds.length > 0 ? `${selectedProductIds.length} ` : ""}Items
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1948,20 +2276,6 @@ function PackageManagementTab({ groups, subgroups, loading }) {
                       className="input w-full"
                       required
                     />
-                  </div>
-
-                  {/* Image Upload */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Package Image
-                    </label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => setNewPackageForm({ ...newPackageForm, image: e.target.files[0] })}
-                      className="input w-full"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Upload an attractive image for the package</p>
                   </div>
 
                   {/* Preview */}
