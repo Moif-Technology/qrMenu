@@ -206,8 +206,10 @@ router.post("/reservation/create", async (req, res) => {
     const { createReservation } = await import("../services/reservation.service.js");
     
     // Transform frontend data to backend format
+    // Frontend sends tableIds (plural), service now accepts both tableId and tableIds
     const reservationData = {
-      tableId: req.body.tableIds || req.body.tableId, // Support both formats
+      tableIds: req.body.tableIds !== undefined ? req.body.tableIds : req.body.tableId, // Prefer tableIds from frontend
+      tableId: req.body.tableId || req.body.tableIds, // Also pass as tableId for backward compatibility
       areaId: req.body.areaId || req.body.section || null,
       date: req.body.date || req.body.reservationDate,
       time: req.body.time || req.body.reservationTime,
@@ -225,9 +227,12 @@ router.post("/reservation/create", async (req, res) => {
     };
 
     console.log(`[RESERVATION][${reqId}] Transformed data:`, {
+      tableIds: reservationData.tableIds,
       tableId: reservationData.tableId,
+      tableIdsType: typeof reservationData.tableIds,
       tableIdType: typeof reservationData.tableId,
-      isArray: Array.isArray(reservationData.tableId),
+      tableIdsIsArray: Array.isArray(reservationData.tableIds),
+      tableIdIsArray: Array.isArray(reservationData.tableId),
       date: reservationData.date,
       time: reservationData.time,
       name: reservationData.name,

@@ -4,12 +4,12 @@ export default function FilterBar({ sort, onSort }) {
   const { t } = useTranslation();
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6">
-      <div className="flex flex-col gap-3 rounded-[20px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_12px_28px_rgba(122,0,38,0.08)] backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <div className="text-xs font-semibold uppercase tracking-[0.28em] text-gray-500" style={{ letterSpacing: "0.28em" }}>
+      <div className="flex flex-col gap-3 rounded-[20px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_12px_28px_rgba(58,46,46,0.08)] backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div className="text-xs font-semibold uppercase tracking-[0.28em]" style={{ letterSpacing: "0.28em", color: 'var(--text-secondary)' }}>
           {t("menu.service_standard")}
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
             {t("menu.sort_by")}
           </span>
           <div className="relative">

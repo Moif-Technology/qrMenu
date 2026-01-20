@@ -207,8 +207,8 @@ export default function AutocompleteInput({
               style={{
                 padding: '10px 12px',
                 cursor: 'pointer',
-                background: highlightedIndex === index ? '#FBE6EC' : '#fff',
-                borderLeft: highlightedIndex === index ? '3px solid #C91A4D' : '3px solid transparent',
+                background: highlightedIndex === index ? 'var(--grad-start-soft)' : '#fff',
+                borderLeft: highlightedIndex === index ? '3px solid var(--text-accent)' : '3px solid transparent',
                 transition: 'all 0.15s',
                 display: 'flex',
                 flexDirection: 'column',

@@ -218,6 +218,7 @@ async function createCustomer(customerData, tx) {
 export async function createReservation(reservationData) {
   const {
     tableId, // Can be single ID or array
+    tableIds: tableIdsParam, // Alternative field name (plural) - support both for compatibility
     areaId,
     date,
     time,
@@ -235,11 +236,15 @@ export async function createReservation(reservationData) {
   } = reservationData;
 
   // Convert tableId to array if single value
+  // Support both tableId (singular) and tableIds (plural) for compatibility
+  // Prefer tableIds if both are provided (frontend sends tableIds)
+  const rawTableId = tableIdsParam !== undefined ? tableIdsParam : tableId;
+  
   let tableIds = [];
-  if (Array.isArray(tableId)) {
-    tableIds = tableId.filter(id => id != null && id !== '');
-  } else if (tableId != null && tableId !== '') {
-    tableIds = [tableId];
+  if (Array.isArray(rawTableId)) {
+    tableIds = rawTableId.filter(id => id != null && id !== '' && id !== 0);
+  } else if (rawTableId != null && rawTableId !== '' && rawTableId !== 0) {
+    tableIds = [rawTableId];
   }
   
   // Convert all table IDs to numbers
@@ -249,7 +254,10 @@ export async function createReservation(reservationData) {
   const isGuestReservation = tableIds.length === 0;
   
   console.log("[RESERVATION] Validating input:", {
-    tableIds,
+    rawTableId,
+    tableId,
+    tableIdsParam: tableIds,
+    processedTableIds: tableIds,
     hasNoTables: isGuestReservation,
     bookingSource,
     date,
@@ -258,6 +266,15 @@ export async function createReservation(reservationData) {
     phone: phone?.substring(0, 15),
     guests
   });
+  
+  // Additional validation: if tableIds is empty but we expect tables, log warning
+  if (tableIds.length === 0 && rawTableId != null && rawTableId !== '' && rawTableId !== 0) {
+    console.warn("[RESERVATION] WARNING: tableId provided but filtered out:", {
+      rawTableId,
+      type: typeof rawTableId,
+      isArray: Array.isArray(rawTableId)
+    });
+  }
 
   // Allow creating reservations without tables - they can be assigned later when guest arrives
   // No validation error for missing tableIds or areaId - both can be assigned later
@@ -718,8 +735,11 @@ export async function createGuestReservation(guestData) {
     const enteredDate = dateResult.recordset[0].ServerDate;
 
     // 3. Combine date and time for BookingDate
-    const bookingDate = new Date(`${date}T${time}:00`);
-    console.log("[GUEST RESERVATION] Booking date/time:", bookingDate);
+    // Create date string without timezone to avoid conversion issues
+    // SQL Server will interpret this as local server time
+    const bookingDateStr = `${date}T${time}:00`;
+    const bookingDate = new Date(bookingDateStr);
+    console.log("[GUEST RESERVATION] Booking date/time string:", bookingDateStr, "Date object:", bookingDate, "ISO:", bookingDate.toISOString());
 
     // 4. Get next BookingID
     const bookingID = await getNextIdTx("BookingMaster", tx);
@@ -760,7 +780,37 @@ export async function createGuestReservation(guestData) {
     bookingMasterReq.input("GuestName", mssql.NVarChar(100), name);
     bookingMasterReq.input("GuestPhone", mssql.VarChar(25), phone);
     bookingMasterReq.input("GuestEmail", mssql.VarChar(100), email || null);
-    bookingMasterReq.input("ReservationTime", mssql.VarChar(10), time);
+    // Convert time string (HH:mm) to SQL Server Time format
+    // Parse time and create Date object using local time (not UTC) to match server timezone
+    let reservationTimeValue = null;
+    if (time) {
+      try {
+        const timeParts = time.split(':');
+        if (timeParts.length >= 2) {
+          const hours = parseInt(timeParts[0], 10);
+          const minutes = parseInt(timeParts[1], 10);
+          if (!isNaN(hours) && !isNaN(minutes) && hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+            // Create a Date object using local time (not UTC) to match server timezone
+            // Use a fixed date and set local hours/minutes (not UTC)
+            const baseDate = new Date('2000-01-01T00:00:00'); // Local time, no Z
+            baseDate.setHours(hours, minutes, 0, 0); // Use setHours (local), not setUTCHours
+            reservationTimeValue = baseDate;
+            console.log("[GUEST RESERVATION] Parsed time:", time, "-> Time value:", reservationTimeValue.toTimeString(), "Local hours:", hours, "minutes:", minutes);
+          } else {
+            console.warn("[GUEST RESERVATION] Invalid time format, skipping ReservationTime:", time);
+          }
+        }
+      } catch (timeError) {
+        console.warn("[GUEST RESERVATION] Error parsing time, skipping ReservationTime:", timeError);
+      }
+    }
+    // Save as TIME type (database column is TIME type based on query results)
+    if (reservationTimeValue) {
+      bookingMasterReq.input("ReservationTime", mssql.Time, reservationTimeValue);
+    } else {
+      // Fallback: save as string if time parsing failed
+      bookingMasterReq.input("ReservationTime", mssql.VarChar(10), time || null);
+    }
     bookingMasterReq.input("SpecialRequests", mssql.NVarChar(500), fullSpecialRequests || null);
     bookingMasterReq.input("Tags", mssql.NVarChar(200), tags || null);
     bookingMasterReq.input("ConfirmationCode", mssql.VarChar(50), confirmationCode);

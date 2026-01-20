@@ -548,7 +548,7 @@ export default function ReservationPage() {
   return (
     <div style={{
       height: "100vh",
-      background: "radial-gradient(120% 60% at 50% 0%, rgba(201,26,77,0.16), transparent 55%), #fdf8fa",
+      background: "radial-gradient(120% 60% at 50% 0%, rgba(139,111,71,0.12), transparent 55%), var(--bg-paper)",
       display: "flex",
       flexDirection: "column",
       paddingBottom: "70px",

@@ -501,11 +501,12 @@ export async function listQrProducts(filters = {}) {
       qpm.*,
       qg.${q("GroupDescription")} AS QrGroupDescription,
       qsg.${q("SubgroupDescription")} AS QrSubgroupDescription
-    FROM ${T_QR_PRODUCT_MASTER} qpm
-    LEFT JOIN ${T_QR_GROUP} qg ON qg.${q("QrGroupID")} = qpm.${q("QrGroupID")}
-    LEFT JOIN ${T_QR_SUBGROUP} qsg ON qsg.${q("QrSubgroupID")} = qpm.${q("QrSubgroupID")}
+    FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
+    LEFT JOIN ${T_QR_GROUP} qg WITH (NOLOCK) ON qg.${q("QrGroupID")} = qpm.${q("QrGroupID")}
+    LEFT JOIN ${T_QR_SUBGROUP} qsg WITH (NOLOCK) ON qsg.${q("QrSubgroupID")} = qpm.${q("QrSubgroupID")}
     ${whereClause}
     ORDER BY qpm.${q("ModOn")} DESC
+    OPTION (RECOMPILE) -- Force fresh query plan to avoid stale data after updates
   `;
   
   const result = await request.query(sql);
@@ -763,6 +764,10 @@ export async function updateQrProductAssignment(productId, updateData) {
         .input("Description", mssql.NVarChar, details?.Description || null)
         .input("DescriptionArabic", mssql.NVarChar, details?.DescriptionArabic || null)
         .input("ShortDescription", mssql.NVarChar, details?.ShortDescription || null)
+        .input("FullDescription", mssql.NVarChar(mssql.MAX), updateData.FullDescription || null)
+        .input("FullDescriptionArabic", mssql.NVarChar(mssql.MAX), updateData.FullDescriptionArabic || null)
+        .input("Allergies", mssql.NVarChar(mssql.MAX), updateData.Allergies || null)
+        .input("AllergiesArabic", mssql.NVarChar(mssql.MAX), updateData.AllergiesArabic || null)
         .input("BarCode", mssql.NVarChar, details?.BarCode || null)
         .input("Specification", mssql.NVarChar, details?.Specification || null)
         .input("ProductType", mssql.NVarChar, details?.ProductType || null)
@@ -779,6 +784,10 @@ export async function updateQrProductAssignment(productId, updateData) {
             ${q("Description")},
             ${q("DescriptionArabic")},
             ${q("ShortDescription")},
+            ${q("FullDescription")},
+            ${q("FullDescriptionArabic")},
+            ${q("Allergies")},
+            ${q("AllergiesArabic")},
             ${q("BarCode")},
             ${q("Specification")},
             ${q("ProductType")},
@@ -796,6 +805,10 @@ export async function updateQrProductAssignment(productId, updateData) {
             @Description,
             @DescriptionArabic,
             @ShortDescription,
+            @FullDescription,
+            @FullDescriptionArabic,
+            @Allergies,
+            @AllergiesArabic,
             @BarCode,
             @Specification,
             @ProductType,
@@ -898,28 +911,73 @@ export async function updateQrProductAssignment(productId, updateData) {
         finalSubGroupId || null
       );
       
-      await new mssql.Request(tx)
-        .input("ProductID", mssql.BigInt, productId)
-        .input("GroupID", mssql.BigInt, validatedGroupId)
-        .input("SubGroupID", mssql.BigInt, validatedSubGroupId)
-        .input("ProductType", mssql.NVarChar, finalProductType || null)
-        .input("QrGroupID", mssql.BigInt, updateData.QrGroupID || null)
-        .input("QrSubgroupID", mssql.BigInt, updateData.QrSubgroupID || null)
-        .input("IsActive", mssql.Bit, updateData.IsActive !== undefined ? updateData.IsActive : 1)
-        .input("ModBy", mssql.NVarChar, "ADMIN")
-        .query(`
-          UPDATE ${T_QR_PRODUCT_MASTER}
-          SET
-            ${q("GroupID")} = @GroupID,
-            ${q("SubGroupID")} = @SubGroupID,
-            ${q("ProductType")} = @ProductType,
-            ${q("QrGroupID")} = @QrGroupID,
-            ${q("QrSubgroupID")} = @QrSubgroupID,
-            ${q("IsActive")} = @IsActive,
-            ${q("ModOn")} = GETDATE(),
-            ${q("ModBy")} = @ModBy
-          WHERE ${q("ProductID")} = @ProductID
-        `);
+      // Build dynamic UPDATE query to only update fields that are provided
+      const updateFields = [];
+      const req = new mssql.Request(tx);
+      req.input("ProductID", mssql.BigInt, productId);
+      
+      // Always update these fields
+      updateFields.push(`${q("GroupID")} = @GroupID`);
+      req.input("GroupID", mssql.BigInt, validatedGroupId);
+      updateFields.push(`${q("SubGroupID")} = @SubGroupID`);
+      req.input("SubGroupID", mssql.BigInt, validatedSubGroupId);
+      updateFields.push(`${q("ProductType")} = @ProductType`);
+      req.input("ProductType", mssql.NVarChar, finalProductType || null);
+      
+      // Update QrGroupID if provided
+      if (updateData.QrGroupID !== undefined) {
+        updateFields.push(`${q("QrGroupID")} = @QrGroupID`);
+        req.input("QrGroupID", mssql.BigInt, updateData.QrGroupID || null);
+      }
+      
+      // Update QrSubgroupID if provided
+      if (updateData.QrSubgroupID !== undefined) {
+        updateFields.push(`${q("QrSubgroupID")} = @QrSubgroupID`);
+        req.input("QrSubgroupID", mssql.BigInt, updateData.QrSubgroupID || null);
+      }
+      
+      // Update IsActive if provided
+      if (updateData.IsActive !== undefined) {
+        updateFields.push(`${q("IsActive")} = @IsActive`);
+        req.input("IsActive", mssql.Bit, updateData.IsActive);
+      }
+      
+      // Update FullDescription if provided
+      if (updateData.FullDescription !== undefined) {
+        updateFields.push(`${q("FullDescription")} = @FullDescription`);
+        req.input("FullDescription", mssql.NVarChar(mssql.MAX), updateData.FullDescription || null);
+      }
+      
+      // Update FullDescriptionArabic if provided
+      if (updateData.FullDescriptionArabic !== undefined) {
+        updateFields.push(`${q("FullDescriptionArabic")} = @FullDescriptionArabic`);
+        req.input("FullDescriptionArabic", mssql.NVarChar(mssql.MAX), updateData.FullDescriptionArabic || null);
+      }
+      
+      // Update Allergies if provided
+      if (updateData.Allergies !== undefined) {
+        updateFields.push(`${q("Allergies")} = @Allergies`);
+        req.input("Allergies", mssql.NVarChar(mssql.MAX), updateData.Allergies || null);
+      }
+      
+      // Update AllergiesArabic if provided
+      if (updateData.AllergiesArabic !== undefined) {
+        updateFields.push(`${q("AllergiesArabic")} = @AllergiesArabic`);
+        req.input("AllergiesArabic", mssql.NVarChar(mssql.MAX), updateData.AllergiesArabic || null);
+      }
+      
+      // Always update ModOn and ModBy
+      updateFields.push(`${q("ModOn")} = GETDATE()`);
+      updateFields.push(`${q("ModBy")} = @ModBy`);
+      req.input("ModBy", mssql.NVarChar, "ADMIN");
+      
+      const updateSql = `
+        UPDATE ${T_QR_PRODUCT_MASTER}
+        SET ${updateFields.join(",\n            ")}
+        WHERE ${q("ProductID")} = @ProductID
+      `;
+      
+      await req.query(updateSql);
     
       // If QrProductChild entries don't exist, create them
       const checkQrProductChild = await new mssql.Request(tx)
@@ -1122,6 +1180,7 @@ export async function getQrMenuItems({
   
   // Build WHERE clause - only show products with ProductType = 'Normal' (or NULL for backwards compatibility)
   // This filters out RAW MATERIAL and other non-Normal product types
+  // Include packages (IsPackageHeader = 1) - they will be displayed using PackageCard in the frontend
   let whereClause = `WHERE qpm.${q("IsActive")} = 1 AND (qpm.${q("ProductType")} IS NULL OR UPPER(LTRIM(RTRIM(qpm.${q("ProductType")}))) = 'NORMAL')`;
   
   if (search) {
@@ -1165,6 +1224,10 @@ export async function getQrMenuItems({
       qpm.${q("Description")} AS [pm.Description],
       qpm.${q("DescriptionArabic")} AS [pm.DescriptionArabic],
       qpm.${q("ShortDescription")} AS [pm.ShortDescription],
+      qpm.${q("FullDescription")} AS [pm.FullDescription],
+      qpm.${q("FullDescriptionArabic")} AS [pm.FullDescriptionArabic],
+      qpm.${q("Allergies")} AS [pm.Allergies],
+      qpm.${q("AllergiesArabic")} AS [pm.AllergiesArabic],
       qpm.${q("BarCode")} AS [pm.BarCode],
       qpm.${q("Specification")} AS [pm.Specification],
       qpm.${q("GroupID")} AS [pm.GroupID], -- Normal GroupID from ProductMaster (used by KOT)
@@ -1172,6 +1235,7 @@ export async function getQrMenuItems({
       qpm.${q("QrGroupID")} AS [pm.QrGroupID], -- QR GroupID (for display/filtering)
       qpm.${q("QrSubgroupID")} AS [pm.QrSubgroupID], -- QR SubGroupID (for display/filtering)
       qpm.${q("ProductType")} AS [pm.ProductType], -- ProductType (for filtering RAW MATERIAL products)
+      qpm.${q("IsPackageHeader")} AS [pm.IsPackageHeader], -- IsPackageHeader (for filtering packages from regular items)
       qpm.${q("ModOn")} AS [pm.ModOn],
       qpm.${q("CrOn")} AS [pm.CrOn],
       -- Get price and other fields from QrProductChild (latest) using OUTER APPLY (FAST)
@@ -1217,12 +1281,13 @@ export async function getQrMenuItems({
     ORDER BY ${orderBy}
     OFFSET @offset ROWS
     FETCH NEXT @limit ROWS ONLY
+    OPTION (RECOMPILE) -- Force fresh query plan to avoid stale data after schema changes
   `;
   
   request.input("offset", mssql.Int, offset);
   request.input("limit", mssql.Int, limit);
-  // Set query timeout to 30 seconds to prevent hanging queries
-  request.timeout = 30000;
+  // Set query timeout to 15 seconds for faster failure (optimized for speed)
+  request.timeout = 15000;
   
   // Performance monitoring
   const queryStartTime = Date.now();
@@ -1234,8 +1299,63 @@ export async function getQrMenuItems({
     console.warn(`[PERFORMANCE] getQrMenuItems query took ${queryDuration}ms (page: ${page}, pageSize: ${pageSize})`);
   }
   
+  // Diagnostic: Check total products vs returned products when filtering by qrGroupId
+  if (qrGroupId) {
+    const diagnosticRequest = pool.request();
+    diagnosticRequest.input("qrGroupId", mssql.BigInt, qrGroupId);
+    const diagnosticSql = `
+      SELECT 
+        COUNT(*) AS totalInGroup,
+        SUM(CASE WHEN ${q("IsActive")} = 1 THEN 1 ELSE 0 END) AS activeCount,
+        SUM(CASE WHEN ${q("IsActive")} = 1 AND (${q("ProductType")} IS NULL OR UPPER(LTRIM(RTRIM(${q("ProductType")}))) = 'NORMAL') THEN 1 ELSE 0 END) AS includedCount,
+        SUM(CASE WHEN ${q("IsActive")} = 0 THEN 1 ELSE 0 END) AS inactiveCount,
+        SUM(CASE WHEN ${q("IsActive")} = 1 AND ${q("ProductType")} IS NOT NULL AND UPPER(LTRIM(RTRIM(${q("ProductType")}))) <> 'NORMAL' THEN 1 ELSE 0 END) AS excludedByTypeCount
+      FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
+      WHERE qpm.${q("QrGroupID")} = @qrGroupId
+    `;
+    try {
+      const diagnosticResult = await diagnosticRequest.query(diagnosticSql);
+      const diag = diagnosticResult.recordset[0];
+      if (diag.totalInGroup !== diag.includedCount) {
+        console.warn(`[QR-MENU] Group ${qrGroupId}: Total=${diag.totalInGroup}, Active=${diag.activeCount}, Included=${diag.includedCount}, Inactive=${diag.inactiveCount}, ExcludedByType=${diag.excludedByTypeCount}`);
+        
+        // Show which specific products are excluded
+        const excludedRequest = pool.request();
+        excludedRequest.input("qrGroupId", mssql.BigInt, qrGroupId);
+        const excludedSql = `
+          SELECT 
+            ${q("ProductID")},
+            ${q("Description")},
+            ${q("ShortDescription")},
+            ${q("IsActive")},
+            ${q("ProductType")},
+            CASE 
+              WHEN ${q("IsActive")} = 0 THEN 'Inactive (IsActive = 0)'
+              WHEN ${q("IsActive")} = 1 AND ${q("ProductType")} IS NOT NULL AND UPPER(LTRIM(RTRIM(${q("ProductType")}))) <> 'NORMAL' THEN 'Wrong ProductType: ' + ${q("ProductType")}
+              ELSE 'Should be included'
+            END AS ExclusionReason
+          FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
+          WHERE qpm.${q("QrGroupID")} = @qrGroupId
+            AND NOT (${q("IsActive")} = 1 AND (${q("ProductType")} IS NULL OR UPPER(LTRIM(RTRIM(${q("ProductType")}))) = 'NORMAL'))
+          ORDER BY ${q("ProductID")}
+        `;
+        const excludedResult = await excludedRequest.query(excludedSql);
+        if (excludedResult.recordset.length > 0) {
+          console.warn(`[QR-MENU] ⚠️  Excluded products (${excludedResult.recordset.length}):`);
+          excludedResult.recordset.forEach(prod => {
+            console.warn(`[QR-MENU]   - ProductID: ${prod.ProductID}, Description: ${prod.Description || prod.ShortDescription}, Reason: ${prod.ExclusionReason}`);
+          });
+        }
+      }
+    } catch (diagError) {
+      // Silently fail diagnostic - don't break the main query
+      console.error(`[QR-MENU] Diagnostic query failed:`, diagError.message);
+    }
+  }
+  
   // Get total count - only count products with ProductType = 'Normal' (or NULL for backwards compatibility)
   // This filters out RAW MATERIAL and other non-Normal product types
+  // Include packages (IsPackageHeader = 1) - they will be displayed using PackageCard in the frontend
   const countRequest = pool.request();
   let countWhereClause = `WHERE qpm.${q("IsActive")} = 1 AND (qpm.${q("ProductType")} IS NULL OR UPPER(LTRIM(RTRIM(qpm.${q("ProductType")}))) = 'NORMAL')`;
   
@@ -1262,10 +1382,11 @@ export async function getQrMenuItems({
     SELECT COUNT(*) AS total
     FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
     ${countWhereClause}
+    OPTION (RECOMPILE) -- Force fresh query plan to avoid stale data after schema changes
   `;
   
-  // Set query timeout to 30 seconds for count query
-  countRequest.timeout = 30000;
+  // Set query timeout to 10 seconds for count query (optimized for speed)
+  countRequest.timeout = 10000;
   const countStartTime = Date.now();
   const countResult = await countRequest.query(countSql);
   const countDuration = Date.now() - countStartTime;

@@ -314,9 +314,31 @@ router.post("/r/resolve", async (req, res) => {
     
     console.log(`[/r/resolve] Table ${numericTable}: Found ${lines.length} unpaid lines (after filtering paid KOTs), canPay: ${canPay}`);
 
+    // Get table name and number from TableMaster
+    let tableName = null;
+    let tableNo = null;
+    try {
+      const tableInfoReq = pool.request()
+        .input("TableID", mssql.Int, numericTable);
+      const tableInfoResult = await tableInfoReq.query(`
+        SELECT TOP 1 [TableName], [TableNO]
+        FROM dbo.[TableMaster]
+        WHERE [TableID] = @TableID
+      `);
+      if (tableInfoResult.recordset.length > 0) {
+        tableName = tableInfoResult.recordset[0].TableName;
+        tableNo = tableInfoResult.recordset[0].TableNO;
+      }
+    } catch (tableInfoErr) {
+      console.warn("[/r/resolve] Could not fetch table info:", tableInfoErr?.message);
+      // Continue without table name - not critical
+    }
+
     res.json({ 
       ok: true, 
       tableId: String(tableId), 
+      tableName: tableName || null,
+      tableNo: tableNo || null,
       area, 
       lines,
       canPay // Indicates if payment buttons should be enabled

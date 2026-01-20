@@ -12,6 +12,7 @@ import ScrollTopButton from "../component/ScrollTopButton";
 import TopBar from "../component/TopBar";
 import { useCart } from "../store/cartStore";
 import { useTranslation } from "react-i18next";
+import { useUI } from "../store/uiStore";
 import Icon from "../component/Icon";
 
 // 🔌 LIVE API
@@ -47,7 +48,25 @@ function normalizeImage(src) {
   return null;
 }
 
-function mapRowToItem(row) {
+function mapRowToItem(row, lang = "en") {
+  // 🔍 DEBUG: Log the row data and language
+  const arabicNameDebug = row.name_ar || row.DescriptionArabic || row["pm.DescriptionArabic"] || row["pm_DescriptionArabic"] || null;
+  console.log("🔍 [mapRowToItem] DEBUG:", {
+    lang,
+    rowKeys: Object.keys(row),
+    name: row.name,
+    name_ar: row.name_ar,
+    DescriptionArabic: row.DescriptionArabic,
+    "pm.DescriptionArabic": row["pm.DescriptionArabic"],
+    "pm_DescriptionArabic": row["pm_DescriptionArabic"],
+    Description: row.Description,
+    "pm.Description": row["pm.Description"],
+    "pm_Description": row["pm_Description"],
+    arabicNameFound: arabicNameDebug,
+    hasArabicName: !!(arabicNameDebug && typeof arabicNameDebug === "string" && arabicNameDebug.trim() !== ""),
+    willUseArabic: lang === "ar" && arabicNameDebug && typeof arabicNameDebug === "string" && arabicNameDebug.trim() !== ""
+  });
+
   const rawImages = Array.isArray(row.images)
     ? row.images
     : typeof row.images === "string"
@@ -96,10 +115,58 @@ function mapRowToItem(row) {
   // Prefer Cloudinary URL, then fallback to other image sources
   const primaryImage = cloudinaryUrl || normalizeImage(row.image ?? row.DocImage ?? row.ImageLocation ?? normalizedImages[0] ?? null);
 
+  // Use Arabic name if language is Arabic and DescriptionArabic is available
+  // Check multiple possible field names: name_ar, DescriptionArabic, pm.DescriptionArabic, pm_DescriptionArabic
+  const arabicName = row.name_ar || 
+                     row.DescriptionArabic || 
+                     row["pm.DescriptionArabic"] || 
+                     row["pm_DescriptionArabic"] || 
+                     null;
+  
+  const hasArabicName = arabicName && typeof arabicName === "string" && arabicName.trim() !== "";
+  
+  // Use ShortDescription for menu display (prefer ShortDescription over Description)
+  const shortDesc = row["pm.ShortDescription"] ?? row["pm_ShortDescription"] ?? row.ShortDescription ?? null;
+  const shortDescAr = row["pm.ShortDescriptionArabic"] ?? row["pm_ShortDescriptionArabic"] ?? row.ShortDescriptionArabic ?? null;
+  const hasShortDescAr = shortDescAr && typeof shortDescAr === "string" && shortDescAr.trim() !== "";
+  
+  const itemName = (lang === "ar" && hasShortDescAr)
+    ? shortDescAr.trim()
+    : (lang === "ar" && hasArabicName)
+    ? arabicName.trim()
+    : (shortDesc && typeof shortDesc === "string" && shortDesc.trim() !== "")
+    ? shortDesc.trim()
+    : (row.name ?? row.Description ?? row["pm.Description"] ?? row["pm_Description"] ?? "Untitled");
+
+  // Optimized: Removed debug logging for performance
+
+  // Get FullDescription for item modal (prefer FullDescription over Specification/ShortDescription)
+  const fullDescAr = row["pm.FullDescriptionArabic"] ?? row["pm_FullDescriptionArabic"] ?? row.FullDescriptionArabic ?? null;
+  const hasFullDescAr = fullDescAr && typeof fullDescAr === "string" && fullDescAr.trim() !== "";
+  const fullDesc = row["pm.FullDescription"] ?? row["pm_FullDescription"] ?? row.FullDescription ?? null;
+  const hasFullDesc = fullDesc && typeof fullDesc === "string" && fullDesc.trim() !== "";
+  
+  // Fallback to Specification if FullDescription is not available
+  const specAr = row["pm.SpecificationArabic"] ?? row["pm_SpecificationArabic"] ?? row.SpecificationArabic ?? null;
+  const hasSpecAr = specAr && typeof specAr === "string" && specAr.trim() !== "";
+  const spec = row["pm.Specification"] ?? row["pm_Specification"] ?? row.Specification ?? null;
+  const hasSpec = spec && typeof spec === "string" && spec.trim() !== "";
+  
+  // Use FullDescription if available, otherwise fallback to Specification
+  const itemDescription = (lang === "ar" && hasFullDescAr)
+    ? fullDescAr.trim()
+    : (lang === "ar" && hasSpecAr)
+    ? specAr.trim()
+    : (hasFullDesc)
+    ? fullDesc.trim()
+    : (hasSpec)
+    ? spec.trim()
+    : "";
+
   return {
     id: row.id ?? row.product_id ?? row.ID ?? row["pm.ProductID"] ?? row["pm_ProductID"] ?? row["pm.ProductID"],
-    name: row.name ?? row.Description ?? row["pm.Description"] ?? row["pm_Description"] ?? "Untitled",
-    desc: row.short_description ?? row.Specification ?? row["pm.Specification"] ?? row["pm_Specification"] ?? row["pm.ShortDescription"] ?? row["pm_ShortDescription"] ?? "",
+    name: itemName,
+    desc: itemDescription, // Use FullDescription (or Specification as fallback) instead of ShortDescription
     img: primaryImage || null,
     thumbnailUrl: thumbnailUrl || null, // Blur-up placeholder (loads instantly)
     images: normalizedImages.length > 0 ? normalizedImages : [],
@@ -127,6 +194,12 @@ export default function MenuPage() {
   const token = useCart((s) => s.token);
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const lang = useUI((s) => s.lang);
+  
+  // 🔍 DEBUG: Log language changes
+  useEffect(() => {
+    // Optimized: Removed debug logging
+  }, [lang]);
 
   // UI state
   // const [drawer, setDrawer] = useState(false);
@@ -249,15 +322,18 @@ export default function MenuPage() {
         setQrGroups(raw);
         
         // Initially show only groups (top level)
+        // Use Arabic name if language is Arabic and name_ar is available
         const groupsOnly = raw.map((group) => ({
           id: `group_${group.groupId}`,
-          name: group.name || group.GroupDescription || `Group ${group.groupId}`,
+          name: (lang === "ar" && group.name_ar && group.name_ar.trim())
+            ? group.name_ar.trim()
+            : (group.name || group.GroupDescription || `Group ${group.groupId}`),
           type: 'group',
           groupId: group.groupId,
           hasSubgroups: group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0
         }));
         
-        console.log("✅ Mapped groups:", groupsOnly);
+        // Optimized: Removed debug logging
         setCats(groupsOnly);
         
         // Check if we should return to packages subgroup
@@ -275,16 +351,19 @@ export default function MenuPage() {
           );
           
           if (groupWithSubgroup) {
-            console.log("✅ Returning to packages subgroup:", returnToSubgroup);
+            // Optimized: Removed debug logging
             const subgroup = groupWithSubgroup.subgroups.find(sg => String(sg.subgroupId) === String(returnToSubgroup));
             
             // Set the subgroup as active
             setSelectedGroupId(groupWithSubgroup.groupId);
             
             // Show subgroups for this group
+            // Use Arabic name if language is Arabic and name_ar is available
             const subgroupTabs = groupWithSubgroup.subgroups.map(sg => ({
               id: `subgroup_${sg.subgroupId}`,
-              name: sg.name || sg.SubgroupDescription || `Subgroup ${sg.subgroupId}`,
+              name: (lang === "ar" && sg.name_ar && sg.name_ar.trim())
+                ? sg.name_ar.trim()
+                : (sg.name || sg.SubgroupDescription || `Subgroup ${sg.subgroupId}`),
               type: 'subgroup',
               subgroupId: sg.subgroupId,
               isPackage: sg.name?.toLowerCase().includes('package') || sg.SubgroupDescription?.toLowerCase().includes('package')
@@ -302,15 +381,19 @@ export default function MenuPage() {
             if (groupsOnly.length > 0) {
               const firstGroupId = groupsOnly[0].id;
               setActiveCat(firstGroupId);
-              setSelectedGroupId(groupsOnly[0].groupId);
-              console.log("✅ Set first group as active:", firstGroupId);
+              // Don't set selectedGroupId on initial load - only set it when user clicks
+              // This prevents auto-expanding to subgroups on initial load
+              setSelectedGroupId(null);
+              console.log("✅ Set first group as active (initial load, no subgroup expansion):", firstGroupId);
             }
           }
         } else if (groupsOnly.length > 0) {
           const firstGroupId = groupsOnly[0].id;
           setActiveCat(firstGroupId);
-          setSelectedGroupId(groupsOnly[0].groupId);
-          console.log("✅ Set first group as active:", firstGroupId);
+          // Don't set selectedGroupId on initial load - only set it when user clicks
+          // This prevents auto-expanding to subgroups on initial load
+          setSelectedGroupId(null);
+          console.log("✅ Set first group as active (initial load, no subgroup expansion):", firstGroupId);
         }
       } catch (e) {
         console.error("❌ Error loading QR categories:", e);
@@ -331,11 +414,54 @@ export default function MenuPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Update category names when language changes
+  useEffect(() => {
+    if (qrGroups.length === 0) return;
+    
+    // Update categories based on current language
+    // If selectedGroupId is null, we're showing groups; otherwise, we're showing subgroups
+    if (selectedGroupId === null) {
+      // Currently showing groups
+      const groupsOnly = qrGroups.map((group) => ({
+        id: `group_${group.groupId}`,
+        name: (lang === "ar" && group.name_ar && group.name_ar.trim())
+          ? group.name_ar.trim()
+          : (group.name || group.GroupDescription || `Group ${group.groupId}`),
+        type: 'group',
+        groupId: group.groupId,
+        hasSubgroups: group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0
+      }));
+      setCats(groupsOnly);
+    } else if (selectedGroupId !== null) {
+      // Currently showing subgroups
+      const group = qrGroups.find(g => {
+        const gId = typeof g.groupId === 'number' ? g.groupId : parseInt(g.groupId);
+        return gId === selectedGroupId;
+      });
+      
+      if (group && group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0) {
+        const subgroups = group.subgroups.map((subgroup) => ({
+          id: `subgroup_${subgroup.subgroupId}`,
+          name: (lang === "ar" && subgroup.name_ar && subgroup.name_ar.trim())
+            ? subgroup.name_ar.trim()
+            : (subgroup.name || subgroup.SubgroupDescription || `Subgroup ${subgroup.subgroupId}`),
+          type: 'subgroup',
+          subgroupId: subgroup.subgroupId,
+          groupId: selectedGroupId,
+          isPackage: (subgroup.name || subgroup.SubgroupDescription || '').toLowerCase().includes('package')
+        }));
+        setCats(subgroups);
+      }
+    }
+  }, [lang, qrGroups, selectedGroupId]);
+
   // Handle category selection - show subgroups if group has them, otherwise show products
   const handleCategoryChange = useCallback((categoryId) => {
     console.log("🔵 handleCategoryChange called:", categoryId);
     console.log("🔵 qrGroups:", qrGroups);
     console.log("🔵 qrGroups length:", qrGroups.length);
+    console.log("🔵 Current selectedGroupId:", selectedGroupId);
+    console.log("🔵 Current activeCat:", activeCat);
     
     // Check if it's a group or subgroup
     if (categoryId.startsWith('group_')) {
@@ -354,54 +480,73 @@ export default function MenuPage() {
       console.log("🔵 Group subgroups length:", group?.subgroups?.length);
       console.log("🔵 Is array?", Array.isArray(group?.subgroups));
       
+      // Check if this group is already selected and showing subgroups
+      const isCurrentlyShowingSubgroups = selectedGroupId === groupId && cats.some(c => c.type === 'subgroup');
+      
       if (group && group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0) {
-        // Show subgroups for this group
-        console.log("✅ Group has subgroups, showing them:", group.subgroups.length);
-        setSelectedGroupId(groupId);
+        // If already showing subgroups for this group, do nothing
+        if (isCurrentlyShowingSubgroups) {
+          console.log("🔵 Same group clicked, already showing subgroups - do nothing");
+          return; // Already showing subgroups for this group, don't change anything
+        }
+        
+        // FIRST CLICK: Immediately show subgroups (changed from requiring two clicks)
+        console.log("✅ Group has subgroups, showing subgroups immediately:", group.subgroups.length);
+        setSelectedGroupId(groupId); // Set selectedGroupId to track that we're showing subgroups
+        
+        // Use Arabic name if language is Arabic and name_ar is available
         const subgroups = group.subgroups.map((subgroup) => ({
           id: `subgroup_${subgroup.subgroupId}`,
-          name: subgroup.name || subgroup.SubgroupDescription || `Subgroup ${subgroup.subgroupId}`,
+          name: (lang === "ar" && subgroup.name_ar && subgroup.name_ar.trim())
+            ? subgroup.name_ar.trim()
+            : (subgroup.name || subgroup.SubgroupDescription || `Subgroup ${subgroup.subgroupId}`),
           type: 'subgroup',
           subgroupId: subgroup.subgroupId,
           groupId: groupId,
           isPackage: (subgroup.name || subgroup.SubgroupDescription || '').toLowerCase().includes('package')
         }));
-        console.log("✅ Mapped subgroups:", subgroups);
         // Set subgroups - they will be visible in CategoryTabs
         setCats(subgroups);
-        // Auto-select first subgroup so products load immediately AND subgroups are visible
+        // Auto-select first subgroup so products/packages load immediately
         if (subgroups.length > 0) {
-          console.log("✅ Auto-selecting first subgroup:", subgroups[0].id);
+          // Clear items immediately when switching to subgroups
+          if (activeCat !== subgroups[0].id) {
+            setItems([]);
+            setLoading(true);
+          }
           setActiveCat(subgroups[0].id);
         } else {
           setActiveCat("");
         }
-        // DON'T clear items here - let loadItems handle it when category actually changes
-        // Clearing here causes items to disappear before new ones load
       } else {
         // Group has no subgroups, show products directly
-        console.log("❌ Group has no subgroups, loading products directly");
-        console.log("❌ Setting activeCat to:", categoryId);
-        setSelectedGroupId(groupId);
-        // Keep groups visible in CategoryTabs (don't clear cats)
-        // Set activeCat to trigger product load - this should trigger useEffect
+        setSelectedGroupId(null);
+        // Clear items immediately when switching groups
+        if (activeCat !== categoryId) {
+          setItems([]);
+          setLoading(true);
+        }
         setActiveCat(categoryId);
-        console.log("❌ activeCat set, should trigger loadItems via useEffect");
-        // Also ensure we don't clear items immediately - let useEffect handle it
       }
     } else if (categoryId.startsWith('subgroup_')) {
       // Subgroup selected, show products
-      console.log("✅ Subgroup selected:", categoryId);
-      setActiveCat(categoryId); // Set active category to trigger product load
-      // Keep selectedGroupId for back navigation
+      // Clear items immediately when switching subgroups
+      if (activeCat !== categoryId) {
+        setItems([]);
+        setLoading(true);
+      }
+      setActiveCat(categoryId);
     }
-  }, [qrGroups]);
+  }, [qrGroups, lang, selectedGroupId, cats]);
 
   // Handle back navigation - go back to groups
   const handleBackToGroups = useCallback(() => {
+    // Use Arabic name if language is Arabic and name_ar is available
     const groupsOnly = qrGroups.map((group) => ({
       id: `group_${group.groupId}`,
-      name: group.name,
+      name: (lang === "ar" && group.name_ar && group.name_ar.trim())
+        ? group.name_ar.trim()
+        : (group.name || group.GroupDescription || `Group ${group.groupId}`),
       type: 'group',
       groupId: group.groupId,
       hasSubgroups: group.subgroups && group.subgroups.length > 0
@@ -409,7 +554,7 @@ export default function MenuPage() {
     setCats(groupsOnly);
     setSelectedGroupId(null);
     setActiveCat(groupsOnly.length > 0 ? groupsOnly[0].id : "");
-  }, [qrGroups]);
+  }, [qrGroups, lang]);
 
   // 2) Fetch QR menu items with filters
   async function loadItems(page = 1) {
@@ -422,12 +567,8 @@ export default function MenuPage() {
     // Allow if not loading or if it's a different category/page
     const isDuplicate = isLoadingItemsRef.current && lastLoadKeyRef.current === loadKey;
     if (isDuplicate) {
-      console.log("🔄 SKIPPING duplicate loadItems for:", loadKey);
-      return;
+      return; // Skip duplicate requests
     }
-    
-    console.log("🔄 STARTING loadItems - page:", page, "category:", currentCategory || "none", "loadKey:", loadKey);
-    console.log("🔄 Current state - isLoading:", isLoadingItemsRef.current, "lastKey:", lastLoadKeyRef.current);
     
     try {
       isLoadingItemsRef.current = true;
@@ -435,7 +576,8 @@ export default function MenuPage() {
       
       // Only show loading spinner on initial category load (when items array is empty)
       // Don't show loading when paginating or when items already exist
-      const shouldShowLoading = page === 1 && items.length === 0;
+      // Show loading immediately for page 1 (new category) or if no items
+      const shouldShowLoading = page === 1;
       if (shouldShowLoading) {
         setLoading(true);
       }
@@ -447,49 +589,44 @@ export default function MenuPage() {
       let qrGroupId = null;
       let qrSubgroupId = null;
       
-      console.log("🔄 loadItems called - activeCat:", activeCat, "searching:", searching);
-      
       if (!searching && activeCat) {
         // Check if activeCat is a subgroup
         if (activeCat.startsWith('subgroup_')) {
           qrSubgroupId = parseInt(activeCat.replace('subgroup_', ''));
-          console.log("🔄 Loading products for subgroup:", qrSubgroupId);
           
           // Check if this is a PACKAGES subgroup
           const currentSubgroup = cats.find(c => c.id === activeCat);
-          const isPackages = currentSubgroup?.isPackage || currentSubgroup?.name?.toLowerCase().includes('package');
-          
-          console.log("🔄 Is package subgroup?", isPackages, "Subgroup:", currentSubgroup);
+          const subgroupName = currentSubgroup?.name || '';
+          const isPackages = currentSubgroup?.isPackage || 
+                            subgroupName.toLowerCase().includes('package') ||
+                            subgroupName.toLowerCase().includes('packages');
           
           if (isPackages) {
             // Load package headers instead of regular products
             setIsPackageSubgroup(true);
-            console.log("🔄 Loading package headers for subgroup:", qrSubgroupId);
-            
-            const packages = await getPackageHeaders(qrSubgroupId);
-            console.log("🔄 Package headers loaded:", packages.length);
-            
-            setPackageHeaders(packages || []);
-            setItems([]); // Clear regular items
-            setPaging({ page: 1, pageSize: 24, total: packages.length });
-            setLoading(false);
-            
-            isLoadingItemsRef.current = false;
-            return; // Exit early, don't load regular products
+            try {
+              const packages = await getPackageHeaders(qrSubgroupId);
+              setPackageHeaders(packages || []);
+              setItems([]);
+              setPaging({ page: 1, pageSize: 24, total: packages.length });
+              setLoading(false);
+              isLoadingItemsRef.current = false;
+              return;
+            } catch (error) {
+              setIsPackageSubgroup(false);
+              setPackageHeaders([]);
+            }
           } else {
             setIsPackageSubgroup(false);
             setPackageHeaders([]);
           }
         } else if (activeCat.startsWith('group_')) {
-          // Group selected - load products from this group
           const groupId = parseInt(activeCat.replace('group_', ''));
           qrGroupId = groupId;
-          console.log("🔄 Loading products for group:", qrGroupId);
           setIsPackageSubgroup(false);
           setPackageHeaders([]);
         }
       } else if (searching) {
-        console.log("🔄 Loading products with search:", trimmedSearch);
         setIsPackageSubgroup(false);
         setPackageHeaders([]);
       } else {
@@ -497,16 +634,7 @@ export default function MenuPage() {
         setPackageHeaders([]);
       }
       
-      // Load QR menu items (fast, without images)
-      console.log("🔄 Calling getQrMenuItems with params:", {
-        page,
-        pageSize: paging.pageSize,
-        search: trimmedSearch || undefined,
-        qrGroupId: qrGroupId || undefined,
-        qrSubgroupId: qrSubgroupId || undefined,
-        sort: toApiSort(sort)
-      });
-      
+      // Load QR menu items (optimized for speed)
       const res = await getQrMenuItems({
         page,
         pageSize: paging.pageSize,
@@ -516,83 +644,49 @@ export default function MenuPage() {
         sort: toApiSort(sort)
       });
       
-      console.log("🔄 getQrMenuItems response:", res);
-      console.log("🔄 Response data length:", res.data?.length);
-      console.log("🔄 Response paging:", res.paging);
-      
-      const mappedItems = res.data.map(mapRowToItem);
-      console.log("🔄 Mapped items length:", mappedItems.length);
+      // Map items in batch (optimized)
+      const mappedItems = res.data.map((row) => mapRowToItem(row, lang));
       
       // Defensive filter: Ensure RAW MATERIAL products are never displayed (even if backend filter fails)
       // Filter out any products that might have ProductType = 'RAW MATERIAL' or similar
+      // Include packages (IsPackageHeader = 1) - they will be displayed using PackageCard in MenuGrid
       let filteredItems = mappedItems.filter((item) => {
+        // Filter by ProductType
         const productType = item._raw?.["pm.ProductType"] || item._raw?.ProductType;
         if (!productType) return true; // Allow NULL/undefined (backwards compatibility)
         const normalizedType = String(productType).trim().toUpperCase();
-        return normalizedType === 'NORMAL'; // Only show Normal products
+        return normalizedType === 'NORMAL'; // Only show Normal products (packages can have ProductType = 'NORMAL' too)
       });
       
-      console.log("🔄 Filtered items length (after ProductType filter):", filteredItems.length);
-      
       // Clear loading and loaded sets ONLY when category changes (not on pagination)
-      // This ensures images reload when navigating back to previously viewed groups
       const currentCategory = activeCat || (searching ? `search_${trimmedSearch}` : null);
       const categoryChanged = previousActiveCatRef.current !== currentCategory;
       
       if (categoryChanged) {
-        console.log("🔄 Category changed, clearing image refs. Previous:", previousActiveCatRef.current, "Current:", currentCategory);
         loadingImagesRef.current.clear();
         loadedImagesRef.current.clear();
         previousActiveCatRef.current = currentCategory;
       }
       
       // 🚀 INSTANT LOADING: Items already have cloudinaryUrl and thumbnailUrl from API response
-      // mapRowToItem already extracts these from row.cloudinaryUrl and row.thumbnailUrl
-      // So we can use filteredItems directly - they already have the image URLs!
-      
-      // CRITICAL: Set items and paging FIRST, then clear loading
-      // This ensures items are visible before loading state changes
-      // Set items immediately (synchronously) so they appear right away
-      console.log("🔄 Setting items - count:", filteredItems.length, "first item:", filteredItems[0]?.name);
-      
-      // Use functional update to ensure we don't lose items
-      setItems(prevItems => {
+      // Use requestAnimationFrame for smooth, instant updates
+      requestAnimationFrame(() => {
         // For page 1, always replace items (new category)
-        // For page 2+, only update if we have new items (pagination)
         if (page === 1) {
-          console.log("🔄 Page 1: Replacing items from", prevItems.length, "to", filteredItems.length);
-          return filteredItems;
-        } else {
-          // Page 2+: Only update if we have new items
-          if (filteredItems.length > 0) {
-            console.log("🔄 Page", page, ": Appending", filteredItems.length, "items to existing", prevItems.length);
-            // For pagination, we might want to append, but for now just replace
-            // since the API should return all items for the current page
-            return filteredItems;
-          } else {
-            // Keep existing items if page 2+ returns empty (no more items)
-            console.log("🔄 Page", page, ": Keeping existing", prevItems.length, "items (no more items to load)");
-            return prevItems;
-          }
+          setItems(filteredItems);
+        } else if (filteredItems.length > 0) {
+          setItems(filteredItems);
+        }
+        setPaging(res.paging);
+        setLoading(false);
+        
+        // Preload images immediately after render
+        if (filteredItems.length > 0) {
+          requestAnimationFrame(() => {
+            preloadVisibleImages(filteredItems);
+          });
         }
       });
-      
-      setPaging(res.paging);
-      // Clear loading AFTER items are set (but immediately after)
-      setLoading(false);
-      
-      const finalItemsCount = page === 1 ? filteredItems.length : (filteredItems.length > 0 ? filteredItems.length : 'kept existing');
-      console.log("🔄 Items set, loading cleared. Final items count:", finalItemsCount);
-      
-      // 🚀 INSTANT LOADING: Preload images for visible items immediately
-      // This is what big companies do - preload critical images before they're needed
-      // Use setTimeout to ensure items are rendered first
-      setTimeout(() => {
-        // Use filteredItems if available, otherwise items will be empty (shouldn't happen)
-        if (filteredItems.length > 0) {
-          preloadVisibleImages(filteredItems);
-        }
-      }, 0);
       
       // Return paging info so caller can decide if page 2 should be preloaded
       return { paging: res.paging, items: filteredItems };
@@ -622,43 +716,51 @@ export default function MenuPage() {
   // Only cache which products have images (lightweight), not the images themselves
   const imageMappingRef = useRef({});
   
-  // 🚀 INSTANT LOADING: Preload images for visible items (like big companies do)
+  // 🚀 INSTANT LOADING: Preload images for visible items (optimized for speed)
   // Uses <link rel="preload"> for critical images - browser loads them immediately
   const preloadVisibleImages = useCallback((items) => {
     if (!items || items.length === 0) return;
     
-    // Preload first 12-15 items (above the fold + one row below)
-    const itemsToPreload = items.slice(0, 15);
+    // Preload first 12 items (above the fold) - optimized for instant display
+    const itemsToPreload = items.slice(0, 12);
+    
+    // Batch DOM operations for better performance
+    const fragment = document.createDocumentFragment();
+    const existingUrls = new Set();
+    
+    // Collect existing preload links
+    document.head.querySelectorAll('link[rel="preload"][as="image"]').forEach(link => {
+      existingUrls.add(link.href);
+    });
     
     itemsToPreload.forEach((item, index) => {
-      // Preload thumbnail (instant blur placeholder) - HIGHEST PRIORITY
-      if (item.thumbnailUrl) {
-        const existing = document.head.querySelector(`link[href="${item.thumbnailUrl}"]`);
-        if (!existing) {
-          const linkThumb = document.createElement('link');
-          linkThumb.rel = 'preload';
-          linkThumb.as = 'image';
-          linkThumb.href = item.thumbnailUrl;
-          linkThumb.fetchPriority = 'high';
-          document.head.appendChild(linkThumb);
-        }
+      // Preload thumbnail first (instant blur placeholder) - HIGHEST PRIORITY
+      if (item.thumbnailUrl && !existingUrls.has(item.thumbnailUrl)) {
+        const linkThumb = document.createElement('link');
+        linkThumb.rel = 'preload';
+        linkThumb.as = 'image';
+        linkThumb.href = item.thumbnailUrl;
+        linkThumb.fetchPriority = 'high';
+        fragment.appendChild(linkThumb);
+        existingUrls.add(item.thumbnailUrl);
       }
       
-      // Preload full image (loads in background)
-      if (item.img && item.img.startsWith('http')) {
-        const existing = document.head.querySelector(`link[href="${item.img}"]`);
-        if (!existing) {
-          const linkFull = document.createElement('link');
-          linkFull.rel = 'preload';
-          linkFull.as = 'image';
-          linkFull.href = item.img;
-          linkFull.fetchPriority = index < 6 ? 'high' : 'auto'; // First 6 get high priority
-          document.head.appendChild(linkFull);
-        }
+      // Preload full image (first 6 get high priority, rest auto)
+      if (item.img && item.img.startsWith('http') && !existingUrls.has(item.img)) {
+        const linkFull = document.createElement('link');
+        linkFull.rel = 'preload';
+        linkFull.as = 'image';
+        linkFull.href = item.img;
+        linkFull.fetchPriority = index < 6 ? 'high' : 'auto';
+        fragment.appendChild(linkFull);
+        existingUrls.add(item.img);
       }
     });
     
-    console.log(`[PRELOAD] Preloaded ${itemsToPreload.length} images for instant display`);
+    // Batch append all preload links at once
+    if (fragment.children.length > 0) {
+      document.head.appendChild(fragment);
+    }
   }, []);
   
   // Track which images are currently loading to avoid duplicate requests
@@ -690,7 +792,7 @@ export default function MenuPage() {
       if (cached && cachedTime && (Date.now() - parseInt(cachedTime)) < CACHE_DURATION) {
         const mapping = JSON.parse(cached);
         imageMappingRef.current = mapping;
-        console.log(`[IMAGE] ⚡ Loaded from cache (instant)`);
+        // Optimized: Removed debug logging
         
         // Still fetch fresh data in background (non-blocking)
     getImageMapping().then(mapping => {
@@ -716,29 +818,9 @@ export default function MenuPage() {
         // localStorage might be full, ignore
       }
       
-      // Log mapping statistics for debugging
-      const totalProducts = Object.keys(mapping).length;
-      const cloudinaryCount = Object.values(mapping).filter(
-        info => info && typeof info === 'object' && info.cloudinaryUrl
-      ).length;
-      const fallbackCount = totalProducts - cloudinaryCount;
-      
-      console.log(`[IMAGE] 📊 Image mapping loaded:`, {
-        totalProducts,
-        cloudinaryUrls: cloudinaryCount,
-        fallbackNeeded: fallbackCount,
-        coverage: totalProducts > 0 ? `${Math.round((cloudinaryCount / totalProducts) * 100)}%` : '0%'
-      });
-      
-      // Log sample entries for debugging
-      const sampleEntries = Object.entries(mapping).slice(0, 3);
-      console.log(`[IMAGE] 📋 Sample mapping entries:`, sampleEntries);
-      
-      if (fallbackCount > 0) {
-        console.warn(`[IMAGE] ⚠️ ${fallbackCount} products will use API fallback (no Cloudinary URL)`);
-      }
-    }).catch(err => {
-      console.error("[IMAGE] ❌ Failed to load image mapping:", err);
+      // Optimized: Removed debug logging for performance
+    }).catch(() => {
+      // Silent fail - image mapping is optional
     });
   }, []);
 
@@ -790,7 +872,7 @@ export default function MenuPage() {
             cloudinaryUrl !== "null" && 
             cloudinaryUrl !== "undefined" &&
             (cloudinaryUrl.startsWith('http://') || cloudinaryUrl.startsWith('https://'))) {
-          console.log(`[IMAGE] ✅ Loading Cloudinary URL for ${productId}:`, cloudinaryUrl.substring(0, 80) + '...');
+          // Optimized: Removed debug logging
           
           // Add cache busting parameter to force reload (especially important on mobile)
           const imageUrlWithCacheBust = cloudinaryUrl + (cloudinaryUrl.includes('?') ? '&' : '?') + `_t=${Date.now()}`;
@@ -803,10 +885,10 @@ export default function MenuPage() {
             type: 'cloudinary'
           });
         } else {
-          console.warn(`[IMAGE] ⚠️ Invalid Cloudinary URL format for ${productId}:`, cloudinaryUrl);
+          // Optimized: Removed debug logging
         }
       } else {
-        console.log(`[IMAGE] ⚠️ No Cloudinary URL for ${productId}, imageInfo:`, imageInfo);
+        // Optimized: Removed debug logging
       }
     });
   }
@@ -968,13 +1050,13 @@ export default function MenuPage() {
             (item.img.startsWith('http://') || item.img.startsWith('https://') || item.img.startsWith('data:') || item.img.startsWith('blob:'));
           const needsLoading = !loadedImagesRef.current.has(productId) && !hasImage;
           if (needsLoading) {
-            console.log(`[IMAGE] 📍 Item ${productId} needs image loading. Has image: ${hasImage}, In loadedImagesRef: ${loadedImagesRef.current.has(productId)}`);
+            // Optimized: Removed debug logging
           }
           return needsLoading;
         });
 
       if (aboveFoldItems.length > 0) {
-        console.log(`[IMAGE] 🚀 Loading ${aboveFoldItems.length} above-the-fold images IMMEDIATELY`);
+        // Optimized: Removed debug logging
         loadCloudinaryImagesBatch(aboveFoldItems);
         
         // OPTIMIZATION: Preload images using <link rel="preload"> for critical images
@@ -1047,7 +1129,7 @@ export default function MenuPage() {
         });
       
       if (allVisibleItems.length > 0) {
-        console.log(`[IMAGE] 🔄 Loading ${allVisibleItems.length} visible items when items changed`);
+        // Optimized: Removed debug logging
         loadCloudinaryImagesBatch(allVisibleItems);
       }
       
@@ -1110,7 +1192,7 @@ export default function MenuPage() {
           });
         
         if (visibleItems.length > 0) {
-          console.log(`[IMAGE] 📱 Mobile scroll - Loading ${visibleItems.length} visible items`);
+          // Optimized: Removed debug logging
           loadCloudinaryImagesBatch(visibleItems);
         }
       }, 100); // Debounce scroll events
@@ -1174,7 +1256,7 @@ export default function MenuPage() {
     const hasImage = imageInfo === true || (imageInfo && typeof imageInfo === 'object' && imageInfo.hasImage);
     if (!hasImage) {
       // Product doesn't have image, skip
-      console.log(`[IMAGE] Product ${productId}: No image in mapping, skipping`);
+      // Optimized: Removed debug logging
       return;
     }
 
@@ -1198,12 +1280,7 @@ export default function MenuPage() {
         // Mark as loaded immediately
         loadedImagesRef.current.add(productId);
         
-        console.log(`[IMAGE] ✅ Product ${productId}: Using Cloudinary CDN (INSTANT)`, {
-          productId,
-          source: 'Cloudinary CDN',
-          url: cloudinaryUrl.substring(0, 80) + '...',
-          method: 'Direct URL (no API call, no queue)'
-        });
+        // Optimized: Removed debug logging
         
         // Cloudinary URL is already available - use it directly! 🚀
         updateItemImage(productId, { 
@@ -1214,22 +1291,11 @@ export default function MenuPage() {
         loadingImagesRef.current.delete(productId);
         return; // Done! No API call needed - image loads instantly from CDN
       } else {
-        console.warn(`[IMAGE] ⚠️ Product ${productId}: Invalid Cloudinary URL format, falling back to API`, {
-          productId,
-          cloudinaryUrl: cloudinaryUrl?.substring(0, 50),
-          reason: 'Invalid URL format'
-        });
+        // Invalid URL format - will fallback to API
       }
     }
 
     // PRIORITY 2: Fallback to API call (for images not yet migrated or if Cloudinary URL missing)
-    console.log(`[IMAGE] ⚠️ Product ${productId}: Cloudinary URL not available, falling back to API (SLOW)`, {
-      productId,
-      source: 'Backend API',
-      reason: imageInfo && typeof imageInfo === 'object' ? 'No cloudinaryUrl in mapping' : 'Old mapping format',
-      method: 'API call (binary fetch)'
-    });
-    
     const apiStartTime = Date.now();
     try {
       const imageUrl = await getSingleProductImageBinary(productId, 1); // 1 retry
@@ -1237,27 +1303,11 @@ export default function MenuPage() {
       
       if (imageUrl) {
         loadedImagesRef.current.add(productId);
-        console.log(`[IMAGE] ✅ Product ${productId}: Loaded from API in ${apiDuration}ms`, {
-          productId,
-          source: 'Backend API',
-          duration: `${apiDuration}ms`,
-          url: imageUrl.substring(0, 50) + '...',
-          type: 'Binary blob'
-        });
-        
         // Update the item immediately with binary image URL
         // Browser automatically caches binary images, much more efficient than base64
         updateItemImage(productId, { image: imageUrl, images: [imageUrl] });
-      } else {
-        console.warn(`[IMAGE] ❌ Product ${productId}: API returned no image`);
       }
     } catch (error) {
-      const apiDuration = Date.now() - apiStartTime;
-      console.error(`[IMAGE] ❌ Product ${productId}: API call failed after ${apiDuration}ms`, {
-        productId,
-        error: error.message,
-        duration: `${apiDuration}ms`
-      });
       // Silently fail - item will use fallback image
     } finally {
       // Remove from loading set after a delay (allows retry if needed)
@@ -1366,7 +1416,7 @@ export default function MenuPage() {
       });
     
     if (visibleItems.length > 0) {
-      console.log(`[IMAGE] 🔄 Loading ${visibleItems.length} visible items from effect`);
+      // Optimized: Removed debug logging
       loadCloudinaryImagesBatch(visibleItems);
       
       const apiFallbackItems = visibleItems.filter(item => {
@@ -1420,7 +1470,7 @@ export default function MenuPage() {
     });
     
     if (itemsNeedingImages.length > 0) {
-      console.log(`[IMAGE] 🔄 Found ${itemsNeedingImages.length} items needing images, loading now...`);
+      // Optimized: Removed debug logging
       
       // Load Cloudinary images immediately
       itemsNeedingImages.forEach(item => {
@@ -1465,55 +1515,57 @@ export default function MenuPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  // 3) Load on category/sort change
+  // Reload items when language changes (to show Arabic names)
   useEffect(() => {
-    console.log("🔄 useEffect triggered - activeCat:", activeCat, "sort:", sort, "search:", search, "current items:", items.length);
-    
+    if (activeCat && items.length > 0) {
+      loadItems(1).catch(() => {}); // Silent fail
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang]);
+
+  // 3) Load on category/sort change (optimized for speed)
+  useEffect(() => {
     // Prevent duplicate calls - use a ref to track the last trigger
-    const currentTrigger = `${activeCat || ''}-${sort}-${search}`;
+    const currentTrigger = `${activeCat || ''}-${sort}-${search}-${lang}`;
     
-    // Only trigger if this is a new category/sort/search combination
+    // Only trigger if this is a new category/sort/search/language combination
     if (lastTriggerRef.current === currentTrigger) {
-      console.log("🔄 Same trigger detected, skipping loadItems");
-      return;
+      return; // Skip duplicate
+    }
+    
+    // If category changed, clear items immediately to prevent showing old items
+    const previousTrigger = lastTriggerRef.current || '';
+    const previousCategory = previousTrigger.split('-')[0];
+    const currentCategory = currentTrigger.split('-')[0];
+    
+    if (previousCategory && previousCategory !== currentCategory && previousCategory !== '' && currentCategory !== '') {
+      setItems([]); // Clear items immediately when category changes
+      setLoading(true); // Show loading state immediately
     }
     
     lastTriggerRef.current = currentTrigger;
     
     // Always load items when activeCat changes (if it's set)
-    // This handles both groups and subgroups
     if (activeCat) {
-      console.log("🔄 activeCat is set, calling loadItems(1)");
       loadItems(1).then((result) => {
-        // Only preload page 2 if there are more items to load
-        // Check if total items > pageSize (meaning there's a page 2)
+        // Preload next page in background (optimized - no delay)
         if (result?.paging && result.paging.total > result.paging.pageSize) {
-          // 🚀 INSTANT LOADING: Preload next page images in background
-          // While user is viewing current page, preload next page images
-          setTimeout(() => {
-            loadItems(2).then(() => {
-              console.log("[PRELOAD] Next page images preloaded in background");
-            }).catch(() => {
-              // Silent fail - preloading is optional
-            });
-          }, 1000); // Wait 1 second after current page loads
-        } else {
-          console.log("[PRELOAD] Skipping page 2 preload - no more items (total:", result?.paging?.total, "pageSize:", result?.paging?.pageSize, ")");
+          // Use requestIdleCallback for background preloading (doesn't block main thread)
+          if (window.requestIdleCallback) {
+            requestIdleCallback(() => {
+              loadItems(2).catch(() => {}); // Silent fail
+            }, { timeout: 2000 });
+          } else {
+            setTimeout(() => loadItems(2).catch(() => {}), 500); // Fallback
+          }
         }
-      }).catch(err => {
-        console.error("❌ Error in loadItems(1):", err);
-      });
+      }).catch(() => {}); // Silent fail - error state handled in loadItems
     } else if (search.trim().length > 0) {
       // Search mode - load items
-      console.log("🔄 Search mode, calling loadItems(1)");
-      loadItems(1).catch(err => {
-        console.error("❌ Error in loadItems(1) for search:", err);
-      });
-    } else {
-      console.log("🔄 No activeCat and no search, skipping loadItems");
+      loadItems(1).catch(() => {}); // Silent fail
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCat, sort, search]);
+  }, [activeCat, sort, search, lang]);
 
   // 4) Debounce search
   useEffect(() => {
@@ -1546,7 +1598,8 @@ export default function MenuPage() {
       className="min-h-screen"
       style={{
         background:
-          "radial-gradient(120% 60% at 50% 0%, rgba(201,26,77,0.16), transparent 55%), #fdf8fa",
+          "radial-gradient(120% 60% at 50% 0%, rgba(139,111,71,0.08), transparent 55%)",
+        backgroundColor: "transparent",
       }}
     >
       <TopBar onCart={() => {}} />
@@ -1557,7 +1610,7 @@ export default function MenuPage() {
           <div
             className="rounded-2xl border p-4 shadow-lg backdrop-blur-xl"
             style={{
-              background: "linear-gradient(135deg, rgba(201,26,77,0.1), rgba(122,0,38,0.05))",
+              background: "linear-gradient(135deg, rgba(139,111,71,0.1), rgba(58,46,46,0.05))",
               borderColor: "var(--grad-end-soft)",
             }}
           >

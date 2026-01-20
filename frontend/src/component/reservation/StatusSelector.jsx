@@ -305,8 +305,8 @@ export default function StatusSelector({ reservation, onStatusChange, onClose })
                 style={{
                   width: "100%",
                   padding: "14px 16px",
-                  background: expandedCategory === category ? "#FBE6EC" : "#f9fafb",
-                  border: expandedCategory === category ? "2px solid #C91A4D" : "1px solid #e5e7eb",
+                  background: expandedCategory === category ? "var(--grad-start-soft)" : "#f9fafb",
+                  border: expandedCategory === category ? "2px solid var(--text-accent)" : "1px solid #e5e7eb",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
@@ -316,8 +316,8 @@ export default function StatusSelector({ reservation, onStatusChange, onClose })
                 }}
                 onMouseEnter={(e) => {
                   if (expandedCategory !== category) {
-                    e.currentTarget.style.background = "#FBE6EC";
-                    e.currentTarget.style.borderColor = "#C91A4D";
+                    e.currentTarget.style.background = "var(--grad-start-soft)";
+                    e.currentTarget.style.borderColor = "var(--text-accent)";
                   }
                 }}
                 onMouseLeave={(e) => {
@@ -375,8 +375,8 @@ export default function StatusSelector({ reservation, onStatusChange, onClose })
                         boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = "#FBE6EC";
-                        e.currentTarget.style.borderColor = "#C91A4D";
+                        e.currentTarget.style.background = "var(--grad-start-soft)";
+                        e.currentTarget.style.borderColor = "var(--text-accent)";
                         e.currentTarget.style.transform = "translateX(4px)";
                         e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.15)";
                       }}
@@ -443,9 +443,9 @@ export default function StatusSelector({ reservation, onStatusChange, onClose })
               boxShadow: "0 2px 4px rgba(0,0,0,0.05)"
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "#FBE6EC";
-              e.currentTarget.style.borderColor = "#C91A4D";
-              e.currentTarget.style.color = "#C91A4D";
+              e.currentTarget.style.background = "var(--grad-start-soft)";
+              e.currentTarget.style.borderColor = "var(--text-accent)";
+              e.currentTarget.style.color = "var(--text-accent)";
               e.currentTarget.style.transform = "scale(1.1)";
               e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.2)";
             }}

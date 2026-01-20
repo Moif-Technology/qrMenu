@@ -235,7 +235,7 @@ export default function GuestReservationPage() {
     return (
       <div
         dir={isAr ? "rtl" : "ltr"}
-        className="min-h-screen bg-gradient-to-br from-[#7A0026] via-[#B01243] to-[#C91A4D] p-4 flex items-center justify-center"
+        className="min-h-screen bg-gradient-to-br from-[var(--grad-start)] via-[var(--grad-mid)] to-[var(--grad-end)] p-4 flex items-center justify-center"
       >
         <div className="w-full max-w-md">
           {/* Success Animation Card */}
@@ -243,13 +243,13 @@ export default function GuestReservationPage() {
             {/* Success Icon with animation */}
             <div className="flex items-center justify-center mb-6">
               <div className="relative">
-                <div className="h-20 w-20 rounded-full bg-gradient-to-br from-[#7A0026] to-[#C91A4D] flex items-center justify-center shadow-lg animate-[scaleIn_0.6s_ease-out]">
+                <div className="h-20 w-20 rounded-full bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] flex items-center justify-center shadow-lg animate-[scaleIn_0.6s_ease-out]">
                   <svg viewBox="0 0 24 24" className="h-10 w-10 text-white animate-[checkmark_0.8s_ease-out_0.3s_both]" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M20 6L9 17l-5-5" />
                   </svg>
                 </div>
                 {/* Ripple effect */}
-                <div className="absolute inset-0 rounded-full bg-[#C91A4D] opacity-25 animate-[ping_1.5s_ease-out_infinite]"></div>
+                <div className="absolute inset-0 rounded-full bg-[var(--grad-end)] opacity-25 animate-[ping_1.5s_ease-out_infinite]"></div>
               </div>
             </div>
 
@@ -269,11 +269,11 @@ export default function GuestReservationPage() {
             </div>
 
             {/* Confirmation Code - Highlighted */}
-            <div className="mb-6 p-4 rounded-2xl bg-gradient-to-br from-rose-50 to-orange-50 border-2 border-[#C91A4D] shadow-inner">
+            <div className="mb-6 p-4 rounded-2xl bg-gradient-to-br from-rose-50 to-orange-50 border-2 border-[var(--text-accent)] shadow-inner">
               <p className="text-xs font-extrabold text-gray-500 uppercase text-center mb-2">
                 {isAr ? "رمز التأكيد" : "Confirmation Code"}
               </p>
-              <p className="text-2xl sm:text-3xl font-black text-[#7A0026] text-center tracking-wider">
+              <p className="text-2xl sm:text-3xl font-black text-[var(--text-primary)] text-center tracking-wider">
                 {confirmationData.confirmationCode}
               </p>
               <p className="text-xs font-bold text-gray-600 text-center mt-2">
@@ -285,7 +285,7 @@ export default function GuestReservationPage() {
             <div className="mb-6 space-y-3">
               <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
                 <div className="flex items-start gap-3 mb-3 pb-3 border-b border-gray-200">
-                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-[#7A0026] to-[#C91A4D] flex items-center justify-center flex-shrink-0">
+                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] flex items-center justify-center flex-shrink-0">
                     <svg viewBox="0 0 24 24" className="h-5 w-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
@@ -382,7 +382,7 @@ export default function GuestReservationPage() {
                   });
                   window.scrollTo({ top: 0, behavior: "smooth" });
                 }}
-                className="w-full rounded-2xl bg-gradient-to-r from-[#7A0026] to-[#C91A4D] py-4 text-white font-extrabold shadow-lg hover:shadow-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                className="w-full rounded-2xl bg-gradient-to-r from-[var(--grad-start)] to-[var(--grad-end)] py-4 text-white font-extrabold shadow-lg hover:shadow-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2"
               >
                 <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M12 4v16m8-8H4" />
@@ -441,9 +441,9 @@ export default function GuestReservationPage() {
 
   // MAIN PAGE
   return (
-    <div dir={isAr ? "rtl" : "ltr"} className="min-h-screen bg-[#fdf8fa]">
+    <div dir={isAr ? "rtl" : "ltr"} className="min-h-screen" style={{ background: "var(--bg-paper)" }}>
       {/* Top bar - Compact */}
-      <div className="sticky top-0 z-30 bg-gradient-to-r from-[#7A0026] to-[#C91A4D] shadow-md">
+      <div className="sticky top-0 z-30 bg-gradient-to-r from-[var(--grad-start)] to-[var(--grad-end)] shadow-md">
         <div className="mx-auto max-w-2xl px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex-1 text-center">
@@ -482,7 +482,7 @@ export default function GuestReservationPage() {
           {/* Booking module */}
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-center gap-2">
-              <div className="h-9 w-9 rounded-2xl bg-gradient-to-br from-[#7A0026] to-[#C91A4D] flex items-center justify-center shadow-sm">
+              <div className="h-9 w-9 rounded-2xl bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] flex items-center justify-center shadow-sm">
                 <svg viewBox="0 0 24 24" className="h-5 w-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M5 12h14" />
                   <path d="M12 5l7 7-7 7" />
@@ -504,7 +504,7 @@ export default function GuestReservationPage() {
                   min={today}
                   value={formData.reservationDate}
                   onChange={(e) => setField("reservationDate", e.target.value)}
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D]"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
                 />
               </div>
 
@@ -526,7 +526,7 @@ export default function GuestReservationPage() {
                   <button
                     type="button"
                     onClick={incGuests}
-                    className="h-10 w-10 rounded-xl font-black text-lg text-white bg-gradient-to-br from-[#7A0026] to-[#C91A4D] shadow active:scale-95"
+                    className="h-10 w-10 rounded-xl font-black text-lg text-white bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] shadow active:scale-95"
                   >
                     +
                   </button>
@@ -538,7 +538,7 @@ export default function GuestReservationPage() {
                 <button
                   type="button"
                   onClick={handleOpenTimePicker}
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold bg-white focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D] flex items-center justify-between hover:border-[#C91A4D] transition-all"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold bg-white focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)] flex items-center justify-between hover:border-[var(--text-accent)] transition-all"
                 >
                   <span className={formData.reservationTime ? "text-gray-900" : "text-gray-400"}>
                     {formData.reservationTime ? formatTime(formData.reservationTime) : t("reservation.select_time")}
@@ -555,7 +555,7 @@ export default function GuestReservationPage() {
                 <select
                   value={formData.areaId}
                   onChange={(e) => setField("areaId", e.target.value)}
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold bg-white focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D]"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold bg-white focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
                 >
                   <option value="">
                     {loadingAreas ? t("reservation.loading_areas") : t("reservation.choose_area")}
@@ -593,7 +593,7 @@ export default function GuestReservationPage() {
                   value={formData.guestName}
                   onChange={(e) => setField("guestName", e.target.value)}
                   placeholder={isAr ? "مثال: أحمد محمد" : "Example: Ahmed Mohammed"}
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D]"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
                 />
               </div>
 
@@ -606,7 +606,7 @@ export default function GuestReservationPage() {
                   value={formData.phone}
                   onChange={(e) => setField("phone", e.target.value)}
                   placeholder="05xxxxxxxx"
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D]"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
                 />
               </div>
 
@@ -621,7 +621,7 @@ export default function GuestReservationPage() {
                   value={formData.email}
                   onChange={(e) => setField("email", e.target.value)}
                   placeholder="you@email.com"
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D]"
+                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
                 />
               </div>
             </div>
@@ -655,8 +655,8 @@ export default function GuestReservationPage() {
                       className={[
                         "rounded-2xl px-3 py-2 text-sm font-extrabold border transition active:scale-[0.99]",
                         selected
-                          ? "border-[#C91A4D] bg-[#C91A4D]/10 text-[#C91A4D]"
-                          : "border-gray-200 bg-white text-gray-700 hover:border-[#C91A4D]/60"
+                          ? "border-[var(--text-accent)] bg-[var(--grad-end)]/10 text-[#C91A4D]"
+                          : "border-gray-200 bg-white text-gray-700 hover:border-[var(--text-accent)]/60"
                       ].join(" ")}
                     >
                       <span className={isAr ? "ml-1" : "mr-1"}>{o.emoji}</span>
@@ -677,7 +677,7 @@ export default function GuestReservationPage() {
                 onChange={(e) => setField("specialRequests", e.target.value)}
                 rows={4}
                 placeholder={t("reservation.notes_placeholder")}
-                className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[#C91A4D]/15 focus:border-[#C91A4D] resize-y"
+                className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)] resize-y"
               />
             </div>
 
@@ -689,14 +689,14 @@ export default function GuestReservationPage() {
                 "mt-6 w-full rounded-2xl py-4 font-black text-white shadow-lg transition active:scale-[0.99]",
                 submitting
                   ? "bg-gray-300 cursor-not-allowed"
-                  : "bg-gradient-to-r from-[#7A0026] to-[#C91A4D] hover:shadow-xl"
+                  : "bg-gradient-to-r from-[var(--grad-start)] to-[var(--grad-end)] hover:shadow-xl"
               ].join(" ")}
             >
               {submitting ? t("reservation.submitting") : t("reservation.submit")}
             </button>
 
             {/* Note */}
-            <div className="mt-4 rounded-2xl border border-[#C91A4D]/15 bg-[#C91A4D]/5 p-4 text-sm">
+            <div className="mt-4 rounded-2xl border border-[var(--text-accent)]/15 bg-[var(--grad-end)]/5 p-4 text-sm">
               <p className="font-extrabold text-[#C91A4D]">{t("reservation.quick_note_title")}</p>
               <p className="mt-1 font-semibold text-gray-600 leading-6">{t("reservation.quick_note_text")}</p>
             </div>
@@ -733,7 +733,7 @@ export default function GuestReservationPage() {
             {/* Header */}
             <div className="relative px-6 pt-8 pb-6 sm:px-8 sm:pt-10 sm:pb-8">
               <div className="flex items-center justify-center mb-3">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#7A0026] to-[#C91A4D] flex items-center justify-center shadow-xl">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] flex items-center justify-center shadow-xl">
                   <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <circle cx="12" cy="12" r="10"/>
                     <polyline points="12 6 12 12 16 14"/>
@@ -751,7 +751,7 @@ export default function GuestReservationPage() {
             {/* Content - All Time Slots */}
             <div className="flex-1 overflow-y-auto px-6 pb-6 sm:px-8 sm:pb-8">
               {/* Custom Time Input */}
-              <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[#C91A4D]/10 to-[#7A0026]/10 border-2 border-[#C91A4D]/30">
+              <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[var(--grad-end)]/10 to-[var(--grad-start)]/10 border-2 border-[var(--text-accent)]/30">
                 <div className="flex items-center gap-2 mb-3">
                   <svg className="w-5 h-5 text-[#C91A4D]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -769,7 +769,7 @@ export default function GuestReservationPage() {
                     type="time"
                     value={customTimeInput}
                     onChange={(e) => setCustomTimeInput(e.target.value)}
-                    className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-[#C91A4D] focus:ring-4 focus:ring-[#C91A4D]/20 outline-none text-base font-bold text-gray-900 bg-white transition-all"
+                    className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-[var(--text-accent)] focus:ring-4 focus:ring-[#C91A4D]/20 outline-none text-base font-bold text-gray-900 bg-white transition-all"
                     placeholder="HH:MM"
                   />
                   <button
@@ -778,7 +778,7 @@ export default function GuestReservationPage() {
                     disabled={!customTimeInput}
                     className={`px-6 sm:px-8 py-3 rounded-xl font-black text-sm sm:text-base transition-all ${
                       customTimeInput
-                        ? "bg-gradient-to-br from-[#7A0026] to-[#C91A4D] text-white shadow-lg hover:shadow-xl active:scale-95"
+                        ? "bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] text-white shadow-lg hover:shadow-xl active:scale-95"
                         : "bg-gray-200 text-gray-400 cursor-not-allowed"
                     }`}
                   >
@@ -812,8 +812,8 @@ export default function GuestReservationPage() {
                       className={`
                         relative py-3.5 sm:py-4 px-2 sm:px-3 rounded-xl sm:rounded-2xl font-black text-sm sm:text-base transition-all
                         ${isSelected 
-                          ? "bg-gradient-to-br from-[#7A0026] to-[#C91A4D] text-white shadow-2xl scale-105 ring-4 ring-[#C91A4D]/30" 
-                          : "bg-white border-2 border-gray-200 text-gray-800 hover:border-[#C91A4D] hover:shadow-lg hover:scale-105 active:scale-95"
+                          ? "bg-gradient-to-br from-[var(--grad-start)] to-[var(--grad-end)] text-white shadow-2xl scale-105 ring-4 ring-[var(--text-accent)]/30" 
+                          : "bg-white border-2 border-gray-200 text-gray-800 hover:border-[var(--text-accent)] hover:shadow-lg hover:scale-105 active:scale-95"
                         }
                       `}
                       style={{

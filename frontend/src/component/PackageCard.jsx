@@ -137,7 +137,7 @@ export default function PackageCard({ item, onOpen }) {
 
   return (
     <article 
-      className="group relative flex flex-col overflow-hidden rounded-3xl bg-white shadow-[0_20px_60px_rgba(122,0,38,0.15)] transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_32px_80px_rgba(122,0,38,0.25)] cursor-pointer border-2 border-transparent hover:border-[rgba(201,26,77,0.3)]"
+      className="group relative flex flex-col overflow-hidden rounded-3xl bg-white shadow-[0_20px_60px_rgba(58,46,46,0.15)] transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_32px_80px_rgba(58,46,46,0.25)] cursor-pointer border-2 border-transparent hover:border-[rgba(139,111,71,0.3)]"
       onClick={onOpen ? () => onOpen(itemForCart) : undefined}
       role="button"
       tabIndex={0}
@@ -229,7 +229,7 @@ export default function PackageCard({ item, onOpen }) {
               >
                 {initial}
               </div>
-              <span className="text-sm text-gray-500 font-semibold">PACKAGE IMAGE</span>
+              <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>PACKAGE IMAGE</span>
             </div>
           </div>
         )}
@@ -318,7 +318,7 @@ export default function PackageCard({ item, onOpen }) {
             {itemName}
           </h3>
           {itemDesc && (
-            <p className="text-base text-gray-600 leading-relaxed line-clamp-3">
+            <p className="text-base leading-relaxed line-clamp-3" style={{ color: 'var(--text-secondary)' }}>
               {itemDesc}
             </p>
           )}
@@ -328,7 +328,7 @@ export default function PackageCard({ item, onOpen }) {
         <div className="mt-auto pt-4 border-t border-gray-100">
           <div className="flex items-end justify-between">
             <div>
-              <div className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1.5">
+              <div className="text-xs font-bold uppercase tracking-widest mb-1.5" style={{ color: 'var(--text-tertiary)' }}>
                 Package Price
               </div>
               <div className="flex items-baseline gap-2">
@@ -376,11 +376,11 @@ export default function PackageCard({ item, onOpen }) {
 
           {/* VAT Notice */}
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
+            <div className="flex items-center justify-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
               <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              <span className="font-medium">VAT Inclusive • Service charge may apply</span>
+              <span className="font-medium">{t("menu.vat_service_note") || "VAT inclusive service charge not included"}</span>
             </div>
           </div>
         </div>

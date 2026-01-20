@@ -42,7 +42,7 @@ export default function SearchBar({ value, onChange, variant = "default" }) {
     : "py-3 px-4 flex justify-center";
 
   const shellClasses = hero
-    ? "relative w-full max-w-3xl overflow-hidden rounded-[28px] border border-white/60 bg-white/90 backdrop-blur-xl shadow-[0_22px_50px_rgba(122,0,38,0.14)]"
+    ? "relative w-full max-w-3xl overflow-hidden rounded-[28px] border border-white/60 bg-white/90 backdrop-blur-xl shadow-[0_22px_50px_rgba(58,46,46,0.14)]"
     : "relative w-full max-w-xl";
 
   const inputClasses = hero
@@ -59,7 +59,7 @@ export default function SearchBar({ value, onChange, variant = "default" }) {
     <div className={containerClasses}>
       {hero && (
         <div
-          className="pointer-events-none absolute inset-x-4 sm:inset-x-6 top-0 h-full rounded-[32px] bg-[radial-gradient(120%_120%_at_50%_-35%,rgba(201,26,77,0.18),transparent_68%)]"
+          className="pointer-events-none absolute inset-x-4 sm:inset-x-6 top-0 h-full rounded-[32px] bg-[radial-gradient(120%_120%_at_50%_-35%,rgba(139,111,71,0.18),transparent_68%)]"
           aria-hidden
         />
       )}
@@ -122,7 +122,7 @@ export default function SearchBar({ value, onChange, variant = "default" }) {
                   key={hint}
                   type="button"
                   onClick={() => onChange(hint)}
-                  className="rounded-full border border-[rgba(201,26,77,0.22)] bg-white/85 px-3.5 py-1.5 text-xs font-semibold text-[var(--grad-start)] shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  className="rounded-full border border-[rgba(139,111,71,0.22)] bg-white/85 px-3.5 py-1.5 text-xs font-semibold text-[var(--grad-start)] shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                 >
                   #{hint}
                 </button>

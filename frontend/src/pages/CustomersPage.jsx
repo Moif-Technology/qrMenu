@@ -231,9 +231,9 @@ export default function CustomersPage() {
             <div className="flex items-center gap-3">
               <div 
                 className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                style={{ backgroundColor: '#FBE6EC' }}
+                style={{ backgroundColor: 'var(--grad-start-soft)' }}
               >
-                <UserCircle2 className="w-6 h-6" style={{ color: '#C91A4D' }} />
+                <UserCircle2 className="w-6 h-6" style={{ color: 'var(--text-accent)' }} />
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">Customers</h1>

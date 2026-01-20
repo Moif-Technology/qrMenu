@@ -973,15 +973,31 @@ export default function ReservationListPage() {
                         <line x1="9" y1="9" x2="15" y2="9" />
                         <line x1="9" y1="15" x2="15" y2="15" />
                       </svg>
-                      {reservation.tableId && reservation.tableId !== 0 ? `Table ${reservation.tableId}` : (
-                        <span style={{ 
-                          color: "#f59e0b", 
-                          fontWeight: "600",
-                          fontStyle: "italic" 
-                        }}>
-                          {reservation.bookingSource === 'GUEST_ONLINE' ? 'To be assigned' : 'Unassigned'}
-                        </span>
-                      )}
+                      {(() => {
+                        // Get table display name - prefer tableName, then tableNo, never show tableId
+                        const tableName = reservation.tableName || reservation.TableName;
+                        const tableNo = reservation.tableNo || reservation.TableNO;
+                        const tableId = reservation.tableId || reservation.TableID;
+                        
+                        if (tableName) {
+                          return tableName;
+                        } else if (tableNo) {
+                          return `Table ${tableNo}`;
+                        } else if (tableId && tableId !== 0) {
+                          // Fallback: only show ID if no name/number available (shouldn't happen but handle gracefully)
+                          return `Table ${tableId}`;
+                        } else {
+                          return (
+                            <span style={{ 
+                              color: "#f59e0b", 
+                              fontWeight: "600",
+                              fontStyle: "italic" 
+                            }}>
+                              {reservation.bookingSource === 'GUEST_ONLINE' ? 'To be assigned' : 'Unassigned'}
+                            </span>
+                          );
+                        }
+                      })()}
                     </span>
                   </div>
                   {reservation.specialRequests && (

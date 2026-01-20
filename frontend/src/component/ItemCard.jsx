@@ -59,10 +59,10 @@ function ItemCard({
   const itemName = useMemo(
     () =>
     item?.name ??
-    getVal(item, "pm.Description") ??
-    getVal(item, "pm_Description") ??
     getVal(item, "pm.ShortDescription") ??
     getVal(item, "pm_ShortDescription") ??
+    getVal(item, "pm.Description") ??
+    getVal(item, "pm_Description") ??
       "Item",
     [item]
   );
@@ -177,8 +177,8 @@ function ItemCard({
     getVal(item, "gm.GroupDescription") ?? getVal(item, "gm_GroupDescription");
 
   return (
-    <article className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[rgba(201,26,77,0.08)] bg-white/95 shadow-[0_12px_26px_rgba(122,0,38,0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_45px_rgba(122,0,38,0.12)] sm:rounded-[24px]">
-      <div className="relative overflow-hidden rounded-t-[24px]">
+    <article className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[rgba(139,111,71,0.08)] bg-white/95 shadow-[0_12px_26px_rgba(58,46,46,0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_45px_rgba(58,46,46,0.12)] sm:rounded-[24px]">
+      <div className="relative overflow-hidden rounded-t-2xl sm:rounded-t-[24px]">
         <div 
           className="relative w-full aspect-[4/3] bg-slate-100 overflow-hidden cursor-pointer"
           onClick={onOpen ? () => onOpen(itemForCart) : undefined}
@@ -271,7 +271,7 @@ function ItemCard({
                 >
                   {initial}
                 </div>
-                <span className="text-xs text-gray-500 font-medium">NO IMAGE AVAILABLE</span>
+                <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>NO IMAGE AVAILABLE</span>
               </div>
             </div>
           )}
@@ -310,7 +310,7 @@ function ItemCard({
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[rgba(17,24,39,0.55)] via-transparent to-transparent" />
 
         {groupDesc && (
-            <div className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-3 py-1 text-[11px] font-medium text-gray-700 shadow">
+            <div className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-3 py-1 text-[11px] font-medium shadow" style={{ color: 'var(--text-primary)' }}>
             {groupDesc}
           </div>
         )}
@@ -332,7 +332,7 @@ function ItemCard({
             {itemName}
           </h3>
           {(item.subtitle || item.desc) && (
-            <p className="text-[0.85rem] leading-relaxed text-gray-500 line-clamp-3 sm:text-sm">
+            <p className="text-[0.85rem] leading-relaxed line-clamp-3 sm:text-sm" style={{ color: 'var(--text-secondary)' }}>
               {item.subtitle || item.desc}
             </p>
           )}
@@ -372,7 +372,7 @@ function ItemCard({
           </button>
         ) : (
           <div
-                className="flex items-center gap-2 rounded-full border border-[rgba(201,26,77,0.25)] bg-[rgba(201,26,77,0.08)] px-1.5 py-1 sm:px-2"
+                className="flex items-center gap-2 rounded-full border border-[rgba(139,111,71,0.25)] bg-[rgba(139,111,71,0.08)] px-1.5 py-1 sm:px-2"
             role="group"
             aria-label={`Quantity controls for ${itemName}`}
           >
@@ -415,7 +415,7 @@ function ItemCard({
         )} */}
       </div>
 
-          <div className="flex items-center justify-center text-[11px] font-medium text-gray-500 sm:text-xs">
+          <div className="flex items-center justify-center text-[11px] font-medium sm:text-xs" style={{ color: 'var(--text-tertiary)' }}>
             {/* Customize button hidden */}
             {/* <button
               type="button"
@@ -425,7 +425,7 @@ function ItemCard({
                 setShowMods(true);
               }}
               onPointerDown={setRipple}
-              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
+              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(139,111,71,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
               title="Customize"
             >
               <Icon name="sliders" className="h-3.5 w-3.5" />
@@ -434,7 +434,7 @@ function ItemCard({
             </button> */}
 
             <span className="rounded-full bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]" style={{ letterSpacing: "0.2em" }}>
-              VAT inclusive service charge not included
+              {t("menu.vat_service_note") || "VAT inclusive service charge not included"}
             </span>
           </div>
         </div>

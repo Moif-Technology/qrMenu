@@ -28,9 +28,9 @@ const TableCard = memo(({ table, onClick, isSelected = false }) => {
   const tableNumber = table.number || table.tableNo || table.id;
   
   // If selected, use selection color
-  const borderColor = isSelected ? '#C91A4D' : config.color;
-  const bgColor = isSelected ? '#FBE6EC' : 'white';
-  const textColor = isSelected ? '#C91A4D' : config.color;
+  const borderColor = isSelected ? 'var(--text-accent)' : config.color;
+  const bgColor = isSelected ? 'var(--grad-start-soft)' : 'white';
+  const textColor = isSelected ? 'var(--text-accent)' : config.color;
 
   return (
     <div
@@ -56,7 +56,7 @@ const TableCard = memo(({ table, onClick, isSelected = false }) => {
           width: "16px",
           height: "16px",
           borderRadius: "50%",
-          background: "linear-gradient(135deg, #7A0026, #C91A4D)",
+          background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
           border: "2px solid white",
           display: "flex",
           alignItems: "center",
@@ -105,7 +105,7 @@ const TableCard = memo(({ table, onClick, isSelected = false }) => {
         style={{
           fontSize: "0.7rem",
           fontWeight: "400",
-          color: isSelected ? "#C91A4D" : "#6b7280",
+          color: isSelected ? "var(--text-accent)" : "#6b7280",
           textAlign: "center"
         }}
       >

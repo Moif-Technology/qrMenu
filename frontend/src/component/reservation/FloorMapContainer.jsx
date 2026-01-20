@@ -248,7 +248,7 @@ export default function FloorMapContainer({ floorLayout, displayTables, onTableC
                 {/* Show message if no layout but map is displayed (matches VB: "No floor map defined for this Area") */}
                 {floorLayout && (!floorLayout.borderPoints || floorLayout.borderPoints.length === 0) && 
                  (!floorLayout.tables || floorLayout.tables.length === 0) && 
-                 displayTables.length > 0 && (
+                 (displayTables || []).length > 0 && (
                   <div style={{
                     position: "absolute",
                     top: 0,
@@ -276,7 +276,7 @@ export default function FloorMapContainer({ floorLayout, displayTables, onTableC
                   
                   // Also include any displayTables that aren't in floorLayout (shouldn't happen, but safety check)
                   const layoutTableIds = new Set((floorLayout?.tables || []).map(t => t.tableId));
-                  const missingTables = displayTables.filter(t => 
+                  const missingTables = (displayTables || []).filter(t => 
                     !layoutTableIds.has(t.id) && 
                     !layoutTableIds.has(Number(t.id)) &&
                     !layoutTableIds.has(Number(t.number))
@@ -285,7 +285,7 @@ export default function FloorMapContainer({ floorLayout, displayTables, onTableC
                   // Render tables with layout positions (exact positions from database)
                   const layoutTables = tablesWithLayout.map((layoutTable) => {
                     // Merge layout table data with displayTables (prefer status from layout which includes KOT/reservation)
-                    const displayTable = displayTables.find(t => 
+                    const displayTable = (displayTables || []).find(t => 
                       (t.id === layoutTable.tableId) || 
                       (t.number === layoutTable.tableNo) ||
                       (String(t.id) === String(layoutTable.tableId))
@@ -344,7 +344,7 @@ export default function FloorMapContainer({ floorLayout, displayTables, onTableC
 
                   // Render tables without layout positions using grid fallback (matches VB: grid positioning)
                   const gridTables = [...tablesWithoutLayout, ...missingTables].map((table, idx) => {
-                    const displayTable = displayTables.find(t => 
+                    const displayTable = (displayTables || []).find(t => 
                       (t.id === table.tableId || t.id === table.id) || 
                       (t.number === table.tableNo || t.number === table.number)
                     );

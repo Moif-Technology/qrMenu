@@ -154,33 +154,36 @@ export default function ReservationFormPage() {
           const reservation = result.reservation;
           console.log("[RESERVATION_FORM] Loaded reservation data:", reservation);
           
-          // Pre-populate form with reservation data
-          setFormData(prev => ({
-            ...prev,
-            firstName: reservation.customerName || reservation.CustomerName || "",
-            phone: reservation.customerPhone || reservation.CustomerPhone || "",
-            email: reservation.customerEmail || reservation.CustomerEmail || "",
-            cover: reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || 2,
-            section: reservation.areaId || reservation.AreaID ? String(reservation.areaId || reservation.AreaID) : "",
-            comments: reservation.specialRequests || reservation.SpecialRequests || "",
-            reservationDate: reservation.reservationDate || reservation.ReservationDate || selectedDate,
-            reservationTime: reservation.reservationTime || reservation.ReservationTime || ""
-          }));
-
-          // Set selected tables if reservation has table information
-          if (reservation.tableId || reservation.TableID) {
+          // Extract area and tables from reservation
+          // Check if reservation has tables array (from getReservationById) or single table fields
+          let areaIdFromTables = null;
+          let tablesData = [];
+          
+          if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
+            // Use tables array from API response
+            tablesData = reservation.tables.map(table => ({
+              id: table.tableId || table.tableID || table.id,
+              number: table.tableNo || table.number || table.tableId || table.tableID || table.id,
+              name: table.tableName || table.name || `Table ${table.tableNo || table.tableId || table.id}`,
+              capacity: table.capacity || table.seats || reservation.numberOfGuests || 2,
+              areaId: table.areaId || table.areaID || null
+            }));
+            
+            // Get area from first table if available
+            if (tablesData.length > 0 && tablesData[0].areaId) {
+              areaIdFromTables = tablesData[0].areaId;
+            }
+          } else if (reservation.tableId || reservation.TableID) {
+            // Fallback: handle single table ID (legacy format)
             const tableIds = Array.isArray(reservation.tableId || reservation.TableID) 
               ? (reservation.tableId || reservation.TableID)
               : [reservation.tableId || reservation.TableID];
             
             // Load table details for the selected tables
-            const tablesData = [];
+            const areaId = reservation.areaId || reservation.AreaID || areaIdFromTables;
             for (const tableId of tableIds) {
-              // Try to find table in the area's tables
-              // We'll need to load tables for the area first
-              if (reservation.areaId || reservation.AreaID) {
+              if (areaId) {
                 try {
-                  const areaId = reservation.areaId || reservation.AreaID;
                   const tablesResult = await getTablesByArea(areaId);
                   if (tablesResult.ok && tablesResult.tables) {
                     const table = tablesResult.tables.find(t => 
@@ -201,10 +204,27 @@ export default function ReservationFormPage() {
                 }
               }
             }
-            
-            if (tablesData.length > 0) {
-              setSelectedTables(tablesData);
-            }
+          }
+          
+          // Determine final area ID - prefer from tables, then from reservation object
+          const finalAreaId = areaIdFromTables || reservation.areaId || reservation.AreaID || null;
+          
+          // Pre-populate form with reservation data
+          setFormData(prev => ({
+            ...prev,
+            firstName: reservation.customerName || reservation.CustomerName || "",
+            phone: reservation.customerPhone || reservation.CustomerPhone || "",
+            email: reservation.customerEmail || reservation.CustomerEmail || "",
+            cover: reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || 2,
+            section: finalAreaId ? String(finalAreaId) : "",
+            comments: reservation.specialRequests || reservation.SpecialRequests || "",
+            reservationDate: reservation.reservationDate || reservation.ReservationDate || selectedDate,
+            reservationTime: reservation.reservationTime || reservation.ReservationTime || ""
+          }));
+
+          // Set selected tables if we have table data
+          if (tablesData.length > 0) {
+            setSelectedTables(tablesData);
           }
 
           // Set tags if available
@@ -217,11 +237,12 @@ export default function ReservationFormPage() {
             setFormData(prev => ({ ...prev, tags: tagsArray }));
           }
 
-          // Set hostess if available
-          if (reservation.hostessId || reservation.HostessID) {
+          // Set hostess if available - check all possible field name variations
+          const hostessIdValue = reservation.hostessID || reservation.hostessId || reservation.HostessID;
+          if (hostessIdValue != null && hostessIdValue !== '') {
             setFormData(prev => ({ 
               ...prev, 
-              hostessId: parseInt(reservation.hostessId || reservation.HostessID) 
+              hostessId: parseInt(hostessIdValue) 
             }));
           }
         } else {
@@ -867,7 +888,7 @@ export default function ReservationFormPage() {
   const S = {
     page: {
       minHeight: "100vh",
-      background: "radial-gradient(120% 60% at 50% 0%, rgba(201,26,77,0.16), transparent 55%), #fdf8fa",
+      background: "radial-gradient(120% 60% at 50% 0%, rgba(139,111,71,0.12), transparent 55%), var(--bg-paper)",
       display: "flex",
       flexDirection: "column",
       paddingBottom: 140 // space for sticky actions + BottomNav

@@ -45,64 +45,181 @@ export default function WalkInEditModal({
   }, []);
 
   // Load reservation data and tables
+  // Also re-run when areas are loaded to ensure areaId can be matched
   useEffect(() => {
     if (reservation) {
-      const areaId = reservation.areaId || reservation.AreaID || null;
-      const tableId = reservation.tableId || reservation.TableID || null;
-      const tableInfo = reservation.tableInfo || reservation.TableInfo || reservation.tableName || reservation.TableName || null;
+      // Extract area and tables from reservation
+      // Check if reservation has tables array (from getReservationById) or single table fields
+      let areaIdFromTables = null;
+      let tablesData = [];
+      
+      if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
+        // Use tables array from API response
+        tablesData = reservation.tables.map(table => {
+          const tableAreaId = table.areaId || table.areaID || table.AreaID || null;
+          return {
+            id: table.tableId || table.tableID || table.id,
+            number: table.tableNo || table.number || table.tableId || table.tableID || table.id,
+            name: table.tableName || table.name || `Table ${table.tableNo || table.tableId || table.id}`,
+            capacity: table.capacity || table.seats || reservation.numberOfGuests || 2,
+            areaId: tableAreaId
+          };
+        });
+        
+        // Get area from first table if available
+        if (tablesData.length > 0) {
+          areaIdFromTables = tablesData[0].areaId;
+        }
+      } else {
+        // Fallback: handle single table fields (legacy format)
+        const tableId = reservation.tableId || reservation.TableID || null;
+        const tableInfo = reservation.tableInfo || reservation.TableInfo || reservation.tableName || reservation.TableName || null;
+        
+        if (tableId) {
+          const singleTableAreaId = reservation.areaId || reservation.AreaID || null;
+          tablesData = [{
+            id: tableId,
+            number: tableId,
+            name: tableInfo || `Table ${tableId}`,
+            capacity: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
+            areaId: singleTableAreaId
+          }];
+          areaIdFromTables = singleTableAreaId;
+        }
+      }
+      
+      // Determine final area ID - prefer from tables, then from reservation object
+      // Check all possible field name variations on reservation object
+      const reservationAreaId = reservation.areaId || reservation.AreaID || 
+                                 reservation.areaID || reservation.area_id || null;
+      const finalAreaIdRaw = areaIdFromTables || reservationAreaId || null;
+      // Convert to string to match select option values (which are always strings in HTML)
+      const finalAreaId = finalAreaIdRaw != null ? String(finalAreaIdRaw) : null;
+      
+      // Verify the areaId exists in the areas array (for proper dropdown matching)
+      // Only validate if areas are loaded, otherwise use the raw value
+      let validAreaId = finalAreaId;
+      if (finalAreaId && areas.length > 0) {
+        const matchingArea = areas.find(area => {
+          const areaIdStr = String(area.areaId || area.AreaID || '');
+          return areaIdStr === finalAreaId;
+        });
+        
+        if (!matchingArea) {
+          // Try to find by number comparison as fallback
+          const numMatch = areas.find(area => {
+            const areaIdNum = Number(area.areaId || area.AreaID || 0);
+            const finalNum = Number(finalAreaId);
+            return areaIdNum === finalNum && finalNum !== 0;
+          });
+          if (numMatch) {
+            validAreaId = String(numMatch.areaId || numMatch.AreaID);
+          }
+        }
+      }
+      
+      // Check all possible field name variations for hostessId
+      const hostessIdValue = reservation.hostessID || reservation.hostessId || reservation.HostessID;
       
       setFormData({
         guestName: reservation.customerName || reservation.CustomerName || "",
         phone: reservation.customerPhone || reservation.CustomerPhone || "",
         partySize: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
         notes: reservation.specialRequests || reservation.SpecialRequests || "",
-        hostessId: reservation.hostessId || reservation.HostessID || null,
-        areaId: areaId
+        hostessId: (hostessIdValue != null && hostessIdValue !== '') ? parseInt(hostessIdValue) : null,
+        areaId: validAreaId
       });
 
       // Set initial table selection if exists
-      if (tableId && tableInfo) {
-        setSelectedTables([{
-          id: tableId,
-          number: tableId,
-          name: tableInfo,
-          capacity: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
-          areaId: areaId
-        }]);
+      if (tablesData.length > 0) {
+        setSelectedTables(tablesData);
+      }
+      
+      // Load tables for the selected area if area is available
+      if (validAreaId) {
+        const loadTablesForArea = async () => {
+          try {
+            const tablesResult = await getTablesByArea(validAreaId);
+            if (tablesResult.ok) {
+              setDisplayTables(tablesResult.tables || []);
+            }
+          } catch (err) {
+            console.warn("Failed to load tables for area:", err);
+          }
+        };
+        loadTablesForArea();
       }
     }
-  }, [reservation]);
+  }, [reservation, areas]); // Re-run when areas are loaded to ensure proper matching
 
   const loadAreas = async () => {
     try {
-      const result = await getAreas();
-      if (result.ok && result.areas) {
-        setAreas(result.areas);
+      const areasData = await getAreas();
+      // getAreas() returns the array directly: [{ areaId, areaName, ... }, ...]
+      if (areasData && Array.isArray(areasData) && areasData.length > 0) {
+        setAreas(areasData);
       }
     } catch (err) {
       console.error("Failed to load areas:", err);
     }
   };
 
-  // Handle area change - load tables
+  // Handle area change - just update form data
   const handleAreaChange = async (e) => {
     const areaId = e.target.value;
     setFormData(prev => ({ ...prev, areaId: areaId || null }));
     
-    if (areaId) {
+    if (!areaId) {
+      setDisplayTables([]);
+      setSelectedTables([]);
+      setFloorLayout(null);
+    }
+  };
+
+  // Auto-load tables and floor layout when area is selected (like ReservationFormPage)
+  useEffect(() => {
+    const loadFloorMap = async () => {
+      if (!formData.areaId) {
+        setFloorLayout(null);
+        setDisplayTables([]);
+        return;
+      }
+
+      setLoadingFloorMap(true);
       try {
+        const areaId = parseInt(formData.areaId);
+        
+        // Load tables first
         const tablesResult = await getTablesByArea(areaId);
         if (tablesResult.ok) {
           setDisplayTables(tablesResult.tables || []);
         }
+        
+        // Load floor layout
+        try {
+          const layout = await getFloorLayoutByArea(areaId);
+          console.log("[WALKIN_EDIT] Loaded layout:", {
+            areaId,
+            tables: layout?.tables?.length || 0,
+            shapes: layout?.shapes?.length || 0,
+            borderPoints: layout?.borderPoints?.length || 0
+          });
+          setFloorLayout(layout);
+        } catch (layoutErr) {
+          console.warn("[WALKIN_EDIT] Failed to load floor layout:", layoutErr);
+          setFloorLayout(null); // Continue without layout if it fails
+        }
       } catch (err) {
-        console.error("Failed to load tables:", err);
+        console.error("[WALKIN_EDIT] Failed to load floor map:", err);
+        setFloorLayout(null);
+        setDisplayTables([]);
+      } finally {
+        setLoadingFloorMap(false);
       }
-    } else {
-      setDisplayTables([]);
-      setSelectedTables([]);
-    }
-  };
+    };
+
+    loadFloorMap();
+  }, [formData.areaId]);
 
   // Handle table selection in modal
   const handleTableSelectInModal = (table) => {
@@ -158,36 +275,17 @@ export default function WalkInEditModal({
     }
   };
 
-  // Open floor map modal
-  const handleOpenFloorMap = async () => {
+  // Open floor map modal (tables and layout already loaded by useEffect)
+  const handleOpenFloorMap = () => {
     if (!formData.areaId) {
       alert("Please select an area first");
       return;
     }
 
-    setLoadingFloorMap(true);
-    try {
-      // Load tables
-      const tablesResult = await getTablesByArea(formData.areaId);
-      if (tablesResult.ok) {
-        setDisplayTables(tablesResult.tables || []);
-      }
-
-      // Load floor layout
-      const layoutResult = await getFloorLayoutByArea(formData.areaId);
-      if (layoutResult.ok && layoutResult.layout) {
-        setFloorLayout(layoutResult.layout);
-      }
-
-      // Set temp selection to current selection
-      setTempSelectedTables([...selectedTables]);
-      setShowFloorMapModal(true);
-    } catch (err) {
-      console.error("Failed to load floor map:", err);
-      alert("Failed to load floor map");
-    } finally {
-      setLoadingFloorMap(false);
-    }
+    // Tables and layout should already be loaded by useEffect when area is selected
+    // Just set temp selection and show modal
+    setTempSelectedTables([...selectedTables]);
+    setShowFloorMapModal(true);
   };
 
   // Confirm table selection
@@ -462,7 +560,7 @@ export default function WalkInEditModal({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  background: formData.partySize <= 1 ? "#f3f4f6" : "#FBE6EC",
+                  background: formData.partySize <= 1 ? "#f3f4f6" : "var(--grad-start-soft)",
                   border: "none",
                   borderRadius: "8px",
                   cursor: formData.partySize <= 1 ? "not-allowed" : "pointer",
@@ -495,7 +593,7 @@ export default function WalkInEditModal({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  background: "#FBE6EC",
+                  background: "var(--grad-start-soft)",
                   border: "none",
                   borderRadius: "8px",
                   cursor: "pointer",
@@ -551,13 +649,73 @@ export default function WalkInEditModal({
               }}
             >
               <option value="">No area selected</option>
-              {areas.map((area) => (
-                <option key={area.areaId || area.AreaID} value={area.areaId || area.AreaID}>
-                  {area.areaName || area.AreaName}
-                </option>
-              ))}
+              {areas.map((area) => {
+                const areaIdValue = String(area.areaId || area.AreaID);
+                return (
+                  <option key={areaIdValue} value={areaIdValue}>
+                    {area.areaName || area.AreaName}
+                  </option>
+                );
+              })}
             </select>
           </div>
+
+          {/* Selected Tables Display */}
+          {selectedTables.length > 0 && (
+            <div>
+              <label style={{ 
+                display: "block", 
+                marginBottom: "8px", 
+                fontWeight: "700",
+                fontSize: "14px",
+                color: "#374151"
+              }}>
+                Selected Tables
+              </label>
+              <div style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "8px",
+                padding: "12px",
+                background: "#f9fafb",
+                borderRadius: "12px",
+                border: "1px solid #e5e7eb",
+                minHeight: "50px"
+              }}>
+                {selectedTables.map((table, idx) => (
+                  <div
+                    key={`selected-table-${table.id}-${idx}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "8px 14px",
+                      background: "linear-gradient(135deg, #7A0026, #C91A4D)",
+                      color: "#fff",
+                      borderRadius: "20px",
+                      fontSize: "13px",
+                      fontWeight: "700",
+                      boxShadow: "0 2px 6px rgba(201, 26, 77, 0.3)"
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                    </svg>
+                    <span>{table.name || `Table ${table.number}`}</span>
+                    {table.capacity && (
+                      <span style={{ 
+                        fontSize: "11px", 
+                        opacity: 0.9,
+                        marginLeft: "4px"
+                      }}>
+                        ({table.capacity} seats)
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Table Selection */}
           <div>
@@ -570,68 +728,47 @@ export default function WalkInEditModal({
             }}>
               Table Assignment
             </label>
-            <div style={{
-              display: "flex",
-              gap: "8px",
-              alignItems: "stretch"
-            }}>
-              <div style={{
-                flex: 1,
-                padding: "12px",
-                borderRadius: "10px",
-                border: "1px solid #d1d5db",
-                fontSize: "14px",
-                color: selectedTables.length > 0 ? "#111827" : "#9ca3af",
-                background: "#f9fafb",
-                display: "flex",
-                alignItems: "center",
-                minHeight: "44px"
-              }}>
-                {selectedTables.length > 0 
-                  ? selectedTables.map(t => t.name || `Table ${t.number}`).join(", ")
-                  : "No tables selected"
+            <button
+              type="button"
+              onClick={handleOpenFloorMap}
+              disabled={!formData.areaId || loadingFloorMap}
+              style={{
+                width: "100%",
+                padding: "14px 16px",
+                background: !formData.areaId || loadingFloorMap 
+                  ? "#e5e7eb" 
+                  : "linear-gradient(135deg, #7A0026, #C91A4D)",
+                color: !formData.areaId || loadingFloorMap ? "#9ca3af" : "#fff",
+                border: "none",
+                borderRadius: "12px",
+                fontSize: "15px",
+                fontWeight: "700",
+                cursor: !formData.areaId || loadingFloorMap ? "not-allowed" : "pointer",
+                transition: "all 0.2s",
+                boxShadow: !formData.areaId || loadingFloorMap ? "none" : "0 2px 8px rgba(201, 26, 77, 0.3)"
+              }}
+              onMouseEnter={(e) => {
+                if (formData.areaId && !loadingFloorMap) {
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
                 }
-              </div>
-              <button
-                type="button"
-                onClick={handleOpenFloorMap}
-                disabled={!formData.areaId || loadingFloorMap}
-                style={{
-                  padding: "12px 16px",
-                  background: !formData.areaId || loadingFloorMap 
-                    ? "#e5e7eb" 
-                    : "linear-gradient(135deg, #7A0026, #C91A4D)",
-                  color: !formData.areaId || loadingFloorMap ? "#9ca3af" : "#fff",
-                  border: "none",
-                  borderRadius: "10px",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  cursor: !formData.areaId || loadingFloorMap ? "not-allowed" : "pointer",
-                  transition: "all 0.2s",
-                  whiteSpace: "nowrap"
-                }}
-                onMouseEnter={(e) => {
-                  if (formData.areaId && !loadingFloorMap) {
-                    e.currentTarget.style.transform = "translateY(-1px)";
-                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (formData.areaId && !loadingFloorMap) {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "none";
-                  }
-                }}
-              >
-                {loadingFloorMap ? "Loading..." : "Select Table"}
-              </button>
-            </div>
+              }}
+              onMouseLeave={(e) => {
+                if (formData.areaId && !loadingFloorMap) {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(201, 26, 77, 0.3)";
+                }
+              }}
+            >
+              {loadingFloorMap ? "Loading Tables..." : selectedTables.length > 0 ? "Change Tables" : "Select Tables"}
+            </button>
             {!formData.areaId && (
               <div style={{
-                marginTop: "6px",
+                marginTop: "8px",
                 fontSize: "12px",
                 color: "#6b7280",
-                fontStyle: "italic"
+                fontStyle: "italic",
+                textAlign: "center"
               }}>
                 Select an area first to choose tables
               </div>
@@ -904,8 +1041,8 @@ export default function WalkInEditModal({
               padding: "16px"
             }}>
               <FloorMapContainer
-                layout={floorLayout}
-                tables={displayTables}
+                floorLayout={floorLayout}
+                displayTables={displayTables || []}
                 selectedTables={tempSelectedTables}
                 onTableClick={handleTableSelectInModal}
               />
@@ -915,7 +1052,7 @@ export default function WalkInEditModal({
             <div style={{
               padding: "16px",
               borderTop: "1px solid #e5e7eb",
-              background: tempSelectedTables.length > 0 ? "#FBE6EC" : "#f9fafb",
+              background: tempSelectedTables.length > 0 ? "var(--grad-start-soft)" : "#f9fafb",
               transition: "all 0.2s"
             }}>
               {tempSelectedTables.length > 0 ? (

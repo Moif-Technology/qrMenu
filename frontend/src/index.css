@@ -1,29 +1,137 @@
 @import "tailwindcss";
 
 /* =========================================================
-   Design tokens (Maroon → Raspberry)
+   Design tokens (Rustic Menu Theme - Warm Browns & Textured Beige)
    ========================================================= */
 :root{
   --radius: 16px;
 
-  /* Deep maroon → raspberry gradient (screenshot style) */
-  --grad-start: #7A0026;  /* oxblood/maroon */
-  --grad-mid:   #A80F3D;  /* crimson midpoint */
-  --grad-end:   #C91A4D;  /* raspberry */
+  /* Warm brown gradient (rustic menu style) */
+  --grad-start: #3A2E2E;  /* deep dark brown */
+  --grad-mid:   #5C4A3D;  /* medium brown */
+  --grad-end:   #8B6F47;  /* warm tan brown */
 
   /* Soft tints (hovers / subtle backgrounds) */
-  --grad-start-soft: #FBE6EC;
-  --grad-end-soft:   #FDE9EF;
+  --grad-start-soft: #F9F6F0;  /* very light cream */
+  --grad-end-soft:   #FBF8F3;  /* off-white cream */
+
+  /* Base textured background */
+  --bg-paper: #F5F2EC;  /* light textured beige */
+  --bg-card: #FDFCFA;   /* slightly lighter for cards */
+
+  /* Text colors - matching physical menu */
+  --text-primary: #3A2E2E;    /* dark brown for titles and main text */
+  --text-secondary: #545454;  /* dark gray for descriptions and subtitles (from menu) */
+  --text-tertiary: #424142;   /* slightly darker gray for subtle text (from menu) */
+  --text-accent: #8B6F47;     /* warm brown for accents */
 
   /* Accents for rings/shadows */
-  --ring: rgba(201, 26, 77, .45);
-  --shadow-strong: 0 8px 24px rgba(201, 26, 77, .35);
+  --ring: rgba(58, 46, 46, .35);
+  --shadow-strong: 0 8px 24px rgba(58, 46, 46, .25);
+  --shadow-soft: 0 4px 12px rgba(58, 46, 46, .12);
 }
 
 /* Optional helper tokens */
 :root{
-  --text-rose: #7A0026;
-  --text-rasp: #C91A4D;
+  --text-brown: #3A2E2E;
+  --text-warm: #8B6F47;
+}
+
+/* Text Color Utility Classes - Matching Physical Menu */
+.text-primary { color: var(--text-primary) !important; }
+.text-secondary { color: var(--text-secondary) !important; }
+.text-tertiary { color: var(--text-tertiary) !important; }
+.text-accent { color: var(--text-accent) !important; }
+
+/* Logo Styling Options */
+.logo-brown-theme {
+  /* Convert black logo to brown color scheme */
+  filter: brightness(0) saturate(100%) invert(20%) sepia(15%) saturate(1200%) hue-rotate(345deg) brightness(95%) contrast(90%);
+  opacity: 0.9;
+}
+
+.logo-original {
+  /* Keep original logo colors */
+  filter: none;
+  opacity: 1;
+}
+
+.logo-dark-brown {
+  /* Make logo match primary text color */
+  filter: brightness(0) saturate(100%);
+  opacity: 0.85;
+}
+
+/* =========================================================
+   Textured Paper Background (Wall Effect with Real Menu Texture)
+   ========================================================= */
+body{
+  background-color: var(--bg-paper);
+  /* Layer the real menu texture image with subtle color overlays */
+  background-image: 
+    /* Add very subtle color tint overlay for warmth */
+    radial-gradient(ellipse at 20% 30%, rgba(139, 111, 71, .02), transparent 50%),
+    radial-gradient(ellipse at 80% 70%, rgba(112, 108, 102, .015), transparent 50%),
+    /* The actual menu PDF texture */
+    url('/menu-texture.png');
+  background-size: 100% 100%, 100% 100%, cover;
+  background-position: 0 0, 0 0, center;
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* Alternative: If you want to use the texture as a repeating pattern (for smaller texture tiles) */
+body.pattern-bg{
+  background-color: var(--bg-paper);
+  background-image: 
+    radial-gradient(ellipse at 20% 30%, rgba(139, 111, 71, .02), transparent 50%),
+    url('/menu-texture.png');
+  background-size: 600px 600px, 400px 400px;
+  background-position: 0 0, 0 0;
+  background-repeat: no-repeat, repeat;
+  min-height: 100vh;
+}
+
+/* Enhanced texture effect - makes the paper texture more visible and prominent */
+body.enhanced-texture{
+  background-color: var(--bg-paper);
+  background-image: 
+    /* Very light top-to-bottom gradient for depth */
+    linear-gradient(180deg, rgba(139, 111, 71, .03) 0%, transparent 100%),
+    /* The actual texture image */
+    url('/menu-texture.png');
+  background-size: 100% 200px, cover;
+  background-position: top center, center;
+  background-repeat: no-repeat, repeat;
+  background-attachment: scroll, fixed;
+  min-height: 100vh;
+}
+
+/* Apply texture to cards and white surfaces */
+.paper-texture-card{
+  background-color: var(--bg-card);
+  background-image: url('/menu-texture.png');
+  background-size: cover;
+  background-position: center;
+  background-blend-mode: multiply;
+  opacity: 0.98;
+}
+
+/* Enhanced paper texture for specific elements */
+.paper-texture{
+  position: relative;
+  background-color: var(--bg-card);
+}
+.paper-texture::before{
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  background-image: 
+    repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(58, 46, 46, .02) 1px, rgba(58, 46, 46, .02) 2px),
+    repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(58, 46, 46, .02) 1px, rgba(58, 46, 46, .02) 2px);
+  pointer-events: none;
 }
 
 /* =========================================================
@@ -32,66 +140,78 @@
 
 /* Solid CTA */
 .btn{
-  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-medium text-white shadow-sm transition active:opacity-95;
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-medium shadow-sm transition active:opacity-95;
   background:
-    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
+    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.18), transparent 60%),
     linear-gradient(90deg, var(--grad-start), var(--grad-end));
   box-shadow: var(--shadow-strong);
+  color: var(--bg-card);
 }
 .btn:hover{
   background:
-    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.24), transparent 60%),
+    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
     linear-gradient(90deg, var(--grad-end), var(--grad-start));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(58, 46, 46, .28);
 }
 .btn:active{ transform: scale(.98); }
 
 /* Ghost */
 .btn-ghost{
   @apply inline-flex items-center justify-center rounded-xl px-3 py-2 transition;
-  color: var(--grad-end);
+  color: var(--text-accent);
 }
-.btn-ghost:hover{ background: var(--grad-start-soft); }
+.btn-ghost:hover{ 
+  background: var(--grad-start-soft);
+  color: var(--text-primary);
+}
 
 /* Outline (rounded) with gradient border */
 .btn-outline{
-  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 transition bg-white;
-  color: var(--grad-end);
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 transition;
+  background-color: var(--bg-card);
+  color: var(--text-accent);
   border: 1.5px solid transparent;
   background:
-    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
     linear-gradient(90deg, var(--grad-start), var(--grad-end)) border-box;
 }
 .btn-outline:hover{
   color: var(--grad-start);
   background:
-    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
     linear-gradient(90deg, var(--grad-end), var(--grad-start)) border-box;
+  transform: translateY(-1px);
 }
 
 /* Pill CTA (mobile-friendly) */
 .btn-pill{
-  @apply inline-flex items-center justify-center gap-2 rounded-full font-medium text-white transition focus:outline-none focus:ring-2;
+  @apply inline-flex items-center justify-center gap-2 rounded-full font-medium transition focus:outline-none focus:ring-2;
   background:
-    radial-gradient(180px 90px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
+    radial-gradient(180px 90px at 50% 55%, rgba(255,255,255,.18), transparent 60%),
     linear-gradient(90deg, var(--grad-start), var(--grad-end));
   -webkit-tap-highlight-color: transparent;
   position: relative; overflow: hidden;
   box-shadow: var(--shadow-strong);
+  color: var(--bg-card);
 }
 .btn-pill:hover{
   background:
-    radial-gradient(180px 90px at 50% 55%, rgba(255,255,255,.24), transparent 60%),
+    radial-gradient(180px 90px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
     linear-gradient(90deg, var(--grad-end), var(--grad-start));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(58, 46, 46, .28);
 }
 .btn-pill:active{ transform: scale(.98); }
 
 /* Pill outline with gradient stroke */
 .btn-pill-outline{
-  @apply inline-flex items-center justify-center gap-2 rounded-full font-medium transition bg-white;
-  color: var(--grad-end);
+  @apply inline-flex items-center justify-center gap-2 rounded-full font-medium transition;
+  background-color: var(--bg-card);
+  color: var(--text-accent);
   border: 1.5px solid transparent;
   background:
-    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
     linear-gradient(90deg, var(--grad-start), var(--grad-end)) border-box;
   -webkit-tap-highlight-color: transparent;
   position: relative; overflow: hidden;
@@ -99,8 +219,9 @@
 .btn-pill-outline:hover{
   color: var(--grad-start);
   background:
-    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
     linear-gradient(90deg, var(--grad-end), var(--grad-start)) border-box;
+  transform: translateY(-1px);
 }
 .btn-pill-outline:active{ transform: scale(.98); }
 
@@ -117,9 +238,11 @@
 /* Optional legacy shortcut */
 .btn1{
   background:
-    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
+    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.18), transparent 60%),
     linear-gradient(90deg, var(--grad-start), var(--grad-end));
-  border: none; color: #fff; width: 100%;
+  border: none; 
+  color: var(--bg-card); 
+  width: 100%;
   padding: 15px 20px; text-align: center; display: inline-block;
   font-size: 16px; border-radius: 25px; cursor: pointer;
   transition: background .3s ease, transform .1s ease;
@@ -127,8 +250,10 @@
 }
 .btn1:hover{
   background:
-    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.24), transparent 60%),
+    radial-gradient(160px 80px at 50% 55%, rgba(255,255,255,.22), transparent 60%),
     linear-gradient(90deg, var(--grad-end), var(--grad-start));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(58, 46, 46, .28);
 }
 
 /* =========================================================
@@ -137,58 +262,90 @@
 .badge{
   @apply inline-block text-[11px] px-2 py-0.5 rounded-full;
   background: var(--grad-start-soft);
-  color: var(--text-rose);
+  color: var(--text-brown);
+  border: 1px solid rgba(58, 46, 46, .08);
 }
 
 .input{
-  @apply w-full rounded-2xl border px-3 py-2 bg-white focus:outline-none;
-  border-color: rgb(226 232 240); /* slate-200 */
+  @apply w-full rounded-2xl border px-3 py-2 focus:outline-none;
+  background-color: var(--bg-card);
+  border-color: rgba(112, 108, 102, .2);
+  color: var(--text-primary);
 }
-.input:focus{ box-shadow: 0 0 0 2px var(--ring); }
+.input:focus{ 
+  box-shadow: 0 0 0 2px var(--ring);
+  border-color: var(--text-accent);
+}
 
 /* =========================================================
    Cards
    ========================================================= */
 .card{
-  @apply bg-white rounded-2xl;
-  box-shadow: 0 10px 30px rgba(2, 6, 23, .08);
+  @apply rounded-2xl;
+  background-color: var(--bg-card);
+  box-shadow: 0 6px 20px rgba(58, 46, 46, .12);
+  border: 1px solid rgba(139, 111, 71, .08);
 }
-.card-hover{ @apply transition will-change-transform hover:-translate-y-0.5; }
+.card-hover{ 
+  @apply transition will-change-transform;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(58, 46, 46, .16);
+  }
+}
 
 /* =========================================================
    Header / Hero gradients
    ========================================================= */
 .hero{
   background:
-    radial-gradient(1400px 520px at 50% -70%, rgba(201,26,77,.18), transparent 66%),
-    linear-gradient(120deg, rgba(122,0,38,.20), rgba(201,26,77,.18)),
-    linear-gradient(180deg, #FFFFFF 0%, #FFFFFF 100%);
+    radial-gradient(1400px 520px at 50% -70%, rgba(139, 111, 71, .15), transparent 66%),
+    linear-gradient(120deg, rgba(58, 46, 46, .12), rgba(139, 111, 71, .12)),
+    linear-gradient(180deg, var(--bg-card) 0%, var(--bg-paper) 100%);
 }
 .hero--deep{
   background:
-    radial-gradient(1500px 560px at 50% -72%, rgba(201,26,77,.28), transparent 64%),
-    linear-gradient(120deg, rgba(122,0,38,.28), rgba(201,26,77,.26)),
-    linear-gradient(180deg, #FFFFFF 0%, #FFFFFF 100%);
+    radial-gradient(1500px 560px at 50% -72%, rgba(139, 111, 71, .22), transparent 64%),
+    linear-gradient(120deg, rgba(58, 46, 46, .18), rgba(139, 111, 71, .18)),
+    linear-gradient(180deg, var(--bg-card) 0%, var(--bg-paper) 100%);
 }
 
 /* =========================================================
    Overlays, Drawers, Sheets
    ========================================================= */
-.backdrop{ @apply bg-black/40 backdrop-blur-sm; }
+.backdrop{ 
+  background-color: rgba(58, 46, 46, .45);
+  backdrop-filter: blur(8px);
+}
 .drawer{ @apply fixed inset-0 z-40; }
-.drawer__panel{ @apply absolute right-0 top-0 h-full w-[92%] sm:w-[420px] bg-white shadow-2xl transition-transform; }
+.drawer__panel{ 
+  @apply absolute right-0 top-0 h-full w-[92%] sm:w-[420px] shadow-2xl transition-transform;
+  background-color: var(--bg-card);
+  border-left: 1px solid rgba(139, 111, 71, .15);
+}
 
 .sheet{ @apply fixed inset-x-0 bottom-0 z-50; }
-.sheet__panel{ @apply mx-auto w-full max-w-xl bg-white rounded-t-3xl shadow-2xl transition-transform; }
-.sheet__handle{ @apply mx-auto mt-2 mb-1 h-1.5 w-12 rounded-full bg-gray-300; }
+.sheet__panel{ 
+  @apply mx-auto w-full max-w-xl rounded-t-3xl shadow-2xl transition-transform;
+  background-color: var(--bg-card);
+  border-top: 1px solid rgba(139, 111, 71, .15);
+}
+.sheet__handle{ 
+  @apply mx-auto mt-2 mb-1 h-1.5 w-12 rounded-full;
+  background-color: rgba(112, 108, 102, .3);
+}
 
 /* =========================================================
    Skeleton shimmer
    ========================================================= */
-.shimmer{ position: relative; overflow: hidden; }
+.shimmer{ 
+  position: relative; 
+  overflow: hidden;
+  background-color: rgba(139, 111, 71, .08);
+}
 .shimmer::after{
   content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent);
+  background: linear-gradient(90deg, transparent, rgba(245, 242, 236, .6), transparent);
   animation: shimmer 1.2s infinite;
 }
 @keyframes shimmer{ 100%{ transform: translateX(100%); } }
@@ -220,10 +377,34 @@
 
 /* Optional global softer focus if you want it everywhere */
 /* :focus-visible{ box-shadow: 0 0 0 2px var(--ring) !important; } */
-.tbl-box { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); }
-.tbl-selected { background: #d2f4ef; box-shadow: inset 0 0 0 2px #10b981; }
-.bracket::before, .bracket::after { content: ""; position: absolute; top: 12px; bottom: 12px; width: 6px; border-radius: 9999px; background: #34d399; }
+.tbl-box { 
+  box-shadow: inset 0 0 0 1px rgba(58, 46, 46, .12);
+  background-color: var(--bg-card);
+}
+.tbl-selected { 
+  background: rgba(139, 111, 71, .15); 
+  box-shadow: inset 0 0 0 2px var(--text-accent);
+}
+.bracket::before, .bracket::after { 
+  content: ""; 
+  position: absolute; 
+  top: 12px; 
+  bottom: 12px; 
+  width: 6px; 
+  border-radius: 9999px; 
+  background: var(--text-accent);
+}
 .bracket::before { left: 6px; }
 .bracket::after { right: 6px; }
-.seat-h { height: 10px; width: 44px; border-radius: 9999px; background: #e5e7eb; }
-.seat-v { width: 10px; height: 44px; border-radius: 9999px; background: #e5e7eb; }
+.seat-h { 
+  height: 10px; 
+  width: 44px; 
+  border-radius: 9999px; 
+  background: rgba(112, 108, 102, .25);
+}
+.seat-v { 
+  width: 10px; 
+  height: 44px; 
+  border-radius: 9999px; 
+  background: rgba(112, 108, 102, .25);
+}

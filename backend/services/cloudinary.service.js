@@ -137,15 +137,15 @@ export function applyCloudinaryTransformations(cloudinaryUrl, options = {}) {
     const baseUrl = cloudinaryUrl.substring(0, uploadIndex + '/upload/'.length);
     const pathAfterUpload = cloudinaryUrl.substring(uploadIndex + '/upload/'.length);
 
-    // Default transformations: optimized for menu items
+    // Default transformations: optimized for fast loading
     const width = options.width || 400;
     const height = options.height || 300;
     const transformations = [
       `w_${width}`,
       `h_${height}`,
       `c_fill`, // Fill crop for consistent sizing
-      `f_auto`, // Auto format (WebP/AVIF when supported)
-      `q_auto`, // Auto quality optimization
+      `f_auto`, // Auto format (WebP/AVIF when supported - much smaller files)
+      `q_auto:good`, // Good quality (faster than 'auto', still looks great)
     ];
 
     // Build transformed URL
@@ -183,15 +183,16 @@ export function generateBlurUpThumbnail(cloudinaryUrl) {
     const baseUrl = cloudinaryUrl.substring(0, uploadIndex + '/upload/'.length);
     const pathAfterUpload = cloudinaryUrl.substring(uploadIndex + '/upload/'.length);
 
-    // Generate tiny blurred thumbnail (20x20px, blur effect, very low quality)
-    // This loads in milliseconds (~1-2KB) and provides instant visual feedback
+    // Generate tiny blurred thumbnail (10x10px, blur effect, very low quality)
+    // This loads in milliseconds (~0.5-1KB) and provides instant visual feedback
+    // Smaller size = faster loading for impatient customers
     const thumbnailTransformations = [
-      'w_20',           // Tiny width (20px)
-      'h_20',           // Tiny height (20px)
+      'w_10',           // Ultra-tiny width (10px) - loads even faster
+      'h_10',           // Ultra-tiny height (10px)
       'c_fill',         // Fill crop
-      'e_blur:300',     // Heavy blur effect (300px blur radius)
+      'e_blur:400',     // Heavy blur effect (400px blur radius)
       'q_auto:low',     // Very low quality (smallest file size)
-      'f_auto',         // Auto format
+      'f_auto',         // Auto format (WebP when supported)
     ];
 
     const thumbnailString = thumbnailTransformations.join(',');

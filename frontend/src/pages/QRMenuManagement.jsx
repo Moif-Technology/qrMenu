@@ -13,6 +13,7 @@ import {
   FolderTree,
   Loader2,
 } from "lucide-react";
+import AllergyTagInput from "../component/AllergyTagInput";
 import {
   getAllProductsFromMaster,
   getQrGroups,
@@ -53,6 +54,7 @@ export default function QRMenuManagement() {
   const [allProducts, setAllProducts] = useState([]);
   const [qrProductsMap, setQrProductsMap] = useState(new Map()); // Map of ProductID -> QR Product data
   const [totalProductsCount, setTotalProductsCount] = useState(0); // Total count for display
+  const [qrProductsRefreshKey, setQrProductsRefreshKey] = useState(0); // Key to force re-render when QR products refresh
 
   // Groups and Subgroups state
   const [groups, setGroups] = useState([]);
@@ -134,6 +136,8 @@ export default function QRMenuManagement() {
         map.set(p.ProductID, p);
       });
       setQrProductsMap(map);
+      // Update refresh key to force re-render of components using qrProductsMap
+      setQrProductsRefreshKey(prev => prev + 1);
     } catch (err) {
       console.error("Failed to load QR products:", err);
     }
@@ -193,8 +197,20 @@ export default function QRMenuManagement() {
     try {
       setLoading(true);
       setError("");
+      // Save the update
       await updateQrProductAssignment(productId, updateData);
-      await loadQrProducts();
+      
+      // Force refresh all data to ensure UI shows latest changes
+      // Use Promise.all to refresh in parallel for faster updates
+      await Promise.all([
+        loadQrProducts(), // Refresh QR products map (includes Allergies, FullDescription)
+        loadAllProducts({}), // Refresh main products list
+        loadGroups(), // Refresh groups in case they changed
+        loadSubgroups(), // Refresh subgroups in case they changed
+      ]);
+      
+      // Small delay to ensure state updates propagate
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch (err) {
       setError(err?.response?.data?.error || err.message || "Failed to update product");
       throw err;
@@ -358,6 +374,7 @@ export default function QRMenuManagement() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === TABS.PRODUCTS && (
           <ProductsTab
+            key={`products-${qrProductsRefreshKey}`}
             products={allProducts}
             qrProductsMap={qrProductsMap}
             getQrProductInfo={getQrProductInfo}
@@ -454,6 +471,8 @@ function ProductsTab({
   const [localQrGroups, setLocalQrGroups] = useState(qrGroups);
   const [localQrSubgroups, setLocalQrSubgroups] = useState(qrSubgroups);
   const [updatingProducts, setUpdatingProducts] = useState(new Set());
+  const [showProductDetailsModal, setShowProductDetailsModal] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
   
   // Search and filter state
   const [searchTerm, setSearchTerm] = useState("");
@@ -647,6 +666,40 @@ function ProductsTab({
   const getAvailableSubgroups = (qrGroupId) => {
     if (!qrGroupId) return [];
     return localQrSubgroups.filter((sg) => sg.QrGroupID == qrGroupId);
+  };
+
+  const handleEditProduct = (product, qrInfo) => {
+    // Open modal immediately with current data from qrInfo
+    // The data will be refreshed after save, so we use the current qrInfo
+    setEditingProduct({
+      ...product,
+      ProductID: product.ProductID, // Ensure ProductID is set
+      FullDescription: qrInfo?.FullDescription || "",
+      FullDescriptionArabic: qrInfo?.FullDescriptionArabic || "",
+      Allergies: qrInfo?.Allergies || "",
+      AllergiesArabic: qrInfo?.AllergiesArabic || "",
+    });
+    setShowProductDetailsModal(true);
+  };
+
+  const handleSaveProductDetails = async (productId, detailsData) => {
+    try {
+      // Save the product details
+      await onUpdateProduct(productId, detailsData);
+      
+      // Force complete refresh - onUpdateProduct already refreshes everything,
+      // but ensure we wait for it to complete and show success message
+      showToast("Product details updated successfully! Refreshing data...", "success");
+      
+      // Close modal after a brief delay to show the toast
+      setTimeout(() => {
+        setShowProductDetailsModal(false);
+        setEditingProduct(null);
+      }, 500);
+    } catch (err) {
+      showToast("Failed to update product details: " + (err?.response?.data?.error || err.message), "error");
+      throw err; // Re-throw so modal can handle error state
+    }
   };
 
   return (
@@ -857,12 +910,15 @@ function ProductsTab({
                   <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Active
                   </th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {products.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                    <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
                       {loading
                         ? "Loading products..."
                         : "No products match your search/filter criteria"}
@@ -954,6 +1010,16 @@ function ProductsTab({
                             }`}
                           />
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <button
+                            onClick={() => handleEditProduct(product, qrInfo)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Edit Product Details"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                            Edit
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
@@ -962,6 +1028,18 @@ function ProductsTab({
             </table>
           </div>
         </div>
+      )}
+
+      {/* Product Details Modal */}
+      {showProductDetailsModal && editingProduct && (
+        <ProductDetailsModal
+          product={editingProduct}
+          onClose={() => {
+            setShowProductDetailsModal(false);
+            setEditingProduct(null);
+          }}
+          onSave={handleSaveProductDetails}
+        />
       )}
 
     </div>
@@ -2313,6 +2391,170 @@ function PackageManagementTab({ groups, subgroups, loading }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Product Details Modal - For editing FullDescription and Allergies
+function ProductDetailsModal({ product, onClose, onSave }) {
+  const [isSaving, setIsSaving] = useState(false);
+  const [formData, setFormData] = useState({
+    FullDescription: product?.FullDescription || "",
+    FullDescriptionArabic: product?.FullDescriptionArabic || "",
+    Allergies: product?.Allergies || "",
+    AllergiesArabic: product?.AllergiesArabic || "",
+  });
+
+  useEffect(() => {
+    if (product) {
+      setFormData({
+        FullDescription: product?.FullDescription || "",
+        FullDescriptionArabic: product?.FullDescriptionArabic || "",
+        Allergies: product?.Allergies || "",
+        AllergiesArabic: product?.AllergiesArabic || "",
+      });
+    }
+  }, [product]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      await onSave(product.ProductID, {
+        FullDescription: formData.FullDescription.trim() || null,
+        FullDescriptionArabic: formData.FullDescriptionArabic.trim() || null,
+        Allergies: formData.Allergies.trim() || null,
+        AllergiesArabic: formData.AllergiesArabic.trim() || null,
+      });
+    } catch (err) {
+      console.error("Error saving product details:", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
+          <div className="p-6 border-b-2 border-gray-200 flex justify-between items-center bg-gradient-to-r from-blue-50 to-indigo-50">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Edit Product Details</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                {product?.Description || "Product"} (ID: {product?.ProductID})
+              </p>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          
+          <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+            {/* Full Description (English) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Full Description (English)
+              </label>
+              <textarea
+                value={formData.FullDescription}
+                onChange={(e) => setFormData({ ...formData, FullDescription: e.target.value })}
+                placeholder="Enter the full description that will be shown in the item modal..."
+                className="input w-full min-h-[120px] resize-y"
+                rows="5"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                This description will be displayed in the item modal when customers view product details.
+              </p>
+            </div>
+
+            {/* Full Description (Arabic) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Full Description (Arabic)
+              </label>
+              <textarea
+                value={formData.FullDescriptionArabic}
+                onChange={(e) => setFormData({ ...formData, FullDescriptionArabic: e.target.value })}
+                placeholder="أدخل الوصف الكامل الذي سيظهر في نافذة المنتج..."
+                className="input w-full min-h-[120px] resize-y"
+                dir="rtl"
+                rows="5"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                الوصف الكامل الذي سيظهر في نافذة المنتج للعملاء.
+              </p>
+            </div>
+
+            {/* Allergies (English) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Allergies Information (English)
+              </label>
+              <AllergyTagInput
+                value={formData.Allergies}
+                onChange={(value) => setFormData({ ...formData, Allergies: value })}
+                placeholder="Type and press Enter to add allergies (e.g., dairy, nuts, gluten...)"
+                dir="ltr"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Add allergies as tags. They will be saved as comma-separated values and displayed with icons in the menu.
+              </p>
+            </div>
+
+            {/* Allergies (Arabic) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Allergies Information (Arabic)
+              </label>
+              <AllergyTagInput
+                value={formData.AllergiesArabic}
+                onChange={(value) => setFormData({ ...formData, AllergiesArabic: value })}
+                placeholder="اكتب واضغط Enter لإضافة الحساسية (مثل: منتجات الألبان، المكسرات...)"
+                dir="rtl"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                أضف الحساسية كعلامات. سيتم حفظها كقيم مفصولة بفواصل وعرضها بأيقونات في القائمة.
+              </p>
+            </div>
+          </form>
+
+          <div className="p-6 border-t-2 border-gray-200 bg-gray-50">
+            <div className="flex justify-end gap-3">
+              <button 
+                type="button" 
+                onClick={onClose} 
+                className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-all"
+                disabled={isSaving}
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit"
+                onClick={handleSubmit}
+                className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 px-8 py-3 rounded-lg font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isSaving}
+                style={{ minWidth: '150px', justifyContent: 'center' }}
+              >
+                {isSaving ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-5 h-5" />
+                    <span className="font-bold">SAVE CHANGES</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -197,7 +197,7 @@ export default function OrderSuccess() {
 
           {/* Details */}
           <div className="modern-details modern-stagger">
-            <DetailItem icon="📍" label="Table"  value={tableId || "—"} />
+            <DetailItem icon="📍" label="Table"  value={tableId ? `Table ${tableId}` : "—"} />
             <DetailItem icon="📦" label="Items"  value={itemsCount} />
             <DetailItem icon="💰" label="Total"  value={`${currency} ${Number(subtotal).toFixed(2)}`} />
             {kotId && <DetailItem icon="📋" label="Order ID" value={`#${kotId}`} />}

@@ -12,6 +12,8 @@ export async function getAllProductsFromMaster(filters = {}) {
   if (filters.searchTerm) params.append("searchTerm", filters.searchTerm);
   if (filters.groupId) params.append("groupId", filters.groupId);
   if (filters.subgroupId) params.append("subgroupId", filters.subgroupId);
+  // Add cache-busting timestamp to ensure fresh data after updates
+  params.append("_t", Date.now());
   
   const url = params.toString() 
     ? `/qr-menu/products/all?${params.toString()}`
@@ -71,6 +73,8 @@ export async function getQrProducts(filters = {}) {
   if (filters.qrGroupId) params.append("qrGroupId", filters.qrGroupId);
   if (filters.qrSubgroupId) params.append("qrSubgroupId", filters.qrSubgroupId);
   if (filters.isActive !== undefined) params.append("isActive", filters.isActive);
+  // Add cache-busting timestamp to ensure fresh data after updates
+  params.append("_t", Date.now());
   
   const url = params.toString() 
     ? `/qr-menu/products?${params.toString()}`

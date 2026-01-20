@@ -25,10 +25,13 @@
     "sort_price_asc": "Price: Low → High",
     "sort_price_desc": "Price: High → Low",
     "price": "Price",
+    "description": "Description",
+    "allergies": "Allergy Information",
     "add_to_cart": "Add to Cart",
     "add": "Add",
     "customize": "Customize",
     "vat_inc": "Vat Inc.",
+    "vat_service_note": "VAT inclusive service charge not included",
     "toast_added": "{{name}} added to order",
     "toast_suggestion": "How about {{name}}?"
   },
@@ -54,7 +57,8 @@
   },
   "buttons": {
     "prev": "Prev",
-    "next": "Next"
+    "next": "Next",
+    "close": "Close"
   },
   "floating_cart": {
     "view": "View cart",

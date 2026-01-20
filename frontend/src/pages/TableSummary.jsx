@@ -1042,6 +1042,8 @@ export default function TableSummaryPremium() {
       setMeta({
         ok: !!data.ok,
         tableId: tableId,
+        tableName: data.tableName || null,
+        tableNo: data.tableNo || null,
         brand: data.brand || "Restaurant",
       });
       setLines(linesData);
@@ -1855,7 +1857,18 @@ export default function TableSummaryPremium() {
               <div>
                 <p className="payment-sheet__title">Choose payment method</p>
                 <p className="payment-sheet__caption">
-                  Table {meta.tableId} · {String(meta?.brand ?? "Dining")}
+                  {(() => {
+                    // Get table display name - prefer tableName, then tableNo, never show raw tableId
+                    if (meta.tableName) {
+                      return meta.tableName;
+                    } else if (meta.tableNo) {
+                      return `Table ${meta.tableNo}`;
+                    } else if (meta.tableId) {
+                      // Fallback: only show ID if no name/number available
+                      return `Table ${meta.tableId}`;
+                    }
+                    return "Table";
+                  })()} · {String(meta?.brand ?? "Dining")}
                 </p>
               </div>
               <button

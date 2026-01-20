@@ -116,27 +116,37 @@ export default function TopBar({ onCart, restaurantName }) {
   return (
     <header
       className={`sticky top-0 z-40 border-b border-gray-100/80 bg-white/90 backdrop-blur-xl supports-[backdrop-filter]:bg-white/70 transition-all duration-300 ${
-        condensed ? "shadow-[0_10px_20px_rgba(122,0,38,0.08)]" : ""
+        condensed ? "shadow-[0_10px_20px_rgba(58,46,46,0.08)]" : ""
       }`}
     >
       <div className={`mx-auto max-w-6xl px-4 sm:px-6 transition-all duration-300 ${condensed ? "py-1.5" : "py-3"}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.32em] text-gray-400 transition ${condensed ? "opacity-75" : "opacity-100"}`} style={{ letterSpacing: "0.32em" }}>
+          <div className="min-w-0 flex flex-col gap-1 items-start">
+            {/* Tagline ABOVE the logo - ALIGNED LEFT */}
+            <p 
+              className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.32em] transition-all duration-300 ${condensed ? "opacity-0 h-0" : "opacity-100"}`} 
+              style={{ 
+                letterSpacing: "0.32em", 
+                color: 'var(--text-tertiary)',
+                textAlign: 'left'
+              }}
+            >
               {t("topbar.tagline")}
             </p>
-            <h1
-              className={`font-bold leading-tight whitespace-normal break-words max-w-[320px] sm:max-w-[480px] ${condensed ? "text-lg" : "text-[1.65rem]"}`}
-              style={{
-                background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
-                WebkitBackgroundClip: "text",
-                backgroundClip: "text",
-                color: "transparent",
+            {/* Logo Image - ALIGNED LEFT */}
+            <img 
+              src="/opaia-logo.png" 
+              alt="OPAIA Restaurant & Lounge"
+              className={`transition-all duration-300 ${condensed ? "h-8 sm:h-10" : "h-16 sm:h-16 md:h-20"}`}
+              style={{ 
+                objectFit: "contain",
+                objectPosition: "left center",
+                filter: "brightness(0) saturate(100%)",
+                opacity: 0.85,
+                maxWidth: "280px"
               }}
               title={name}
-            >
-              {name}
-            </h1>
+            />
           </div>
 
           {/* <div className="sm:hidden flex-1 text-center">
@@ -170,7 +180,7 @@ export default function TopBar({ onCart, restaurantName }) {
               </button>
 
               {assistMenuOpen && (
-                <div className="absolute left-0 mt-2 w-[min(11rem,80vw)] rounded-2xl border border-white/70 bg-white/95 shadow-[0_16px_32px_rgba(122,0,38,0.12)] backdrop-blur-xl py-1 z-50">
+                <div className="absolute left-0 mt-2 w-[min(11rem,80vw)] rounded-2xl border border-white/70 bg-white/95 shadow-[0_16px_32px_rgba(58,46,46,0.12)] backdrop-blur-xl py-1 z-50">
                   <button
                     type="button"
                     className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 transition hover:bg-[var(--grad-start-soft)]"
@@ -233,7 +243,7 @@ export default function TopBar({ onCart, restaurantName }) {
               </button>
 
               {langMenuOpen && (
-                <div className="absolute right-0 mt-2 w-36 rounded-2xl border border-white/70 bg-white/95 shadow-[0_16px_32px_rgba(122,0,38,0.12)] backdrop-blur-xl py-1 z-50">
+                <div className="absolute right-0 mt-2 w-36 rounded-2xl border border-white/70 bg-white/95 shadow-[0_16px_32px_rgba(58,46,46,0.12)] backdrop-blur-xl py-1 z-50">
                   {[
                     { id: "en", label: "English" },
                     { id: "ar", label: "العربية" },
@@ -298,7 +308,7 @@ export default function TopBar({ onCart, restaurantName }) {
       {/* Toast notification hidden */}
       {/* {toast && (
         <div className="absolute top-full left-1/2 z-50 mt-2 -translate-x-1/2 w-[90%] max-w-sm">
-          <div className="rounded-2xl border border-white/70 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-[0_16px_32px_rgba(122,0,38,0.12)] backdrop-blur-xl">
+          <div className="rounded-2xl border border-white/70 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-[0_16px_32px_rgba(58,46,46,0.12)] backdrop-blur-xl">
             {toast.message}
           </div>
         </div>

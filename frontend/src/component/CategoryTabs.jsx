@@ -4,14 +4,14 @@ export default function CategoryTabs({ categories, activeId, onChange }) {
   const { t } = useTranslation();
   return (
     <div className="sticky top-[70px] sm:top-[74px] z-30">
-      <div className="border-b border-white/60 bg-white/90 backdrop-blur-xl shadow-[0_18px_40px_rgba(122,0,38,0.08)]">
+      <div className="border-b border-white/60 bg-white/90 backdrop-blur-xl shadow-[0_18px_40px_rgba(58,46,46,0.08)]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3">
           <div className="flex items-center justify-between gap-3 pb-2">
-            <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold uppercase tracking-[0.32em] text-gray-400">
+            <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold uppercase tracking-[0.32em]" style={{ color: 'var(--text-tertiary)' }}>
               <span className="inline-flex h-2 w-2 rounded-full" style={{ background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))" }} />
               {t("menu.menu_journey")}
             </div>
-            <div className="hidden sm:flex items-center gap-2 text-xs text-gray-500">
+            <div className="hidden sm:flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
               <span className="inline-flex h-1 w-8 rounded-full" style={{ background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))" }} />
               {t("menu.swipe_hint")}
             </div>
@@ -35,7 +35,7 @@ export default function CategoryTabs({ categories, activeId, onChange }) {
                 role="tab"
                 aria-selected="true"
                 onClick={() => onChange(c.id)}
-                      className={`${baseClasses} text-white shadow-lg shadow-[rgba(122,0,38,0.20)]`}
+                      className={`${baseClasses} text-white shadow-lg shadow-[rgba(58,46,46,0.20)]`}
                 style={{
                   background:
                           "linear-gradient(120deg, var(--grad-start), var(--grad-end))",

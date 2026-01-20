@@ -54,6 +54,10 @@ export async function createGroup(req, res, next) {
   try {
     const groupData = req.body;
     const result = await createQrGroup(groupData);
+    
+    // Clear QR menu cache to ensure fresh data after creating group
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -82,6 +86,10 @@ export async function updateGroup(req, res, next) {
     const { qrGroupId } = req.params;
     const updateData = req.body;
     const result = await updateQrGroup(Number(qrGroupId), updateData);
+    
+    // Clear QR menu cache to ensure fresh data after group updates
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -110,6 +118,10 @@ export async function createSubgroup(req, res, next) {
   try {
     const subgroupData = req.body;
     const result = await createQrSubgroup(subgroupData);
+    
+    // Clear QR menu cache to ensure fresh data after creating subgroup
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -140,6 +152,10 @@ export async function updateSubgroup(req, res, next) {
     const { qrSubgroupId } = req.params;
     const updateData = req.body;
     const result = await updateQrSubgroup(Number(qrSubgroupId), updateData);
+    
+    // Clear QR menu cache to ensure fresh data after subgroup updates
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -173,6 +189,10 @@ export async function addProduct(req, res, next) {
     }
     
     const result = await addProductToQrMenu(productData);
+    
+    // Clear QR menu cache to ensure fresh data after adding product
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -208,6 +228,10 @@ export async function updateProduct(req, res, next) {
     const { productId } = req.params;
     const updateData = req.body;
     const result = await updateQrProductAssignment(Number(productId), updateData);
+    
+    // Clear QR menu cache to ensure fresh data after updates
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -222,6 +246,10 @@ export async function removeProduct(req, res, next) {
   try {
     const { productId } = req.params;
     const result = await removeProductFromQrMenu(Number(productId));
+    
+    // Clear QR menu cache to ensure fresh data after removing product
+    clearQrMenuCache();
+    
     res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
@@ -244,25 +272,30 @@ export async function getQrCategories(req, res, next) {
 /**
  * GET /api/qr-menu/menu-items
  * Get QR Menu Items (Products from QrProductMaster)
- * Query params: page, pageSize, search, qrGroupId, qrSubgroupId, sort
+ * Query params: page, pageSize, search, qrGroupId, qrSubgroupId, sort, _t (cache-busting timestamp)
  */
 export async function getQrMenuItemsController(req, res, next) {
   try {
-    const { page = 1, pageSize = 24, search = "", qrGroupId, qrSubgroupId, sort = "new" } = req.query;
+    const { page = 1, pageSize = 24, search = "", qrGroupId, qrSubgroupId, sort = "new", _t } = req.query;
     
-    // Only cache if no search (search results are dynamic)
+    // If cache-busting timestamp is provided, skip cache
+    const skipCache = _t !== undefined;
+    
+    // Only cache if no search and no cache-busting (search results are dynamic)
     const hasSearch = search && search.trim().length > 0;
-    const cacheKey = hasSearch 
-      ? null // Don't cache search results
+    const cacheKey = (hasSearch || skipCache)
+      ? null // Don't cache search results or when cache-busting
       : `qr-menu-items:${qrGroupId || 'all'}:${qrSubgroupId || 'all'}:${page}:${pageSize}:${sort}`;
     
-    // Check cache first
-    let result = cacheKey ? qrMenuCache.get(cacheKey) : null;
+    // Check cache first (only if not skipping cache)
+    let result = (!skipCache && cacheKey) ? qrMenuCache.get(cacheKey) : null;
     
     if (!result) {
       // Cache miss - fetch from database
-      if (cacheKey) {
+      if (cacheKey && !skipCache) {
         console.log(`[QR-MENU][CACHE] MISS: ${cacheKey}`);
+      } else if (skipCache) {
+        console.log(`[QR-MENU][CACHE] BYPASS: Cache-busting requested (_t=${_t})`);
       }
       
       result = await getQrMenuItems({
@@ -274,8 +307,8 @@ export async function getQrMenuItemsController(req, res, next) {
         sort
       });
       
-      // Cache the result (only if no search)
-      if (cacheKey) {
+      // Cache the result (only if no search and not cache-busting)
+      if (cacheKey && !skipCache) {
         qrMenuCache.set(cacheKey, result);
         console.log(`[QR-MENU][CACHE] CACHED: ${cacheKey} (${result.data?.length || 0} items)`);
       }

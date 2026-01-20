@@ -25,10 +25,13 @@
     "sort_price_asc": "السعر: من الأقل إلى الأعلى",
     "sort_price_desc": "السعر: من الأعلى إلى الأقل",
     "price": "السعر",
+    "description": "الوصف",
+    "allergies": "معلومات الحساسية",
     "add_to_cart": "أضف إلى السلة",
     "add": "إضافة",
     "customize": "تخصيص",
     "vat_inc": "شامل الضريبة",
+    "vat_service_note": "السعر شامل ضريبة القيمة المضافة • رسوم الخدمة غير مشمولة",
     "toast_added": "{{name}} تمت إضافته إلى الطلب",
     "toast_suggestion": "ماذا عن {{name}}؟"
   },
@@ -54,7 +57,8 @@
   },
   "buttons": {
     "prev": "السابق",
-    "next": "التالي"
+    "next": "التالي",
+    "close": "إغلاق"
   },
   "floating_cart": {
     "view": "عرض السلة",
