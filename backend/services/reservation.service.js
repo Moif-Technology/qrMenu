@@ -1153,10 +1153,10 @@ export async function getReservationsByDateRange(filters = {}) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
     LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
     WHERE CONVERT(date, bm.[BookingDate]) >= @fromDate
       AND CONVERT(date, bm.[BookingDate]) <= @toDate
   `;
@@ -1298,10 +1298,10 @@ export async function getReservationsByDate(filters = {}) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
     LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
     WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
   `;
   
@@ -1456,10 +1456,10 @@ export async function getReservationById(bookingId) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
     LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
     WHERE bm.[BookingID] = @BookingID
     ORDER BY bc.[TableID]
   `;
@@ -1673,7 +1673,7 @@ export async function updateReservationStatus(bookingId, status) {
         bm.[BookingStatus] AS bookingStatus,
         bc.[Status] AS status
       FROM dbo.[BookingMaster] bm
-      INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+      INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
       WHERE bm.[BookingID] = @BookingID
     `;
     const verifyResult = await verifyRequest.query(verifySql);

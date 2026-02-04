@@ -15,7 +15,7 @@ import { normalizePhoneForInput } from "../utils/phone";
 // Using mock data for now - backend not connected
 // import { createReservation } from "../services/reservation.service";
 import BottomNav from "../component/reservation/BottomNav";
-
+//console
 export default function ReservationFormPage() {
   const navigate = useNavigate();
   const location = useLocation();
