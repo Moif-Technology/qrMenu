@@ -7,7 +7,15 @@ export default function ReservationSuccessPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   
-  // Get data from URL params or use dummy data
+  // Get data from URL params (form sends tableIds + tableNames; fallback to tableId/tableName)
+  const tableIdsParam = searchParams.get("tableIds") || searchParams.get("tableId") || "";
+  const tableNamesParam = searchParams.get("tableNames") || searchParams.get("tableName") || "";
+  const tableDisplay = tableNamesParam
+    ? tableNamesParam
+    : tableIdsParam && tableIdsParam !== "unassigned"
+      ? tableIdsParam.split(",").map((id) => `Table ${id.trim()}`).join(", ")
+      : null;
+
   const [reservationData, setReservationData] = useState({
     reservationId: searchParams.get("id") || "R-2024-001",
     customerName: searchParams.get("name") || "Jane Smith",
@@ -16,10 +24,10 @@ export default function ReservationSuccessPage() {
     numberOfGuests: parseInt(searchParams.get("guests")) || 4,
     reservationDate: searchParams.get("date") || new Date().toISOString().split("T")[0],
     reservationTime: searchParams.get("time") || "19:00",
-    tableId: searchParams.get("tableId") || "15",
-    tableName: searchParams.get("tableName") || "Table 15",
+    tableIds: tableIdsParam,
+    tableDisplay,
     status: "CONFIRMED",
-    specialRequests: searchParams.get("comments") || "Window seat preferred"
+    specialRequests: searchParams.get("comments") || ""
   });
 
   const formatDate = (dateString) => {
@@ -275,10 +283,10 @@ export default function ReservationSuccessPage() {
             <span style={S.detailValue}>{formatTime(reservationData.reservationTime)}</span>
           </div>
           
-          {reservationData.tableId && (
+          {(reservationData.tableDisplay || (reservationData.tableIds && reservationData.tableIds !== "unassigned")) && (
             <div style={S.detailRow}>
-              <span style={S.detailLabel}>Table</span>
-              <span style={S.detailValue}>{reservationData.tableName}</span>
+              <span style={S.detailLabel}>Table{reservationData.tableDisplay && reservationData.tableDisplay.indexOf(",") >= 0 ? "s" : ""}</span>
+              <span style={S.detailValue}>{reservationData.tableDisplay || reservationData.tableIds.split(",").map((id) => `Table ${id.trim()}`).join(", ")}</span>
             </div>
           )}
           

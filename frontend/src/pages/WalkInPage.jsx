@@ -8,6 +8,7 @@ import { getAreas } from "../services/menu.service";
 import { getCustomerHistory } from "../services/reservation.service";
 import FloorMapContainer from "../component/reservation/FloorMapContainer";
 import AutocompleteInput from "../component/reservation/AutocompleteInput";
+import PhoneInputWithCountry from "../component/reservation/PhoneInputWithCountry";
 import BottomNav from "../component/reservation/BottomNav";
 
 export default function WalkInPage() {
@@ -62,12 +63,12 @@ export default function WalkInPage() {
       `Area ${formData.seatingPreference}`
     : "Any area";
 
-  // Validation functions
+  // Validation functions - accept international format (+country + number) or local
   const validatePhone = (phone) => {
     if (!phone) return true; // Phone is optional in walk-in
-    // Must start with 0, then exactly 9 more digits/letters (total 10 characters)
-    const phoneRegex = /^0[a-zA-Z0-9]{9}$/;
-    return phoneRegex.test(phone);
+    // Accept E.164: + followed by digits (and spaces/dashes from lib)
+    const cleaned = (phone || "").replace(/\D/g, "");
+    return cleaned.length >= 9 && cleaned.length <= 15;
   };
 
   const validateEmail = (email) => {
@@ -80,31 +81,6 @@ export default function WalkInPage() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     let processedValue = value;
-    
-    // Phone validation - only allow if starts with 0 and max 11 chars
-    if (name === "phone") {
-      // Remove any non-alphanumeric except we want to keep it simple
-      processedValue = value.replace(/[^0-9a-zA-Z]/g, '');
-      // If doesn't start with 0, force it
-      if (processedValue && !processedValue.startsWith('0')) {
-        processedValue = '0' + processedValue.replace(/^0+/, '');
-      }
-      // Limit to 10 characters (0 + 9)
-      if (processedValue.length > 10) {
-        processedValue = processedValue.substring(0, 10);
-      }
-      
-      // Validate
-      if (processedValue && !validatePhone(processedValue)) {
-        setFieldErrors(prev => ({ ...prev, phone: "Phone must start with 0 and have 9 more digits/letters (10 total)" }));
-      } else {
-        setFieldErrors(prev => {
-          const newErrors = { ...prev };
-          delete newErrors.phone;
-          return newErrors;
-        });
-      }
-    }
     
     // Email validation
     if (name === "email") {
@@ -772,39 +748,23 @@ export default function WalkInPage() {
                     fontSize: "14px",
                     color: "#374151"
                   }}>
-                    Phone
+                    Phone <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 500 }}>(optional)</span>
                   </label>
-                  <AutocompleteInput
+                  <PhoneInputWithCountry
                     value={formData.phone}
-                    onChange={handleChange}
-                    onSelect={handleCustomerSelect}
-                    suggestions={customerHistory}
-                    field="phone"
-                    name="phone"
-                    type="tel"
-                    placeholder="05xxxxxxxx (start typing...)"
-                    maxLength={10}
-                    style={{
-                      width: "100%",
-                      padding: "14px",
-                      borderRadius: "14px",
-                      border: fieldErrors.phone ? "1px solid #ef4444" : "1px solid #d1d5db",
-                      fontSize: "16px",
-                      outline: "none",
-                      background: "#fff",
-                      boxSizing: "border-box",
-                      transition: "all 0.2s",
-                      fontFamily: "inherit",
-                      color: "#111827"
+                    onChange={(phone) => {
+                      setFormData(prev => ({ ...prev, phone: phone || "" }));
+                      if (fieldErrors.phone) {
+                        setFieldErrors(prev => {
+                          const next = { ...prev };
+                          delete next.phone;
+                          return next;
+                        });
+                      }
                     }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = fieldErrors.phone ? "#ef4444" : "#C91A4D";
-                      e.currentTarget.style.boxShadow = fieldErrors.phone ? "0 0 0 3px rgba(239, 68, 68, 0.15)" : "0 0 0 3px rgba(201, 26, 77, 0.15)";
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = fieldErrors.phone ? "#ef4444" : "#d1d5db";
-                      e.currentTarget.style.boxShadow = "none";
-                    }}
+                    placeholder="Phone number"
+                    defaultCountry="ae"
+                    hasError={!!fieldErrors.phone}
                   />
                   {fieldErrors.phone && (
                     <div style={{

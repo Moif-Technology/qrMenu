@@ -2,6 +2,12 @@
 import { Router } from "express";
 import mssql from "mssql";
 import { connectToDb } from "../config/dbConfig.js";
+import {
+  getAllReservationsController,
+  getReservationByIdController,
+  updateReservationStatusController
+} from "../controllers/reservation.controller.js";
+import { getNextBookingChildIdTx, updateCustomer } from "../services/reservation.service.js";
 
 const router = Router();
 const q = (n) => `[${n}]`; // Helper to quote SQL identifiers
@@ -266,12 +272,7 @@ router.post("/reservation/create", async (req, res) => {
         error: "Missing required field: name"
       });
     }
-    if (!reservationData.phone || reservationData.phone.trim() === '') {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing required field: phone"
-      });
-    }
+    // Phone is optional - some guests prefer not to share
     
     // Validate guests - convert to number and check
     if (reservationData.guests == null || reservationData.guests === '') {
@@ -372,13 +373,7 @@ router.post("/reservation/guest", async (req, res) => {
         error: "Missing required field: name"
       });
     }
-    
-    if (!phone || phone.trim() === '') {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing required field: phone"
-      });
-    }
+    // Phone is optional - some guests prefer not to share
     
     if (!date) {
       return res.status(400).json({
@@ -715,228 +710,15 @@ router.get("/reservation/area-layout/:areaId", async (req, res) => {
 
 /**
  * GET /api/reservation
- * Get all reservations with optional filters (status, date, tableId)
- * This matches the frontend getAllReservations call
+ * Get all reservations with optional filters (status, date, tableId, fromDate, toDate)
+ * Supports both single date (current day) and date range queries
+ * Query params:
+ *   - date=2024-01-01 (single date - defaults to today if not provided)
+ *   - fromDate=2024-01-01&toDate=2024-01-31 (date range)
+ *   - status=PENDING (optional, comma-separated for multiple)
+ *   - tableId=5 (optional)
  */
-router.get("/reservation", async (req, res) => {
-  try {
-    const { status, date, tableId } = req.query;
-    
-    // If no date provided, use today's date
-    const selectedDate = date || new Date().toISOString().split('T')[0];
-    
-    console.log('[RESERVATION] GET /reservation query params:', { status, date, tableId, selectedDate });
-
-    const pool = await connectToDb();
-    const request = pool.request();
-    request.input("selectedDate", mssql.Date, selectedDate);
-    console.log('[RESERVATION] Set selectedDate parameter:', selectedDate);
-    
-    if (tableId) {
-      request.input("tableId", mssql.BigInt, BigInt(Number(tableId)));
-    }
-
-    // Check which columns exist in BookingMaster for dynamic query
-    const checkColumnsReq = pool.request();
-    const columnsResult = await checkColumnsReq.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingMaster'
-    `);
-    const existingColumns = new Set(columnsResult.recordset.map(row => row.COLUMN_NAME));
-    
-    const hasNewFields = existingColumns.has('GuestName') || 
-                         existingColumns.has('GuestPhone') || 
-                         existingColumns.has('ReservationTime');
-    
-    // Build SELECT with conditional fields
-    const guestNameField = existingColumns.has('GuestName') ? 'bm.[GuestName] AS guestName,' : '';
-    const guestPhoneField = existingColumns.has('GuestPhone') ? 'bm.[GuestPhone] AS guestPhone,' : '';
-    const guestEmailField = existingColumns.has('GuestEmail') ? 'bm.[GuestEmail] AS guestEmail,' : '';
-    const reservationTimeField = existingColumns.has('ReservationTime') ? 'bm.[ReservationTime] AS reservationTime,' : '';
-    const specialRequestsField = existingColumns.has('SpecialRequests') ? 'bm.[SpecialRequests] AS specialRequests,' : '';
-    const tagsField = existingColumns.has('Tags') ? 'bm.[Tags] AS tags,' : '';
-    const hostessIdField = existingColumns.has('HostessID') ? 'bm.[HostessID] AS hostessID,' : '';
-    const hostessNameField = existingColumns.has('HostessName') ? 'bm.[HostessName] AS hostessName,' : '';
-    const confirmationCodeField = existingColumns.has('ConfirmationCode') ? 'bm.[ConfirmationCode] AS confirmationCode,' : '';
-    const isWalkInField = existingColumns.has('IsWalkIn') ? 'bm.[IsWalkIn] AS isWalkIn,' : '';
-    const walkInArrivalTimeField = existingColumns.has('WalkInArrivalTime') ? 'bm.[WalkInArrivalTime] AS walkInArrivalTime,' : '';
-    
-    // Check for advance payment column (handle typo)
-    const advancePaymentColumn = existingColumns.has('AdvancePayment') ? 'AdvancePayment' : 
-                                 existingColumns.has('AdavncePayment') ? 'AdavncePayment' : null;
-    const advancePaymentField = advancePaymentColumn ? `bm.[${advancePaymentColumn}] AS advancePayment,` : '';
-    
-    // Check for BookingChild new fields
-    const checkChildColumnsReq = pool.request();
-    const childColumnsResult = await checkChildColumnsReq.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingChild'
-    `);
-    const existingChildColumns = new Set(childColumnsResult.recordset.map(row => row.COLUMN_NAME));
-    const tableNotesField = existingChildColumns.has('Notes') ? 'bc.[Notes] AS tableNotes,' : '';
-    const seatedTimeField = existingChildColumns.has('SeatedTime') ? 'bc.[SeatedTime] AS seatedTime,' : '';
-    const vacatedTimeField = existingChildColumns.has('VacatedTime') ? 'bc.[VacatedTime] AS vacatedTime,' : '';
-
-    let sql = `
-      SELECT 
-        bm.[BookingID] AS bookingID,
-        bm.[BookingDate] AS bookingDate,
-        bm.[EnteredDate] AS enteredDate,
-        bm.[CustomerID] AS customerID,
-        ${advancePaymentField}
-        bm.[BookingStatus] AS bookingStatus,
-        bm.[PartySize] AS partySize,
-        bm.[BookingSource] AS bookingSource,
-        ${guestNameField}
-        ${guestPhoneField}
-        ${guestEmailField}
-        ${reservationTimeField}
-        ${specialRequestsField}
-        ${tagsField}
-        ${hostessIdField}
-        ${hostessNameField}
-        ${confirmationCodeField}
-        ${isWalkInField}
-        ${walkInArrivalTimeField}
-        bc.[BookingChildID] AS bookingChildID,
-        bc.[TableID] AS tableId,
-        bc.[AreaID] AS areaId,
-        bc.[Status] AS status,
-        ${tableNotesField}
-        ${seatedTimeField}
-        ${vacatedTimeField}
-        cm.[CustomerName] AS customerNameFromMaster,
-        cm.[MobileNo] AS customerPhoneFromMaster,
-        cm.[Email] AS customerEmailFromMaster,
-        t.[TableNO] AS tableNo,
-        t.[TableName] AS tableName,
-        a.[AreaName] AS areaName
-      FROM dbo.[BookingMaster] bm
-      INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-      LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
-      LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
-      LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
-      WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
-    `;
-
-    // Apply status filter if provided
-    if (status) {
-      const statusList = status.split(',').map(s => s.trim().toUpperCase());
-      if (statusList.length === 1) {
-        if (statusList[0] === 'BOOKED') {
-          sql += ` AND bc.[Status] = 'BOOKED'`;
-        } else {
-          sql += ` AND bm.[BookingStatus] = @status`;
-          request.input("status", mssql.NVarChar, statusList[0]);
-        }
-      } else {
-        // Multiple statuses - handle BOOKED separately
-        const hasBooked = statusList.includes('BOOKED');
-        const otherStatuses = statusList.filter(s => s !== 'BOOKED');
-        
-        if (hasBooked && otherStatuses.length > 0) {
-          sql += ` AND (bc.[Status] = 'BOOKED' OR bm.[BookingStatus] IN (${otherStatuses.map((_, i) => `@status${i}`).join(',')}))`;
-          otherStatuses.forEach((s, i) => {
-            request.input(`status${i}`, mssql.NVarChar, s);
-          });
-        } else if (hasBooked) {
-          sql += ` AND bc.[Status] = 'BOOKED'`;
-        } else {
-          sql += ` AND bm.[BookingStatus] IN (${otherStatuses.map((_, i) => `@status${i}`).join(',')})`;
-          otherStatuses.forEach((s, i) => {
-            request.input(`status${i}`, mssql.NVarChar, s);
-          });
-        }
-      }
-    }
-
-    // Apply tableId filter if provided
-    if (tableId) {
-      sql += ` AND bc.[TableID] = @tableId`;
-    }
-
-    sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
-
-    console.log('[RESERVATION] Executing SQL query...');
-    console.log('[RESERVATION] SQL preview:', sql.substring(0, 500) + '...');
-    const result = await request.query(sql);
-    console.log('[RESERVATION] Query returned:', result.recordset.length, 'rows');
-    
-    const reservations = result.recordset.map((row) => {
-      // Use GuestName/GuestPhone from BookingMaster if available, otherwise fall back to CustomerMaster
-      const customerName = row.guestName || row.customerNameFromMaster || "Guest";
-      const customerPhone = row.guestPhone || row.customerPhoneFromMaster || "";
-      const customerEmail = row.guestEmail || row.customerEmailFromMaster || "";
-      
-      // Format reservation time
-      let reservationTime = null;
-      if (row.reservationTime) {
-        // If it's a Time object, convert to string
-        if (typeof row.reservationTime === 'string') {
-          reservationTime = row.reservationTime.slice(0, 5); // HH:mm
-        } else if (row.reservationTime instanceof Date) {
-          reservationTime = row.reservationTime.toTimeString().slice(0, 5);
-        } else {
-          // Try to parse as time string
-          const timeStr = String(row.reservationTime);
-          reservationTime = timeStr.slice(0, 5);
-        }
-      } else if (row.bookingDate) {
-        // Fallback to booking date time
-        reservationTime = new Date(row.bookingDate).toTimeString().slice(0, 5);
-      }
-      
-      return {
-        reservationId: row.bookingID, // For compatibility
-        bookingID: row.bookingID,
-        bookingChildID: row.bookingChildID,
-        reservationDate: row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : selectedDate,
-        reservationTime: reservationTime,
-        customerID: row.customerID,
-        customerName: customerName,
-        customerPhone: customerPhone,
-        customerEmail: customerEmail,
-        numberOfGuests: row.partySize || 1, // For compatibility
-        pax: row.partySize || 1, // For compatibility
-        tableId: Number(row.tableId),
-        tableNo: row.tableNo,
-        tableName: row.tableName,
-        areaId: row.areaId ? Number(row.areaId) : null,
-        areaName: row.areaName || "Dining",
-        status: row.status || row.bookingStatus || "PENDING",
-        partySize: row.partySize || 1,
-        advancePayment: parseFloat(row.advancePayment || 0),
-        specialRequests: row.specialRequests || "",
-        tags: row.tags || "",
-        hostessID: row.hostessID,
-        hostessName: row.hostessName || "",
-        confirmationCode: row.confirmationCode || "",
-        confirmationSent: row.confirmationSent || false,
-        reminderSent: row.reminderSent || false,
-        isWalkIn: row.isWalkIn || false,
-        bookingSource: row.bookingSource || "ONLINE", // Added bookingSource field
-        walkInArrivalTime: row.walkInArrivalTime,
-        tableNotes: row.tableNotes || "",
-        seatedTime: row.seatedTime,
-        vacatedTime: row.vacatedTime
-      };
-    });
-
-    res.json({ 
-      ok: true, 
-      reservations,
-      count: reservations.length
-    });
-  } catch (e) {
-    console.error("[/reservation] ERROR", e?.message || e);
-    res.status(500).json({ 
-      ok: false, 
-      error: e?.message || "Failed to fetch reservations" 
-    });
-  }
-});
+router.get("/reservation", getAllReservationsController);
 
 /**
  * GET /api/reservation/list
@@ -983,7 +765,7 @@ router.get("/reservation/list", async (req, res) => {
       FROM dbo.[BookingMaster] bm
       INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
       LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
-      LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
+      LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
       LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
       WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
         AND bc.[Status] = 'BOOKED'
@@ -1053,7 +835,7 @@ router.get("/reservation/list", async (req, res) => {
 router.put("/reservation/update/:bookingId", async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { date, time, guests, name, phone, email, specialRequests, tags, hostessId, hostessName, tableIds, areaId, status } = req.body;
+    const { date, time, guests, name, phone, email, specialRequests, tags, hostessId, hostessName, tableIds, areaId, status, customerId } = req.body;
     
     if (!bookingId) {
       return res.status(400).json({ 
@@ -1067,6 +849,13 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
     
     try {
       await tx.begin();
+
+      // If user selected an existing customer and changed name/phone/email, update that customer in CustomerMaster
+      const resolvedCustomerId = customerId != null && customerId !== "" ? parseInt(customerId, 10) : null;
+      if (resolvedCustomerId && !isNaN(resolvedCustomerId) && (name != null || phone != null || email != null)) {
+        await updateCustomer(resolvedCustomerId, { name, phone, email }, tx);
+      }
+
       const request = new mssql.Request(tx);
     request.input("BookingID", mssql.BigInt, parseInt(bookingId));
       
@@ -1101,8 +890,8 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
         updates.push(`${q("GuestName")} = @GuestName`);
       }
       
-      if (existingColumns.has('GuestPhone') && phone) {
-        request.input("GuestPhone", mssql.VarChar(20), phone.trim());
+      if (existingColumns.has('GuestPhone') && phone !== undefined) {
+        request.input("GuestPhone", mssql.VarChar(20), (phone && phone.trim()) || null);
         updates.push(`${q("GuestPhone")} = @GuestPhone`);
       }
       
@@ -1187,30 +976,55 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
     
     await request.query(updateSql);
       
-      // Update tables if provided
-      if (tableIds && areaId) {
+      // Update tables if provided (run when tableIds is present; resolve areaId from first table if missing)
+      if (tableIds != null && (Array.isArray(tableIds) ? tableIds.length > 0 : true)) {
         const tableIdsArray = Array.isArray(tableIds) ? tableIds : [tableIds];
-        
-        // Delete existing BookingChild records
-        const deleteChildReq = new mssql.Request(tx);
-        deleteChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
-        await deleteChildReq.query(`DELETE FROM ${q("BookingChild")} WHERE ${q("BookingID")} = @BookingID`);
-        
-        // Insert new BookingChild records
-        for (const tableId of tableIdsArray) {
-          const tableIdNum = parseInt(tableId);
-          if (!isNaN(tableIdNum) && tableIdNum > 0) {
-            const insertChildReq = new mssql.Request(tx);
-            insertChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
-            insertChildReq.input("TableID", mssql.BigInt, tableIdNum);
-            insertChildReq.input("AreaID", mssql.BigInt, parseInt(areaId));
-            insertChildReq.input("Status", mssql.VarChar(50), "BOOKED");
-            
-            await insertChildReq.query(`
-              INSERT INTO ${q("BookingChild")} (${q("BookingID")}, ${q("TableID")}, ${q("AreaID")}, ${q("Status")})
-              VALUES (@BookingID, @TableID, @AreaID, @Status)
+        const validTableIds = tableIdsArray.map((id) => parseInt(id)).filter((id) => !isNaN(id) && id > 0);
+        if (validTableIds.length > 0) {
+          let resolvedAreaId = parseInt(areaId) || 0;
+          if (!resolvedAreaId && validTableIds[0]) {
+            const areaReq = new mssql.Request(tx);
+            areaReq.input("tableId", mssql.BigInt, validTableIds[0]);
+            const areaResult = await areaReq.query(`
+              SELECT TOP 1 [AreaId] AS AreaID FROM dbo.[TableMaster] WHERE [TableID] = @tableId
             `);
+            if (areaResult.recordset.length > 0) {
+              resolvedAreaId = parseInt(areaResult.recordset[0].AreaID) || 0;
+            }
           }
+
+          // Delete existing BookingChild records
+          const deleteChildReq = new mssql.Request(tx);
+          deleteChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
+          await deleteChildReq.query(`DELETE FROM ${q("BookingChild")} WHERE ${q("BookingID")} = @BookingID`);
+
+          // Insert ONE BookingChild with TableID = comma-separated (e.g. "66,67")
+          const tableIdsStr = validTableIds.join(",");
+          const bookingChildID = await getNextBookingChildIdTx(tx);
+          const insertChildReq = new mssql.Request(tx);
+          insertChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
+          insertChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
+          insertChildReq.input("TableID", mssql.NVarChar(200), tableIdsStr);
+          insertChildReq.input("AreaID", mssql.BigInt, resolvedAreaId);
+          insertChildReq.input("Status", mssql.VarChar(50), "BOOKED");
+          insertChildReq.input("Notes", mssql.NVarChar(500), null);
+          insertChildReq.input("SeatedTime", mssql.DateTime, null);
+          insertChildReq.input("VacatedTime", mssql.DateTime, null);
+          insertChildReq.input("CreatedOn", mssql.DateTime, new Date());
+          insertChildReq.input("ModifiedOn", mssql.DateTime, null);
+
+          await insertChildReq.query(`
+            INSERT INTO ${q("BookingChild")} (
+              ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
+              ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
+              ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
+            )
+            VALUES (
+              @BookingChildID, @BookingID, @TableID,
+              @AreaID, @Status, @Notes,
+              @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
+            )
+          `);
         }
       }
       
@@ -1339,334 +1153,13 @@ router.put("/reservation/checkin/:bookingId", async (req, res) => {
  * Update reservation status
  * Body: { status: "BOOKED" | "CONFIRMED" | "LEFT_MESSAGE" | "ARRIVED" | "CHECKED_IN" | "CANCELLED" | "NO_SHOW" }
  */
-router.put("/reservation/update-status/:bookingId", async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { status } = req.body;
-    
-    if (!bookingId) {
-      return res.status(400).json({ 
-        ok: false, 
-        error: "Booking ID is required" 
-      });
-    }
-
-    if (!status) {
-      return res.status(400).json({ 
-        ok: false, 
-        error: "Status is required" 
-      });
-    }
-
-    // NO STATUS MAPPINGS - Every status remains exactly as set
-    // Each status is independent and won't be converted to another status
-    const statusMapping = {
-      // All mappings removed - statuses stay as-is
-    };
-
-    const statusUpper = status.toUpperCase();
-    // All valid statuses - NO MAPPINGS, each status stays exactly as set
-    const validStatuses = [
-      'BOOKED', 'CONFIRMED', 'LEFT_MESSAGE', 'ARRIVED', 'CHECKED_IN', 'CANCELLED', 
-      'NO_SHOW', 'SEATED', 'PENDING', 'HOLD', 'LEFT', 'BUS_TABLE', 'PAID', 
-      'PARTIALLY_SEATED', 'NO_ANSWER', 'WRONG_NUMBER', 'PARTIALLY_ARRIVED', 
-      'LATE', 'CANCELLED_NOTIFY'
-    ];
-    
-    // Map status if needed, otherwise use as-is
-    let statusToUse = statusMapping[statusUpper] || statusUpper;
-    
-    // Validate the final status
-    if (!validStatuses.includes(statusToUse)) {
-      return res.status(400).json({ 
-        ok: false, 
-        error: `Invalid status: ${status}. Valid statuses: ${validStatuses.join(', ')}` 
-      });
-    }
-
-    const pool = await connectToDb();
-    const tx = new mssql.Transaction(pool);
-    
-    try {
-      await tx.begin();
-      
-      const request = new mssql.Request(tx);
-      request.input("BookingID", mssql.BigInt, parseInt(bookingId));
-      request.input("Status", mssql.VarChar(50), statusToUse);
-      
-      // Update BookingMaster status
-      const updateMasterSql = `
-        UPDATE dbo.[BookingMaster]
-        SET ${q("BookingStatus")} = @Status
-        WHERE ${q("BookingID")} = @BookingID
-      `;
-      
-      // Update BookingChild status
-      const updateChildSql = `
-        UPDATE dbo.[BookingChild]
-        SET ${q("Status")} = @Status
-        WHERE ${q("BookingID")} = @BookingID
-      `;
-      
-      const masterResult = await request.query(updateMasterSql);
-      const childResult = await request.query(updateChildSql);
-      
-      // Check if any rows were updated
-      const masterRowsAffected = masterResult.rowsAffected[0] || 0;
-      const childRowsAffected = childResult.rowsAffected[0] || 0;
-      
-      console.log(`[RESERVATION][UPDATE-STATUS] Update attempt for BookingID ${bookingId}: ${statusUpper} -> ${statusToUse}`);
-      console.log(`[RESERVATION][UPDATE-STATUS] Rows affected - Master: ${masterRowsAffected}, Child: ${childRowsAffected}`);
-      
-      if (masterRowsAffected === 0 && childRowsAffected === 0) {
-        await tx.rollback();
-        console.log(`[RESERVATION][UPDATE-STATUS] ERROR: No rows updated for BookingID ${bookingId}`);
-        return res.status(404).json({ 
-          ok: false, 
-          error: `Reservation with ID ${bookingId} not found` 
-        });
-      }
-      
-      // Verify the update by reading back the status before committing
-      const verifyRequest = new mssql.Request(tx);
-      verifyRequest.input("BookingID", mssql.BigInt, parseInt(bookingId));
-      const verifySql = `
-        SELECT TOP 1 
-          bm.[BookingStatus] AS bookingStatus,
-          bc.[Status] AS status
-        FROM dbo.[BookingMaster] bm
-        INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-        WHERE bm.[BookingID] = @BookingID
-      `;
-      const verifyResult = await verifyRequest.query(verifySql);
-      
-      if (verifyResult.recordset.length > 0) {
-        const verifiedStatus = verifyResult.recordset[0].status;
-        const verifiedBookingStatus = verifyResult.recordset[0].bookingStatus;
-        console.log(`[RESERVATION][UPDATE-STATUS] Verified status before commit - Status: ${verifiedStatus}, BookingStatus: ${verifiedBookingStatus}`);
-        
-        if (verifiedStatus !== statusToUse || verifiedBookingStatus !== statusToUse) {
-          console.error(`[RESERVATION][UPDATE-STATUS] WARNING: Status mismatch! Expected: ${statusToUse}, Got Status: ${verifiedStatus}, BookingStatus: ${verifiedBookingStatus}`);
-        }
-      }
-      
-      await tx.commit();
-      console.log(`[RESERVATION][UPDATE-STATUS] Transaction committed for BookingID ${bookingId}: ${statusUpper} -> ${statusToUse} (Master: ${masterRowsAffected} rows, Child: ${childRowsAffected} rows)`);
-    } catch (txError) {
-      await tx.rollback();
-      throw txError;
-    }
-    
-    res.json({ 
-      ok: true, 
-      message: `Reservation status updated to ${statusToUse}`,
-      bookingID: parseInt(bookingId),
-      status: statusToUse,
-      originalStatus: statusUpper !== statusToUse ? statusUpper : undefined // Include original if mapped
-    });
-  } catch (e) {
-    console.error("[/reservation/update-status] ERROR", e?.message || e);
-    res.status(500).json({ 
-      ok: false, 
-      error: e?.message || "Failed to update reservation status" 
-    });
-  }
-});
+router.put("/reservation/update-status/:bookingId", updateReservationStatusController);
 
 /**
  * GET /api/reservation/:bookingId
  * Get a specific reservation by ID
  */
-router.get("/reservation/:bookingId", async (req, res) => {
-  const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  try {
-    const { bookingId } = req.params;
-    
-    if (!bookingId) {
-      return res.status(400).json({ 
-        ok: false, 
-        error: "Booking ID is required" 
-      });
-    }
-
-    console.log(`[RESERVATION][${reqId}] GET /reservation/${bookingId}`);
-
-    const pool = await connectToDb();
-    const request = pool.request();
-    request.input("BookingID", mssql.BigInt, parseInt(bookingId));
-
-    // Check which columns exist in BookingMaster for dynamic query
-    const checkColumnsReq = pool.request();
-    const columnsResult = await checkColumnsReq.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingMaster'
-    `);
-    const existingColumns = new Set(columnsResult.recordset.map(row => row.COLUMN_NAME));
-    
-    // Build SELECT with conditional fields
-    const guestNameField = existingColumns.has('GuestName') ? 'bm.[GuestName] AS guestName,' : '';
-    const guestPhoneField = existingColumns.has('GuestPhone') ? 'bm.[GuestPhone] AS guestPhone,' : '';
-    const guestEmailField = existingColumns.has('GuestEmail') ? 'bm.[GuestEmail] AS guestEmail,' : '';
-    const reservationTimeField = existingColumns.has('ReservationTime') ? 'bm.[ReservationTime] AS reservationTime,' : '';
-    const specialRequestsField = existingColumns.has('SpecialRequests') ? 'bm.[SpecialRequests] AS specialRequests,' : '';
-    const tagsField = existingColumns.has('Tags') ? 'bm.[Tags] AS tags,' : '';
-    const hostessIdField = existingColumns.has('HostessID') ? 'bm.[HostessID] AS hostessID,' : '';
-    const hostessNameField = existingColumns.has('HostessName') ? 'bm.[HostessName] AS hostessName,' : '';
-    const confirmationCodeField = existingColumns.has('ConfirmationCode') ? 'bm.[ConfirmationCode] AS confirmationCode,' : '';
-    const isWalkInField = existingColumns.has('IsWalkIn') ? 'bm.[IsWalkIn] AS isWalkIn,' : '';
-    const walkInArrivalTimeField = existingColumns.has('WalkInArrivalTime') ? 'bm.[WalkInArrivalTime] AS walkInArrivalTime,' : '';
-    
-    // Check for advance payment column (handle typo)
-    const advancePaymentColumn = existingColumns.has('AdvancePayment') ? 'AdvancePayment' : 
-                                 existingColumns.has('AdavncePayment') ? 'AdavncePayment' : null;
-    const advancePaymentField = advancePaymentColumn ? `bm.[${advancePaymentColumn}] AS advancePayment,` : '';
-    
-    // Check for BookingChild new fields
-    const checkChildColumnsReq = pool.request();
-    const childColumnsResult = await checkChildColumnsReq.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingChild'
-    `);
-    const existingChildColumns = new Set(childColumnsResult.recordset.map(row => row.COLUMN_NAME));
-    const tableNotesField = existingChildColumns.has('Notes') ? 'bc.[Notes] AS tableNotes,' : '';
-    const seatedTimeField = existingChildColumns.has('SeatedTime') ? 'bc.[SeatedTime] AS seatedTime,' : '';
-    const vacatedTimeField = existingChildColumns.has('VacatedTime') ? 'bc.[VacatedTime] AS vacatedTime,' : '';
-
-    const sql = `
-      SELECT 
-        bm.[BookingID] AS bookingID,
-        bm.[BookingDate] AS bookingDate,
-        bm.[EnteredDate] AS enteredDate,
-        bm.[CustomerID] AS customerID,
-        ${advancePaymentField}
-        bm.[BookingStatus] AS bookingStatus,
-        bm.[PartySize] AS partySize,
-        bm.[BookingSource] AS bookingSource,
-        ${guestNameField}
-        ${guestPhoneField}
-        ${guestEmailField}
-        ${reservationTimeField}
-        ${specialRequestsField}
-        ${tagsField}
-        ${hostessIdField}
-        ${hostessNameField}
-        ${confirmationCodeField}
-        ${isWalkInField}
-        ${walkInArrivalTimeField}
-        bc.[BookingChildID] AS bookingChildID,
-        bc.[TableID] AS tableId,
-        bc.[AreaID] AS areaId,
-        bc.[Status] AS status,
-        ${tableNotesField}
-        ${seatedTimeField}
-        ${vacatedTimeField}
-        cm.[CustomerName] AS customerNameFromMaster,
-        cm.[MobileNo] AS customerPhoneFromMaster,
-        cm.[Email] AS customerEmailFromMaster,
-        t.[TableNO] AS tableNo,
-        t.[TableName] AS tableName,
-        a.[AreaName] AS areaName
-      FROM dbo.[BookingMaster] bm
-      INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
-      LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
-      LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
-      LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
-      WHERE bm.[BookingID] = @BookingID
-      ORDER BY bc.[TableID]
-    `;
-
-    const result = await request.query(sql);
-    
-    if (result.recordset.length === 0) {
-      console.log(`[RESERVATION][${reqId}] Reservation not found: ${bookingId}`);
-      return res.status(404).json({ 
-        ok: false, 
-        error: "Reservation not found" 
-      });
-    }
-    
-    // Use first row for master data (all rows have same BookingMaster data)
-    const row = result.recordset[0];
-    
-    // Use GuestName/GuestPhone from BookingMaster if available, otherwise fall back to CustomerMaster
-    const customerName = row.guestName || row.customerNameFromMaster || "Guest";
-    const customerPhone = row.guestPhone || row.customerPhoneFromMaster || "";
-    const customerEmail = row.guestEmail || row.customerEmailFromMaster || "";
-    
-    // Format reservation time
-    let reservationTime = null;
-    if (row.reservationTime) {
-      // If it's a Time object, convert to string
-      if (typeof row.reservationTime === 'string') {
-        reservationTime = row.reservationTime.slice(0, 5); // HH:mm
-      } else if (row.reservationTime instanceof Date) {
-        reservationTime = row.reservationTime.toTimeString().slice(0, 5);
-      } else {
-        // Try to parse as time string
-        const timeStr = String(row.reservationTime);
-        reservationTime = timeStr.slice(0, 5);
-      }
-    } else if (row.bookingDate) {
-      // Fallback to booking date time
-      reservationTime = new Date(row.bookingDate).toTimeString().slice(0, 5);
-    }
-    
-    const reservation = {
-      reservationId: row.bookingID, // For compatibility
-      bookingID: row.bookingID,
-      bookingDate: row.bookingDate,
-      enteredDate: row.enteredDate,
-      reservationDate: row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : null,
-      reservationTime: reservationTime,
-      customerID: row.customerID,
-      customerName: customerName,
-      customerPhone: customerPhone,
-      customerEmail: customerEmail,
-      numberOfGuests: row.partySize || 1, // For compatibility
-      partySize: row.partySize || 1,
-      advancePayment: parseFloat(row.advancePayment || 0),
-      bookingStatus: row.bookingStatus,
-      status: row.status || row.bookingStatus || "PENDING",
-      bookingSource: row.bookingSource,
-      specialRequests: row.specialRequests || "",
-      tags: row.tags || "",
-      hostessID: row.hostessID,
-      hostessName: row.hostessName || "",
-      confirmationCode: row.confirmationCode || "",
-      isWalkIn: row.isWalkIn || false,
-      walkInArrivalTime: row.walkInArrivalTime,
-      tables: result.recordset.map(r => ({
-        bookingChildID: r.bookingChildID,
-        tableID: Number(r.tableId),
-        tableId: Number(r.tableId), // For compatibility
-        tableNo: r.tableNo,
-        tableName: r.tableName,
-        areaID: r.areaId ? Number(r.areaId) : null,
-        areaId: r.areaId ? Number(r.areaId) : null, // For compatibility
-        areaName: r.areaName || "Dining",
-        status: r.status,
-        notes: r.tableNotes || "",
-        seatedTime: r.seatedTime,
-        vacatedTime: r.vacatedTime
-      }))
-    };
-
-    console.log(`[RESERVATION][${reqId}] Reservation found: ${row.bookingID}, customer: ${customerName}`);
-
-    res.json({ 
-      ok: true, 
-      reservation
-    });
-  } catch (e) {
-    console.error(`[RESERVATION][${reqId}] ERROR:`, e?.message || e);
-    res.status(500).json({ 
-      ok: false, 
-      error: e?.message || "Failed to fetch reservation" 
-    });
-  }
-});
+router.get("/reservation/:bookingId", getReservationByIdController);
 
 /**
  * GET /api/reservation/customers/search

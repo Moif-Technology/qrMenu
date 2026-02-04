@@ -10,6 +10,8 @@ import { getAreas } from "../services/menu.service";
 import { getReservationById, getCustomerHistory } from "../services/reservation.service";
 import FloorMapContainer from "../component/reservation/FloorMapContainer";
 import AutocompleteInput from "../component/reservation/AutocompleteInput";
+import PhoneInputWithCountry from "../component/reservation/PhoneInputWithCountry";
+import { normalizePhoneForInput } from "../utils/phone";
 // Using mock data for now - backend not connected
 // import { createReservation } from "../services/reservation.service";
 import BottomNav from "../component/reservation/BottomNav";
@@ -53,6 +55,7 @@ export default function ReservationFormPage() {
     firstName: prefilledCustomer?.name || "",
     phone: prefilledCustomer?.phone || "",
     email: prefilledCustomer?.email || "",
+    customerId: prefilledCustomer?.id ?? null, // When user selects a customer from dropdown, we update this customer if they change name/phone
     cover: 2, // Party size
     section: "", // Area/Floor selection
     comments: "",
@@ -162,13 +165,13 @@ export default function ReservationFormPage() {
           if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
             // Use tables array from API response
             tablesData = reservation.tables.map(table => ({
-              id: table.tableId || table.tableID || table.id,
-              number: table.tableNo || table.number || table.tableId || table.tableID || table.id,
-              name: table.tableName || table.name || `Table ${table.tableNo || table.tableId || table.id}`,
-              capacity: table.capacity || table.seats || reservation.numberOfGuests || 2,
-              areaId: table.areaId || table.areaID || null
-            }));
-            
+              id: table.tableId ?? table.tableID ?? table.id,
+              number: table.tableNo ?? table.number ?? table.tableId ?? table.tableID ?? table.id,
+              name: table.tableName ?? table.name ?? `Table ${table.tableNo ?? table.number ?? table.tableId ?? table.id}`,
+              capacity: table.capacity ?? table.seats ?? reservation.numberOfGuests ?? 2,
+              areaId: table.areaId ?? table.areaID ?? null
+          }));
+
             // Get area from first table if available
             if (tablesData.length > 0 && tablesData[0].areaId) {
               areaIdFromTables = tablesData[0].areaId;
@@ -209,13 +212,14 @@ export default function ReservationFormPage() {
           // Determine final area ID - prefer from tables, then from reservation object
           const finalAreaId = areaIdFromTables || reservation.areaId || reservation.AreaID || null;
           
-          // Pre-populate form with reservation data
+          // Pre-populate form with reservation data (include customerId so edits update the same customer)
           setFormData(prev => ({
             ...prev,
             firstName: reservation.customerName || reservation.CustomerName || "",
-            phone: reservation.customerPhone || reservation.CustomerPhone || "",
+            phone: normalizePhoneForInput(reservation.customerPhone || reservation.CustomerPhone || "", "ae"),
             email: reservation.customerEmail || reservation.CustomerEmail || "",
-            cover: reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || 2,
+            customerId: reservation.customerID ?? reservation.customerId ?? null,
+            cover: Math.max(1, parseInt(reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || 2, 10) || 2),
             section: finalAreaId ? String(finalAreaId) : "",
             comments: reservation.specialRequests || reservation.SpecialRequests || "",
             reservationDate: reservation.reservationDate || reservation.ReservationDate || selectedDate,
@@ -223,8 +227,8 @@ export default function ReservationFormPage() {
           }));
 
           // Set selected tables if we have table data
-          if (tablesData.length > 0) {
-            setSelectedTables(tablesData);
+            if (tablesData.length > 0) {
+              setSelectedTables(tablesData);
           }
 
           // Set tags if available
@@ -441,12 +445,11 @@ export default function ReservationFormPage() {
     setShowFloorMapModal(false);
   };
 
-  // Validation functions
+  // Validation functions - accept international format (+country + number)
   const validatePhone = (phone) => {
-    if (!phone) return false; // Phone is required in reservation
-    // Must start with 0, then exactly 9 more digits/letters (total 10 characters)
-    const phoneRegex = /^0[a-zA-Z0-9]{9}$/;
-    return phoneRegex.test(phone);
+    if (!phone) return true; // Phone is optional
+    const cleaned = (phone || "").replace(/\D/g, "");
+    return cleaned.length >= 9 && cleaned.length <= 15;
   };
 
   const validateEmail = (email) => {
@@ -459,31 +462,6 @@ export default function ReservationFormPage() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     let processedValue = value;
-    
-    // Phone validation - only allow if starts with 0 and max 11 chars
-    if (name === "phone") {
-      // Remove any non-alphanumeric
-      processedValue = value.replace(/[^0-9a-zA-Z]/g, '');
-      // If doesn't start with 0, force it
-      if (processedValue && !processedValue.startsWith('0')) {
-        processedValue = '0' + processedValue.replace(/^0+/, '');
-      }
-      // Limit to 10 characters (0 + 9)
-      if (processedValue.length > 10) {
-        processedValue = processedValue.substring(0, 10);
-      }
-      
-      // Validate
-      if (processedValue && !validatePhone(processedValue)) {
-        setFieldErrors(prev => ({ ...prev, phone: "Phone must start with 0 and have 9 more digits/letters (10 total)" }));
-      } else {
-        setFieldErrors(prev => {
-          const newErrors = { ...prev };
-          delete newErrors.phone;
-          return newErrors;
-        });
-      }
-    }
     
     // Email validation
     if (name === "email") {
@@ -506,13 +484,14 @@ export default function ReservationFormPage() {
 
   const setField = (name, value) => setFormData((p) => ({ ...p, [name]: value }));
 
-  // Handle customer selection from autocomplete
+  // Handle customer selection from autocomplete — store customerId so we can update this customer if they change name/phone
   const handleCustomerSelect = (customer) => {
     setFormData(prev => ({
       ...prev,
       firstName: customer.name || '',
       phone: customer.phone || '',
-      email: customer.email || ''
+      email: customer.email || '',
+      customerId: customer.id ?? null
     }));
     // Clear any field errors
     setFieldErrors({});
@@ -739,8 +718,12 @@ export default function ReservationFormPage() {
   const handleSubmit = async (e) => {
     e?.preventDefault?.();
 
-    if (!formData.firstName || !formData.phone || !formData.reservationDate || !formData.reservationTime) {
-      setError("Please fill required fields: Name, Phone, Date, Time.");
+    if (!formData.firstName || !formData.reservationDate || !formData.reservationTime) {
+      setError("Please fill required fields: Name, Date, Time.");
+      return;
+    }
+    if (formData.phone && !validatePhone(formData.phone)) {
+      setFieldErrors(prev => ({ ...prev, phone: "Please enter a valid phone number with country code" }));
       return;
     }
 
@@ -790,7 +773,8 @@ export default function ReservationFormPage() {
         hostessId: formData.hostessId ? parseInt(formData.hostessId) : null,
         hostessName: formData.hostessId ? (hostesses.find(h => h.id === formData.hostessId)?.name || null) : null,
         isWalkIn: false,
-        bookingSource: "ONLINE"
+        bookingSource: "ONLINE",
+        customerId: formData.customerId ?? null // If user selected existing customer, backend updates that customer with form name/phone/email
       };
 
       console.log("[RESERVATION_FORM] Sending reservation data:", {
@@ -822,7 +806,8 @@ export default function ReservationFormPage() {
           tableIds: tableIdsArray.length > 0 
             ? (tableIdsArray.length === 1 ? tableIdsArray[0] : tableIdsArray)
             : null,
-          areaId: formData.section ? parseInt(formData.section) : null
+          areaId: formData.section ? parseInt(formData.section) : null,
+          customerId: formData.customerId ?? null // If existing customer selected, backend updates that customer with form name/phone/email
         });
         
         if (result.ok) {
@@ -1237,8 +1222,9 @@ export default function ReservationFormPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (formData.cover > 1) {
-                        setField("cover", formData.cover - 1);
+                      const current = parseInt(formData.cover, 10) || 1;
+                      if (current > 1) {
+                        setField("cover", current - 1);
                       }
                     }}
                     disabled={formData.cover <= 1}
@@ -1289,7 +1275,7 @@ export default function ReservationFormPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setField("cover", formData.cover + 1);
+                      setField("cover", (parseInt(formData.cover, 10) || 1) + 1);
                     }}
                     style={{
                       width: "44px",
@@ -1483,7 +1469,7 @@ export default function ReservationFormPage() {
             <div style={S.card}>
               <div style={S.cardTitleRow}>
                 <h2 style={S.cardTitle}>Guest</h2>
-                <span style={S.cardHint}>Name & phone required</span>
+                <span style={S.cardHint}>Name required</span>
               </div>
 
               {/* ✅ Name | Phone ALWAYS side-by-side with Autocomplete */}
@@ -1515,31 +1501,23 @@ export default function ReservationFormPage() {
 
                 <div>
                   <label style={S.label}>
-                    Phone <span style={{ color: "#ef4444" }}>*</span>
+                    Phone <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 500 }}>(optional)</span>
                   </label>
-                  <AutocompleteInput
+                  <PhoneInputWithCountry
                     value={formData.phone}
-                    onChange={handleChange}
-                    onSelect={handleCustomerSelect}
-                    suggestions={customerHistory}
-                    field="phone"
-                    name="phone"
-                    type="tel"
-                    required
-                    placeholder="05xxxxxxxx (start typing...)"
-                    maxLength={10}
-                    style={{
-                      ...S.input,
-                      borderColor: fieldErrors.phone ? "#ef4444" : "#d1d5db"
+                    onChange={(phone) => {
+                      setFormData(prev => ({ ...prev, phone: phone || "" }));
+                      if (fieldErrors.phone) {
+                        setFieldErrors(prev => {
+                          const next = { ...prev };
+                          delete next.phone;
+                          return next;
+                        });
+                      }
                     }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = fieldErrors.phone ? "#ef4444" : "#C91A4D";
-                      e.currentTarget.style.boxShadow = fieldErrors.phone ? "0 0 0 3px rgba(239, 68, 68, 0.15)" : "0 0 0 3px rgba(201, 26, 77, 0.15)";
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = fieldErrors.phone ? "#ef4444" : "#d1d5db";
-                      e.currentTarget.style.boxShadow = "none";
-                    }}
+                    placeholder="Phone number"
+                    defaultCountry="ae"
+                    hasError={!!fieldErrors.phone}
                   />
                   {fieldErrors.phone && (
                     <div style={{

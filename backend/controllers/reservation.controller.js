@@ -4,6 +4,9 @@ import {
   createReservation,
   getReservationsByTable,
   getAllReservations,
+  getReservationsByDate,
+  getReservationsByDateRange,
+  getReservationById,
   updateReservationStatus
 } from "../services/reservation.service.js";
 
@@ -101,17 +104,55 @@ export async function getReservationsByTableController(req, res) {
 /**
  * GET /api/reservation
  * Get all reservations (with optional query filters)
- * Query params: ?status=PENDING&date=2024-01-01&tableId=5
+ * Query params: 
+ *   - date=2024-01-01 (single date - current day)
+ *   - fromDate=2024-01-01&toDate=2024-01-31 (date range)
+ *   - status=PENDING (optional)
+ *   - tableId=5 (optional)
  */
 export async function getAllReservationsController(req, res) {
   try {
+    const { status, date, fromDate, toDate, tableId } = req.query;
+    
     const filters = {
-      status: req.query?.status,
-      date: req.query?.date,
-      tableId: req.query?.tableId
+      status,
+      date,
+      fromDate,
+      toDate,
+      tableId: tableId ? parseInt(tableId) : undefined
     };
     
+    // Log cancelled filter request
+    if (status && status.toUpperCase() === 'CANCELLED') {
+      console.log("[BACKEND][CANCELLED FILTER] Request received:", {
+        status,
+        date,
+        fromDate,
+        toDate,
+        tableId,
+        url: req.originalUrl,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     const reservations = await getAllReservations(filters);
+    
+    // Log cancelled filter response
+    if (status && status.toUpperCase() === 'CANCELLED') {
+      console.log("[BACKEND][CANCELLED FILTER] Response data:", {
+        totalCount: reservations.length,
+        first5Items: reservations.slice(0, 5).map(r => ({
+          bookingID: r.bookingID,
+          customerName: r.customerName,
+          reservationDate: r.reservationDate,
+          reservationTime: r.reservationTime,
+          status: r.status,
+          bookingStatus: r.bookingStatus
+        })),
+        allStatuses: reservations.map(r => r.status || r.bookingStatus),
+        timestamp: new Date().toISOString()
+      });
+    }
     
     return res.json({
       ok: true,
@@ -131,14 +172,64 @@ export async function getAllReservationsController(req, res) {
 }
 
 /**
- * PATCH /api/reservation/:reservationId/status
+ * GET /api/reservation/:bookingId
+ * Get a single reservation by booking ID
+ */
+export async function getReservationByIdController(req, res) {
+  try {
+    const { bookingId } = req.params;
+    
+    if (!bookingId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Booking ID is required"
+      });
+    }
+    
+    const reservation = await getReservationById(bookingId);
+    
+    if (!reservation) {
+      return res.status(404).json({
+        ok: false,
+        error: "Reservation not found"
+      });
+    }
+    
+    return res.json({
+      ok: true,
+      reservation
+    });
+  } catch (err) {
+    const diag = unwrapSqlError(err);
+    console.error("[RESERVATION] GET by ID ERROR:", diag.message || err);
+    
+    const msg = String(diag.message || "").toLowerCase();
+    const code = msg.includes("required") || msg.includes("not found") ? 400 : 500;
+    
+    return res.status(code).json({
+      ok: false,
+      error: diag.message || "Failed to get reservation",
+      debug: isProd ? undefined : diag
+    });
+  }
+}
+
+/**
+ * PUT /api/reservation/update-status/:bookingId
  * Update reservation status
- * Body: { status: "CONFIRMED" | "CANCELLED" | "COMPLETED" | "NO_SHOW" }
+ * Body: { status: "BOOKED" | "CONFIRMED" | "CANCELLED" | "ARRIVED" | "SEATED" | "NO_SHOW" | etc. }
  */
 export async function updateReservationStatusController(req, res) {
   try {
-    const { reservationId } = req.params;
+    const { bookingId } = req.params;
     const { status } = req.body;
+    
+    if (!bookingId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Booking ID is required"
+      });
+    }
     
     if (!status) {
       return res.status(400).json({
@@ -147,7 +238,7 @@ export async function updateReservationStatusController(req, res) {
       });
     }
     
-    const result = await updateReservationStatus(reservationId, status);
+    const result = await updateReservationStatus(bookingId, status);
     
     return res.json(result);
   } catch (err) {

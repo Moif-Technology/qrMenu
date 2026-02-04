@@ -7,7 +7,6 @@ import { getMockReservations, updateMockReservationStatus } from "../services/re
 import BottomNav from "../component/reservation/BottomNav";
 import { 
   Utensils, 
-  Sun, 
   Moon, 
   Clock,
   ListFilter,
@@ -42,40 +41,40 @@ export default function ReservationListPage() {
     : (Array.isArray(storeReservations) ? storeReservations : []);
 
   const [filter, setFilter] = useState('all');
-  const [selectedPeriod, setSelectedPeriod] = useState("all"); // all, lunch, sunset, dinner
+  const [selectedPeriod, setSelectedPeriod] = useState("all"); // all, lunch, dinner (same as report)
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [processingId, setProcessingId] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [tempDate, setTempDate] = useState(selectedDate);
 
-  // Time period definitions (Industry Standard)
+  // Same as report: Lunch 8 AM–6 PM, Dinner 6 PM onwards or before 8 AM
+  const getTimeCategory = (timeString) => {
+    if (!timeString) return null;
+    try {
+      const timeParts = String(timeString).split(":");
+      const hour24 = parseInt(timeParts[0], 10);
+      if (isNaN(hour24)) return null;
+      if (hour24 >= 8 && hour24 < 18) return "lunch";
+      return "dinner"; // 18+ or < 8
+    } catch (e) {
+      return null;
+    }
+  };
+
   const timePeriods = {
     all: {
       label: "All Day",
-      start: 0,
-      end: 24,
       icon: <Clock className="w-6 h-6" />,
       color: "#6366f1"
     },
     lunch: { 
       label: "Lunch", 
-      start: 11, 
-      end: 15, 
       icon: <Utensils className="w-6 h-6" />, 
       color: "#F59E0B" 
     },
-    sunset: { 
-      label: "Sunset", 
-      start: 15, 
-      end: 18, 
-      icon: <Sun className="w-6 h-6" />, 
-      color: "#F97316" 
-    },
     dinner: { 
       label: "Dinner", 
-      start: 18, 
-      end: 24, 
       icon: <Moon className="w-6 h-6" />, 
       color: "#A855F7" 
     }
@@ -142,15 +141,12 @@ export default function ReservationListPage() {
     
     const now = new Date();
     
-    // Filter by meal period first
+    // Filter by meal period (all / lunch / dinner, same as report)
     let periodFiltered = allReservations;
-    if (selectedPeriod !== 'all') {
-      const period = timePeriods[selectedPeriod];
+    if (selectedPeriod !== "all") {
       periodFiltered = allReservations.filter(res => {
-        if (!res.reservationTime) return false;
-        const [hours] = res.reservationTime.split(":");
-        const hour = parseInt(hours);
-        return hour >= period.start && hour < period.end;
+        const category = getTimeCategory(res.reservationTime || res.ReservationTime);
+        return category === selectedPeriod;
       });
     }
     
@@ -200,13 +196,10 @@ export default function ReservationListPage() {
       const status = (r.status || '').toUpperCase();
       if (status === 'LEFT') return false;
 
-      // Meal period filter (Industry Standard: filter by time first)
-      if (selectedPeriod !== 'all') {
-        const period = timePeriods[selectedPeriod];
-        if (!r.reservationTime) return false;
-        const [hours] = r.reservationTime.split(":");
-        const hour = parseInt(hours);
-        if (hour < period.start || hour >= period.end) return false;
+      // Meal period filter (all / lunch / dinner, same as report)
+      if (selectedPeriod !== "all") {
+        const category = getTimeCategory(r.reservationTime || r.ReservationTime);
+        if (category !== selectedPeriod) return false;
       }
 
       // Search filter
@@ -692,16 +685,13 @@ export default function ReservationListPage() {
                 marginLeft: "2px"
               }}>
                 {(() => {
-                  // Calculate count for this specific period
-                  if (key === 'all') return allReservations.filter(r => (r.status || '').toUpperCase() !== 'LEFT').length;
-                  const period = timePeriods[key];
+                  if (key === "all") {
+                    return allReservations.filter(r => (r.status || '').toUpperCase() !== 'LEFT').length;
+                  }
                   return allReservations.filter(res => {
                     const status = (res.status || '').toUpperCase();
                     if (status === 'LEFT') return false;
-                    if (!res.reservationTime) return false;
-                    const [hours] = res.reservationTime.split(":");
-                    const hour = parseInt(hours);
-                    return hour >= period.start && hour < period.end;
+                    return getTimeCategory(res.reservationTime || res.ReservationTime) === key;
                   }).length;
                 })()}
               </span>

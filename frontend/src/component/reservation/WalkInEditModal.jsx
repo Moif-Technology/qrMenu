@@ -5,6 +5,8 @@ import { getAreas } from "../../services/menu.service";
 import { getTablesByArea } from "../../services/table.service";
 import { getFloorLayoutByArea } from "../../services/floorLayout.service";
 import FloorMapContainer from "./FloorMapContainer";
+import PhoneInputWithCountry from "./PhoneInputWithCountry";
+import { normalizePhoneForInput } from "../../utils/phone";
 
 export default function WalkInEditModal({ 
   reservation, 
@@ -56,12 +58,13 @@ export default function WalkInEditModal({
       if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
         // Use tables array from API response
         tablesData = reservation.tables.map(table => {
-          const tableAreaId = table.areaId || table.areaID || table.AreaID || null;
+          const tableAreaId = table.areaId ?? table.areaID ?? table.AreaID ?? null;
+          const displayNum = table.tableNo ?? table.number ?? table.tableId ?? table.tableID ?? table.id;
           return {
-            id: table.tableId || table.tableID || table.id,
-            number: table.tableNo || table.number || table.tableId || table.tableID || table.id,
-            name: table.tableName || table.name || `Table ${table.tableNo || table.tableId || table.id}`,
-            capacity: table.capacity || table.seats || reservation.numberOfGuests || 2,
+            id: table.tableId ?? table.tableID ?? table.id,
+            number: displayNum,
+            name: table.tableName ?? table.name ?? `Table ${displayNum}`,
+            capacity: table.capacity ?? table.seats ?? reservation.numberOfGuests ?? 2,
             areaId: tableAreaId
           };
         });
@@ -72,8 +75,8 @@ export default function WalkInEditModal({
         }
       } else {
         // Fallback: handle single table fields (legacy format)
-        const tableId = reservation.tableId || reservation.TableID || null;
-        const tableInfo = reservation.tableInfo || reservation.TableInfo || reservation.tableName || reservation.TableName || null;
+      const tableId = reservation.tableId || reservation.TableID || null;
+      const tableInfo = reservation.tableInfo || reservation.TableInfo || reservation.tableName || reservation.TableName || null;
         
         if (tableId) {
           const singleTableAreaId = reservation.areaId || reservation.AreaID || null;
@@ -123,8 +126,8 @@ export default function WalkInEditModal({
       
       setFormData({
         guestName: reservation.customerName || reservation.CustomerName || "",
-        phone: reservation.customerPhone || reservation.CustomerPhone || "",
-        partySize: reservation.numberOfGuests || reservation.NumberOfGuests || 2,
+        phone: normalizePhoneForInput(reservation.customerPhone || reservation.CustomerPhone || "", "ae"),
+        partySize: Math.max(1, parseInt(reservation.numberOfGuests || reservation.NumberOfGuests || 2, 10) || 2),
         notes: reservation.specialRequests || reservation.SpecialRequests || "",
         hostessId: (hostessIdValue != null && hostessIdValue !== '') ? parseInt(hostessIdValue) : null,
         areaId: validAreaId
@@ -208,15 +211,15 @@ export default function WalkInEditModal({
         } catch (layoutErr) {
           console.warn("[WALKIN_EDIT] Failed to load floor layout:", layoutErr);
           setFloorLayout(null); // Continue without layout if it fails
-        }
+      }
       } catch (err) {
         console.error("[WALKIN_EDIT] Failed to load floor map:", err);
         setFloorLayout(null);
-        setDisplayTables([]);
+      setDisplayTables([]);
       } finally {
         setLoadingFloorMap(false);
-      }
-    };
+    }
+  };
 
     loadFloorMap();
   }, [formData.areaId]);
@@ -284,8 +287,8 @@ export default function WalkInEditModal({
 
     // Tables and layout should already be loaded by useEffect when area is selected
     // Just set temp selection and show modal
-    setTempSelectedTables([...selectedTables]);
-    setShowFloorMapModal(true);
+      setTempSelectedTables([...selectedTables]);
+      setShowFloorMapModal(true);
   };
 
   // Confirm table selection
@@ -312,8 +315,8 @@ export default function WalkInEditModal({
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!formData.guestName || !formData.phone) {
-      setError("Name and Phone are required");
+    if (!formData.guestName || !formData.guestName.trim()) {
+      setError("Name is required");
       return;
     }
 
@@ -495,33 +498,13 @@ export default function WalkInEditModal({
               fontSize: "14px",
               color: "#374151"
             }}>
-              Phone <span style={{ color: "#ef4444" }}>*</span>
+              Phone <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 500 }}>(optional)</span>
             </label>
-            <input
-              type="tel"
-              name="phone"
+            <PhoneInputWithCountry
               value={formData.phone}
-              onChange={handleChange}
-              required
-              maxLength={10}
-              style={{
-                width: "100%",
-                padding: "12px",
-                borderRadius: "10px",
-                border: "1px solid #d1d5db",
-                fontSize: "15px",
-                outline: "none",
-                boxSizing: "border-box",
-                fontFamily: "inherit"
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.borderColor = "#C91A4D";
-                e.currentTarget.style.boxShadow = "0 0 0 3px rgba(201, 26, 77, 0.15)";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = "#d1d5db";
-                e.currentTarget.style.boxShadow = "none";
-              }}
+              onChange={(phone) => setFormData(prev => ({ ...prev, phone: phone || "" }))}
+              placeholder="Phone number"
+              defaultCountry="ae"
             />
           </div>
 
@@ -549,8 +532,9 @@ export default function WalkInEditModal({
               <button
                 type="button"
                 onClick={() => {
-                  if (formData.partySize > 1) {
-                    setFormData(prev => ({ ...prev, partySize: prev.partySize - 1 }));
+                  const current = parseInt(formData.partySize, 10) || 1;
+                  if (current > 1) {
+                    setFormData(prev => ({ ...prev, partySize: (parseInt(prev.partySize, 10) || 1) - 1 }));
                   }
                 }}
                 disabled={formData.partySize <= 1}
@@ -585,7 +569,7 @@ export default function WalkInEditModal({
               <button
                 type="button"
                 onClick={() => {
-                  setFormData(prev => ({ ...prev, partySize: prev.partySize + 1 }));
+                  setFormData(prev => ({ ...prev, partySize: (parseInt(prev.partySize, 10) || 1) + 1 }));
                 }}
                 style={{
                   width: "40px",
@@ -653,8 +637,8 @@ export default function WalkInEditModal({
                 const areaIdValue = String(area.areaId || area.AreaID);
                 return (
                   <option key={areaIdValue} value={areaIdValue}>
-                    {area.areaName || area.AreaName}
-                  </option>
+                  {area.areaName || area.AreaName}
+                </option>
                 );
               })}
             </select>
@@ -662,20 +646,20 @@ export default function WalkInEditModal({
 
           {/* Selected Tables Display */}
           {selectedTables.length > 0 && (
-            <div>
-              <label style={{ 
-                display: "block", 
-                marginBottom: "8px", 
-                fontWeight: "700",
-                fontSize: "14px",
-                color: "#374151"
-              }}>
+          <div>
+            <label style={{
+              display: "block",
+              marginBottom: "8px",
+              fontWeight: "700",
+              fontSize: "14px",
+              color: "#374151"
+            }}>
                 Selected Tables
-              </label>
-              <div style={{
-                display: "flex",
+            </label>
+            <div style={{
+              display: "flex",
                 flexWrap: "wrap",
-                gap: "8px",
+              gap: "8px",
                 padding: "12px",
                 background: "#f9fafb",
                 borderRadius: "12px",
@@ -687,7 +671,7 @@ export default function WalkInEditModal({
                     key={`selected-table-${table.id}-${idx}`}
                     style={{
                       display: "inline-flex",
-                      alignItems: "center",
+                alignItems: "center",
                       gap: "6px",
                       padding: "8px 14px",
                       background: "linear-gradient(135deg, #7A0026, #C91A4D)",
@@ -711,7 +695,7 @@ export default function WalkInEditModal({
                         ({table.capacity} seats)
                       </span>
                     )}
-                  </div>
+              </div>
                 ))}
               </div>
             </div>
@@ -728,40 +712,40 @@ export default function WalkInEditModal({
             }}>
               Table Assignment
             </label>
-            <button
-              type="button"
-              onClick={handleOpenFloorMap}
-              disabled={!formData.areaId || loadingFloorMap}
-              style={{
+              <button
+                type="button"
+                onClick={handleOpenFloorMap}
+                disabled={!formData.areaId || loadingFloorMap}
+                style={{
                 width: "100%",
                 padding: "14px 16px",
-                background: !formData.areaId || loadingFloorMap 
-                  ? "#e5e7eb" 
-                  : "linear-gradient(135deg, #7A0026, #C91A4D)",
-                color: !formData.areaId || loadingFloorMap ? "#9ca3af" : "#fff",
-                border: "none",
+                  background: !formData.areaId || loadingFloorMap 
+                    ? "#e5e7eb" 
+                    : "linear-gradient(135deg, #7A0026, #C91A4D)",
+                  color: !formData.areaId || loadingFloorMap ? "#9ca3af" : "#fff",
+                  border: "none",
                 borderRadius: "12px",
                 fontSize: "15px",
-                fontWeight: "700",
-                cursor: !formData.areaId || loadingFloorMap ? "not-allowed" : "pointer",
-                transition: "all 0.2s",
+                  fontWeight: "700",
+                  cursor: !formData.areaId || loadingFloorMap ? "not-allowed" : "pointer",
+                  transition: "all 0.2s",
                 boxShadow: !formData.areaId || loadingFloorMap ? "none" : "0 2px 8px rgba(201, 26, 77, 0.3)"
-              }}
-              onMouseEnter={(e) => {
-                if (formData.areaId && !loadingFloorMap) {
-                  e.currentTarget.style.transform = "translateY(-1px)";
-                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (formData.areaId && !loadingFloorMap) {
-                  e.currentTarget.style.transform = "translateY(0)";
+                }}
+                onMouseEnter={(e) => {
+                  if (formData.areaId && !loadingFloorMap) {
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(201, 26, 77, 0.3)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (formData.areaId && !loadingFloorMap) {
+                    e.currentTarget.style.transform = "translateY(0)";
                   e.currentTarget.style.boxShadow = "0 2px 8px rgba(201, 26, 77, 0.3)";
-                }
-              }}
-            >
+                  }
+                }}
+              >
               {loadingFloorMap ? "Loading Tables..." : selectedTables.length > 0 ? "Change Tables" : "Select Tables"}
-            </button>
+              </button>
             {!formData.areaId && (
               <div style={{
                 marginTop: "8px",

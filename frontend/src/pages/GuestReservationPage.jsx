@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { getAreas } from "../services/menu.service";
 import { createGuestReservation } from "../services/reservation.service";
+import PhoneInputWithCountry from "../component/reservation/PhoneInputWithCountry";
 
 export default function GuestReservationPage() {
   const navigate = useNavigate();
@@ -132,7 +133,7 @@ export default function GuestReservationPage() {
     if (!formData.partySize || Number(formData.partySize) < 1) return t("reservation.errors.guests");
     if (!formData.areaId) return t("reservation.errors.area");
     if (!formData.guestName.trim()) return t("reservation.errors.name");
-    if (!formData.phone.trim()) return t("reservation.errors.phone");
+    // Phone is optional - some guests prefer not to share
     return "";
   };
 
@@ -355,9 +356,13 @@ export default function GuestReservationPage() {
                     {isAr ? "معلومات مهمة" : "Important Info"}
                   </p>
                   <p className="text-sm font-semibold text-blue-800 leading-relaxed">
-                    {isAr 
-                      ? "سيتم الاتصال بك على رقم " + confirmationData.phone + " لتأكيد حجزك وترتيبات الطاولة."
-                      : "We'll call you at " + confirmationData.phone + " to confirm your booking and table arrangements."}
+                    {confirmationData.phone 
+                      ? (isAr 
+                          ? "سيتم الاتصال بك على رقم " + confirmationData.phone + " لتأكيد حجزك وترتيبات الطاولة."
+                          : "We'll call you at " + confirmationData.phone + " to confirm your booking and table arrangements.")
+                      : (isAr 
+                          ? "سيتم تأكيد حجزك وترتيبات الطاولة."
+                          : "Your booking and table arrangements will be confirmed.")}
                   </p>
                 </div>
               </div>
@@ -598,15 +603,13 @@ export default function GuestReservationPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-extrabold text-gray-600 mb-1">{t("reservation.phone")} *</label>
-                <input
-                  dir="ltr"
-                  inputMode="tel"
-                  type="tel"
+                <label className="block text-xs font-extrabold text-gray-600 mb-1">{t("reservation.phone")} <span className="text-gray-400 font-normal">(optional)</span></label>
+                <PhoneInputWithCountry
                   value={formData.phone}
-                  onChange={(e) => setField("phone", e.target.value)}
-                  placeholder="05xxxxxxxx"
-                  className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 font-semibold focus:outline-none focus:ring-4 focus:ring-[var(--text-accent)]/15 focus:border-[var(--text-accent)]"
+                  onChange={(phone) => setField("phone", phone || "")}
+                  placeholder={isAr ? "رقم الهاتف" : "Phone number"}
+                  defaultCountry="ae"
+                  style={{ width: "100%" }}
                 />
               </div>
 

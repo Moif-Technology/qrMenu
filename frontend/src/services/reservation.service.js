@@ -49,17 +49,30 @@ export async function getReservationsByTable(tableId) {
 
 /**
  * Get all reservations with optional filters
+ * Supports both single date and date range queries
  * @param {Object} [filters] - Optional filters
  * @param {string} [filters.status] - Filter by status (PENDING, CONFIRMED, CANCELLED, etc.)
- * @param {string} [filters.date] - Filter by date (YYYY-MM-DD)
+ * @param {string} [filters.date] - Filter by single date (YYYY-MM-DD) - for current day query
+ * @param {string} [filters.fromDate] - Start date for date range query (YYYY-MM-DD)
+ * @param {string} [filters.toDate] - End date for date range query (YYYY-MM-DD)
  * @param {number|string} [filters.tableId] - Filter by table ID
  * @returns {Promise<Object>} All reservations matching filters
  */
 export async function getAllReservations(filters = {}) {
   try {
     const params = new URLSearchParams();
+    
+    // Support both single date and date range
+    if (filters.fromDate && filters.toDate) {
+      // Date range query
+      params.append("fromDate", filters.fromDate);
+      params.append("toDate", filters.toDate);
+    } else if (filters.date) {
+      // Single date query
+      params.append("date", filters.date);
+    }
+    
     if (filters.status) params.append("status", filters.status);
-    if (filters.date) params.append("date", filters.date);
     if (filters.tableId) params.append("tableId", filters.tableId);
     
     // Add cache-busting timestamp to ensure fresh data (same as getReservationById)

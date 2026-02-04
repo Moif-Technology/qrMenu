@@ -1,34 +1,39 @@
 // frontend/src/pages/ReportsPage.jsx
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
-import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
+// Backend fetch imports - will be added back after cleanup
+// import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
+// import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
 import BottomNav from "../component/reservation/BottomNav";
-import {
-  ArrowLeft,
-  Home,
-  Search,
-  ListFilter,
-  Clock,
-  Globe,
-  CheckCircle2,
-  Hand,
-  Armchair,
-  LogOut,
-  XCircle,
-  UserX,
-  Phone,
-  Users,
+import { 
+  ArrowLeft, 
+  Home, 
+  Search, 
+  ListFilter, 
+  Clock, 
+  Globe, 
+  CheckCircle2, 
+  Hand, 
+  Armchair, 
+  LogOut, 
+  XCircle, 
+  UserX, 
+  Phone, 
+  Users, 
   Hash,
   ChevronRight,
   Loader2,
   Calendar,
   CalendarRange,
   UserRound,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Sun,
+  Moon,
 } from "lucide-react";
 
-// Toggle this to use mock data instead of API
-const USE_MOCK_DATA = false;
+// Mock data removed - using backend API only
 
 // tiny className helper (no external deps)
 const cn = (...classes) => classes.filter(Boolean).join(" ");
@@ -46,6 +51,8 @@ export default function ReportsPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [groupBy, setGroupBy] = useState("none"); // none, hour, day
+  const [sortBy, setSortBy] = useState("time"); // time, date, name
+  const [sortOrder, setSortOrder] = useState("asc"); // asc, desc
 
   const [reservations, setReservations] = useState([]);
   const [allReservations, setAllReservations] = useState([]); // Store all reservations for counting
@@ -92,6 +99,14 @@ export default function ReportsPage() {
     return "Unassigned";
   };
 
+  // Single source of truth for effective status calculation
+  // Child status (BookingChild.Status) always wins over master status (BookingMaster.BookingStatus)
+  const getEffectiveStatus = (res) => {
+    const childStatus = (res.status || res.Status || "").toUpperCase().trim();
+    const masterStatus = (res.bookingStatus || res.BookingStatus || "").toUpperCase().trim();
+    return childStatus || masterStatus; // child always wins
+  };
+
   const getStatusChip = (status) => {
     const s = (status || "").toUpperCase();
     const map = {
@@ -109,190 +124,133 @@ export default function ReportsPage() {
   };
 
   // ===== data loader =====
-  const loadReservations = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      let data = [];
-
-      if (dateMode === "single") {
-        if (USE_MOCK_DATA) {
-          data = getMockReservations({ date: selectedDate });
-          data = data.reservations || [];
-        } else {
-          data = await getAllReservations({ date: selectedDate });
-          data = Array.isArray(data) ? data : data?.reservations || [];
-        }
-      } else {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        const allData = [];
-
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-          const dateStr = d.toISOString().split("T")[0];
-          try {
-            let dayData;
-            if (USE_MOCK_DATA) {
-              dayData = getMockReservations({ date: dateStr });
-              dayData = dayData.reservations || [];
-            } else {
-              dayData = await getAllReservations({ date: dateStr });
-              dayData = Array.isArray(dayData) ? dayData : dayData?.reservations || [];
-            }
-            allData.push(...dayData);
-          } catch (err) {
-            console.error(`Failed to load data for ${dateStr}:`, err);
-          }
-        }
-        data = allData;
-      }
-
-      if (!Array.isArray(data)) data = [];
-
-      let filtered = data;
-      setAllReservations(filtered);
-
-      // Filter by status/source
-      if (statusFilter !== "all") {
-        const now = new Date();
-
-        filtered = filtered.filter((res) => {
-          const status = (res.status || res.Status || "").toUpperCase();
-          const resDate = res.reservationDate || res.ReservationDate;
-          const resTime = res.reservationTime || res.ReservationTime;
-
-          if (statusFilter === "upcoming") {
-            if (!resDate || !resTime) return false;
-            const resDateTime = new Date(`${resDate}T${resTime}`);
-            const isToday = resDate === new Date().toISOString().split("T")[0];
-
-            if (isToday) {
-              return resDateTime > now && status !== "CANCELLED" && status !== "NO_SHOW" && status !== "LEFT";
-            }
-            return status !== "CANCELLED" && status !== "NO_SHOW" && status !== "LEFT";
-          }
-
-          if (statusFilter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
-          if (statusFilter === "no-show") return status === "NO_SHOW";
-          if (statusFilter === "left") return status === "LEFT";
-
-          if (statusFilter === "online") {
-            return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
-          }
-
-          if (statusFilter === "walkins") {
-            return isWalkIn(res);
-          }
-
-          return status === statusFilter.toUpperCase();
-        });
-      }
-
-      // Sort by time
-      filtered.sort((a, b) => {
-        const ta = a.reservationTime || a.ReservationTime;
-        const tb = b.reservationTime || b.ReservationTime;
-        if (!ta || !tb) return 0;
-        return ta.localeCompare(tb);
-      });
-
-      setReservations(filtered);
-    } catch (err) {
-      console.error("Failed to load reservations:", err);
-      setError("Failed to load reservations");
-      setReservations([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [dateMode, selectedDate, startDate, endDate, statusFilter]);
-
+  // REMOVED: All fetch logic - will be rebuilt step by step
+  // const loadReservations = useCallback(async () => {
+  //   // Fetch logic removed - will be added back step by step
+  // }, []);
+  
   // counts for badges
-  const getStatusCount = useCallback(
-    (filter) => {
-      if (!Array.isArray(allReservations)) return 0;
-      const now = new Date();
-
-      if (filter === "all") return allReservations.length;
-
-      return allReservations.filter((res) => {
-        const status = (res.status || res.Status || "").toUpperCase();
-        const resDate = res.reservationDate || res.ReservationDate;
-        const resTime = res.reservationTime || res.ReservationTime;
-
-        if (filter === "upcoming") {
-          if (!resDate || !resTime) return false;
-          const resDateTime = new Date(`${resDate}T${resTime}`);
-          const isToday = resDate === new Date().toISOString().split("T")[0];
-          if (isToday) return resDateTime > now && status !== "CANCELLED" && status !== "NO_SHOW" && status !== "LEFT";
-          return status !== "CANCELLED" && status !== "NO_SHOW" && status !== "LEFT";
+  const getStatusCount = useCallback((filter) => {
+    if (!Array.isArray(allReservations)) return 0;
+    if (filter === "all") return allReservations.length;
+    
+    const now = new Date();
+    
+    return allReservations.filter((res) => {
+      const status = getEffectiveStatus(res);
+      const resDate = res.reservationDate || res.ReservationDate;
+      const resTime = res.reservationTime || res.ReservationTime;
+      
+      if (filter === "upcoming") {
+        if (!resDate || !resTime) return false;
+        const resDateTime = new Date(`${resDate}T${resTime}`);
+        const isToday = resDate === new Date().toISOString().split("T")[0];
+        if (isToday) {
+          return resDateTime > now && status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
         }
-
-        if (filter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
-        if (filter === "no-show") return status === "NO_SHOW";
-        if (filter === "left") return status === "LEFT";
-        if (filter === "online") return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
-        if (filter === "walkins") return isWalkIn(res);
-
-        return status === filter.toUpperCase();
-      }).length;
-    },
-    [allReservations]
-  );
+        return status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+      }
+      
+      if (filter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
+      if (filter === "no-show") return status === "NO_SHOW";
+      if (filter === "left") return status === "LEFT";
+      if (filter === "online") return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+      if (filter === "walkins") return isWalkIn(res);
+      if (filter === "confirmed") return status === "CONFIRMED" || status === "" || !status;
+      if (filter === "arrived") return status === "ARRIVED";
+      if (filter === "seated") return status === "SEATED";
+      
+      return status === filter.toUpperCase();
+    }).length;
+  }, [allReservations]);
 
   // ===== effects =====
+  // Clear reservations immediately when filter changes (before fetch)
   useEffect(() => {
-    loadReservations();
-  }, [loadReservations]);
-
+    setReservations([]);
+  }, [statusFilter]);
+  
+  // Fetch reservations when filters or dates change
   useEffect(() => {
-    const isNavigatingToReports =
-      prevLocationRef.current !== location.pathname && location.pathname === "/reports";
-
-    if (isNavigatingToReports) {
-      loadReservations();
-
-      const timeout1 = setTimeout(() => loadReservations(), 500);
-      const timeout2 = setTimeout(() => loadReservations(), 1500);
-
-      return () => {
-        clearTimeout(timeout1);
-        clearTimeout(timeout2);
-      };
-    }
-
-    prevLocationRef.current = location.pathname;
-  }, [location.pathname, loadReservations]);
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        loadReservations();
-        const delayedRefresh = setTimeout(() => loadReservations(), 1000);
-        return () => clearTimeout(delayedRefresh);
+    const fetchReservations = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const { getAllReservations } = await import("../services/reservation.service");
+        
+        // Determine if this is a backend-filtered status
+        const backendFilteredStatuses = ["cancelled", "no-show", "left", "confirmed", "arrived", "seated"];
+        const isBackendFiltered = statusFilter !== "all" && backendFilteredStatuses.includes(statusFilter);
+        
+        // Build filters based on date mode
+        const baseFilters = dateMode === "single" 
+          ? { date: selectedDate }
+          : { fromDate: startDate, toDate: endDate };
+        
+        // If backend-filtered, add status to API call
+        if (isBackendFiltered) {
+          const filters = { ...baseFilters, status: statusFilter.toUpperCase() };
+          const response = await getAllReservations(filters);
+          const data = Array.isArray(response) ? response : response?.reservations || [];
+          setReservations(data);
+          
+          // Also fetch all data for badge counts (without status filter)
+          const allResponse = await getAllReservations(baseFilters);
+          const allData = Array.isArray(allResponse) ? allResponse : allResponse?.reservations || [];
+          setAllReservations(allData);
+        } else {
+          // Frontend-filtered (all, upcoming, online, walkins) - fetch all data
+          const response = await getAllReservations(baseFilters);
+          const data = Array.isArray(response) ? response : response?.reservations || [];
+          setReservations(data);
+          setAllReservations(data); // Same data for badge counts
+        }
+      } catch (err) {
+        console.error("Failed to load reservations:", err);
+        setError("Failed to load reservations");
+        setReservations([]);
+        setAllReservations([]);
+      } finally {
+        setLoading(false);
       }
     };
-
-    const handleFocus = () => {
-      loadReservations();
-      setTimeout(() => loadReservations(), 1000);
-    };
-
-    const initialTimeout = !document.hidden ? setTimeout(() => loadReservations(), 100) : null;
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      if (initialTimeout) clearTimeout(initialTimeout);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, [loadReservations]);
+    
+    fetchReservations();
+  }, [statusFilter, dateMode, selectedDate, startDate, endDate]);
+  
+  // Scroll to top when filter or sort changes
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [statusFilter, sortBy, sortOrder]);
 
   // ===== stats =====
   const safeReservations = Array.isArray(reservations) ? reservations : [];
   const safeAllReservations = Array.isArray(allReservations) ? allReservations : [];
-
+  
+  // Helper to parse time and determine if it's lunch (8 AM - 6 PM) or dinner (after 6 PM)
+  const getTimeCategory = (timeString) => {
+    if (!timeString) return null;
+    try {
+      // Handle different time formats (HH:mm, HH:mm:ss, etc.)
+      const timeParts = timeString.split(":");
+      const hour24 = parseInt(timeParts[0], 10);
+      
+      if (isNaN(hour24)) return null;
+      
+      // Lunch: 8 AM (08:00) to 6 PM (18:00) - inclusive of 8 AM, exclusive of 6 PM
+      // Dinner: 6 PM (18:00) onwards OR before 8 AM (late night/early morning)
+      if (hour24 >= 8 && hour24 < 18) {
+        return "lunch";
+      } else if (hour24 >= 18 || hour24 < 8) {
+        return "dinner";
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  };
+  
   const stats = {
     total: safeReservations.length,
     totalGuests: safeReservations.reduce((sum, r) => {
@@ -309,116 +267,61 @@ export default function ReportsPage() {
       return sum;
     }, 0),
     walkInCount: safeAllReservations.filter((r) => isWalkIn(r)).length,
+    // Lunch reservations (8 AM to 6 PM)
+    lunchReservations: safeAllReservations.filter((r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      return getTimeCategory(time) === "lunch";
+    }).length,
+    lunchGuests: safeAllReservations.reduce((sum, r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      if (getTimeCategory(time) === "lunch") {
+        const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+        return sum + (isNaN(guests) ? 0 : guests);
+      }
+      return sum;
+    }, 0),
+    // Dinner reservations (after 6 PM)
+    dinnerReservations: safeAllReservations.filter((r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      return getTimeCategory(time) === "dinner";
+    }).length,
+    dinnerGuests: safeAllReservations.reduce((sum, r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      if (getTimeCategory(time) === "dinner") {
+        const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+        return sum + (isNaN(guests) ? 0 : guests);
+      }
+      return sum;
+    }, 0),
   };
 
   // ===== actions =====
+  // REMOVED: All status update functions - will be added back step by step
   const handleMarkArrived = async (reservation) => {
-    const reservationId = reservation.reservationId || reservation.bookingID || reservation.ReservationID;
-    if (!reservationId) return alert("Reservation ID not found");
-    if (!confirm("Mark this reservation as ARRIVED?")) return;
-
-    setProcessingId(reservationId);
-    try {
-      if (USE_MOCK_DATA) {
-        updateMockReservationStatus(reservationId, "ARRIVED");
-      } else {
-        const result = await updateReservationStatus(reservationId, "ARRIVED");
-        if (!result.ok) throw new Error(result.error || "Failed to update status");
-      }
-
-      setReservations((prev) => {
-        const current = Array.isArray(prev) ? prev : [];
-        return current.map((r) => {
-          const rId = r.reservationId || r.bookingID || r.ReservationID;
-          return rId === reservationId ? { ...r, status: "ARRIVED" } : r;
-        });
-      });
-
-      await loadReservations();
-    } catch (err) {
-      const errorMsg = err?.response?.data?.error || err?.message || "Please try again.";
-      alert(`Failed to mark as arrived: ${errorMsg}`);
-    } finally {
-      setProcessingId(null);
-    }
+    alert("Functionality removed - will be rebuilt");
   };
 
   const handleSeat = async (reservation) => {
-    const reservationId = reservation.reservationId || reservation.bookingID || reservation.ReservationID;
-    if (!reservationId) return alert("Reservation ID not found");
-
     if (!reservation.tableId && !reservation.TableID) {
       if (confirm("No table assigned. Would you like to assign a table now?")) {
-        navigate(`/table-action/select?reservationId=${reservationId}`);
+        navigate(`/table-action/select?reservationId=${reservation.reservationId || reservation.bookingID}`);
       }
       return;
     }
-
-    if (!confirm("Mark this reservation as SEATED?")) return;
-
-    setProcessingId(reservationId);
-    try {
-      if (USE_MOCK_DATA) {
-        updateMockReservationStatus(reservationId, "SEATED");
-      } else {
-        const result = await updateReservationStatus(reservationId, "SEATED");
-        if (!result.ok) throw new Error(result.error || "Failed to update status");
-      }
-
-      setReservations((prev) => {
-        const current = Array.isArray(prev) ? prev : [];
-        return current.map((r) => {
-          const rId = r.reservationId || r.bookingID || r.ReservationID;
-          return rId === reservationId ? { ...r, status: "SEATED" } : r;
-        });
-      });
-
-      await loadReservations();
-    } catch (err) {
-      const errorMsg = err?.response?.data?.error || err?.message || "Please try again.";
-      alert(`Failed to seat reservation: ${errorMsg}`);
-    } finally {
-      setProcessingId(null);
-    }
+    alert("Functionality removed - will be rebuilt");
   };
 
   const handleMarkLeft = async (reservation) => {
-    const reservationId = reservation.reservationId || reservation.bookingID || reservation.ReservationID;
-    if (!reservationId) return alert("Reservation ID not found");
-    if (!confirm("Mark this reservation as LEFT?")) return;
-
-    setProcessingId(reservationId);
-    try {
-      if (USE_MOCK_DATA) {
-        updateMockReservationStatus(reservationId, "LEFT");
-      } else {
-        const result = await updateReservationStatus(reservationId, "LEFT");
-        if (!result.ok) throw new Error(result.error || "Failed to update status");
-      }
-
-      setReservations((prev) => {
-        const current = Array.isArray(prev) ? prev : [];
-        return current.map((r) => {
-          const rId = r.reservationId || r.bookingID || r.ReservationID;
-          return rId === reservationId ? { ...r, status: "LEFT" } : r;
-        });
-      });
-
-      await loadReservations();
-    } catch (err) {
-      const errorMsg = err?.response?.data?.error || err?.message || "Please try again.";
-      alert(`Failed to mark as left: ${errorMsg}`);
-    } finally {
-      setProcessingId(null);
-    }
+    alert("Functionality removed - will be rebuilt");
   };
 
   // ===== card renderer =====
   const renderReservationCard = (reservation, index) => {
     const reservationId = reservation.reservationId || reservation.bookingID || reservation.ReservationID || reservation.ReservationID;
-    const status = (reservation.status || reservation.Status || "").toUpperCase();
+    // Use single source of truth for status
+    const status = getEffectiveStatus(reservation);
     const isProcessing = processingId === reservationId;
-
+    
     const chip = getStatusChip(status);
     const tableLabel = getTableLabel(reservation);
 
@@ -428,7 +331,7 @@ export default function ReportsPage() {
 
     const isOnline = ((reservation.bookingSource || reservation.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
     const isWalk = isWalkIn(reservation);
-
+    
     return (
       <div
         key={reservationId || index}
@@ -474,14 +377,14 @@ export default function ReportsPage() {
                   <Phone className="w-4 h-4" />
                   <span className="font-semibold text-gray-600">
                     {reservation.customerPhone || reservation.CustomerPhone || "—"}
-                  </span>
+                </span>
                 </span>
 
                 <span className="inline-flex items-center gap-1.5">
                   <Users className="w-4 h-4" />
                   <span className="font-semibold text-gray-600">
                     {reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || "—"} guests
-                  </span>
+                </span>
                 </span>
 
                 <span className="inline-flex items-center gap-1.5">
@@ -506,53 +409,53 @@ export default function ReportsPage() {
 
               {/* actions */}
               <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                {canMarkArrived && (
-                  <button
-                    onClick={() => handleMarkArrived(reservation)}
-                    disabled={isProcessing}
+            {canMarkArrived && (
+              <button
+                onClick={() => handleMarkArrived(reservation)}
+                disabled={isProcessing}
                     className={cn(
                       "h-9 px-4 rounded-xl text-xs font-extrabold border transition-all inline-flex items-center gap-2",
-                      isProcessing
+                  isProcessing
                         ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
                         : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100"
                     )}
                   >
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Hand className="w-4 h-4" />}
                     Mark Arrived
-                  </button>
-                )}
+              </button>
+            )}
 
-                {canSeat && (
-                  <button
-                    onClick={() => handleSeat(reservation)}
-                    disabled={isProcessing}
+            {canSeat && (
+              <button
+                onClick={() => handleSeat(reservation)}
+                disabled={isProcessing}
                     className={cn(
                       "h-9 px-4 rounded-xl text-xs font-extrabold border transition-all inline-flex items-center gap-2",
-                      isProcessing
+                  isProcessing
                         ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
                         : "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
                     )}
                   >
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Armchair className="w-4 h-4" />}
                     Seat Now
-                  </button>
-                )}
+              </button>
+            )}
 
-                {canMarkLeft && (
-                  <button
-                    onClick={() => handleMarkLeft(reservation)}
-                    disabled={isProcessing}
+            {canMarkLeft && (
+              <button
+                onClick={() => handleMarkLeft(reservation)}
+                disabled={isProcessing}
                     className={cn(
                       "h-9 px-4 rounded-xl text-xs font-extrabold border transition-all inline-flex items-center gap-2",
-                      isProcessing
+                  isProcessing
                         ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
                         : "bg-orange-50 text-orange-800 border-orange-200 hover:bg-orange-100"
                     )}
                   >
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4" />}
                     Mark Left
-                  </button>
-                )}
+              </button>
+            )}
               </div>
             </div>
 
@@ -591,19 +494,66 @@ export default function ReportsPage() {
     { value: "day", label: "By Day", icon: Calendar },
   ];
 
-  // Filter for display (search only here; status is already applied in loadReservations)
-  const displayList = (Array.isArray(reservations) ? reservations : []).filter((r) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    const name = (r.customerName || r.CustomerName || "").toLowerCase();
-    const phone = (r.customerPhone || r.CustomerPhone || "");
-    const tableText = getTableLabel(r).toLowerCase();
-    return name.includes(q) || phone.includes(q) || tableText.includes(q);
-  });
+  // Filter for display
+  const displayList = useMemo(() => {
+    // Start with reservations data
+    let filtered = Array.isArray(reservations) ? [...reservations] : [];
+    
+    // Apply status filter for frontend-filtered statuses (upcoming, online, walkins)
+    // Backend-filtered statuses (cancelled, no-show, left, confirmed, arrived, seated) are already filtered
+    if (statusFilter !== "all") {
+      const backendFilteredStatuses = ["cancelled", "no-show", "left", "confirmed", "arrived", "seated"];
+      const isBackendFiltered = backendFilteredStatuses.includes(statusFilter);
+      
+      if (!isBackendFiltered) {
+        // Frontend filtering for: upcoming, online, walkins
+        const now = new Date();
+        filtered = filtered.filter((res) => {
+          const status = getEffectiveStatus(res);
+          const resDate = res.reservationDate || res.ReservationDate;
+          const resTime = res.reservationTime || res.ReservationTime;
+          
+          if (statusFilter === "upcoming") {
+            if (!resDate || !resTime) return false;
+            const resDateTime = new Date(`${resDate}T${resTime}`);
+            const isToday = resDate === new Date().toISOString().split("T")[0];
+            if (isToday) {
+              return resDateTime > now && status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+            }
+            return status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+          }
+          
+          if (statusFilter === "online") {
+            return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+          }
+          
+          if (statusFilter === "walkins") {
+            return isWalkIn(res);
+          }
+          
+          return true;
+        });
+      }
+    }
+    
+    // Apply search filter
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter((r) => {
+        const name = (r.customerName || r.CustomerName || "").toLowerCase();
+        const phone = (r.customerPhone || r.CustomerPhone || "");
+        const tableText = getTableLabel(r).toLowerCase();
+        return name.includes(q) || phone.includes(q) || tableText.includes(q);
+      });
+    }
+    
+    return filtered;
+  }, [reservations, statusFilter, searchQuery]);
 
   // ===== render =====
   return (
     <div className="min-h-screen bg-[radial-gradient(120%_60%_at_50%_0%,rgba(201,26,77,0.10),transparent_55%),linear-gradient(to_bottom,#fff,#fff)] pb-24">
+    {/* End of Selection */}
       {/* Header */}
       <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-gray-200 shadow-sm">
         <div className="mx-auto max-w-5xl px-4 py-4 flex items-center gap-3">
@@ -636,32 +586,32 @@ export default function ReportsPage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <div className="inline-flex rounded-2xl border border-gray-200 bg-gray-50 p-1">
-                <button
-                  onClick={() => setDateMode("single")}
+            <button
+              onClick={() => setDateMode("single")}
                   className={cn(
                     "px-4 py-2 rounded-xl text-sm font-extrabold transition-all inline-flex items-center gap-2",
-                    dateMode === "single"
+                dateMode === "single"
                       ? "text-white shadow-sm bg-gradient-to-r from-rose-700 to-pink-600"
                       : "text-gray-600 hover:text-gray-800"
                   )}
-                >
-                  <Calendar className="w-4 h-4" />
+            >
+              <Calendar className="w-4 h-4" />
                   Single
-                </button>
+            </button>
 
-                <button
-                  onClick={() => setDateMode("range")}
+            <button
+              onClick={() => setDateMode("range")}
                   className={cn(
                     "px-4 py-2 rounded-xl text-sm font-extrabold transition-all inline-flex items-center gap-2",
-                    dateMode === "range"
+                dateMode === "range"
                       ? "text-white shadow-sm bg-gradient-to-r from-rose-700 to-pink-600"
                       : "text-gray-600 hover:text-gray-800"
                   )}
-                >
-                  <CalendarRange className="w-4 h-4" />
+            >
+              <CalendarRange className="w-4 h-4" />
                   Range
-                </button>
-              </div>
+            </button>
+          </div>
 
               <p className="mt-2 text-sm text-gray-500">
                 {dateMode === "single"
@@ -671,40 +621,40 @@ export default function ReportsPage() {
             </div>
 
             <div className="w-full md:w-[420px]">
-              {dateMode === "single" ? (
-                <div className="flex items-center gap-3">
+          {dateMode === "single" ? (
+            <div className="flex items-center gap-3">
                   <label className="text-sm font-extrabold text-gray-700 w-20">Date</label>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
                     className="flex-1 h-11 px-4 rounded-2xl border-2 border-gray-200 text-sm font-bold focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all"
-                  />
-                </div>
-              ) : (
+              />
+            </div>
+          ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3">
                     <label className="text-sm font-extrabold text-gray-700 w-20 sm:w-auto">From</label>
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      max={endDate}
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  max={endDate}
                       className="flex-1 h-11 px-4 rounded-2xl border-2 border-gray-200 text-sm font-bold focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all"
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
+                />
+              </div>
+              <div className="flex items-center gap-3">
                     <label className="text-sm font-extrabold text-gray-700 w-20 sm:w-auto">To</label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      min={startDate}
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  min={startDate}
                       className="flex-1 h-11 px-4 rounded-2xl border-2 border-gray-200 text-sm font-bold focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all"
-                    />
-                  </div>
-                </div>
-              )}
+                />
+              </div>
+            </div>
+          )}
             </div>
           </div>
 
@@ -741,13 +691,13 @@ export default function ReportsPage() {
                     </button>
                   );
                 })}
-              </div>
-            </div>
+          </div>
+        </div>
           </div>
         </section>
 
         {/* Stats */}
-        <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
             <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-rose-700 to-pink-600 opacity-10 rounded-bl-[40px]" />
             <div className="inline-flex p-2 rounded-2xl bg-gradient-to-br from-rose-700 to-pink-600 text-white mb-2 shadow-sm">
@@ -767,6 +717,26 @@ export default function ReportsPage() {
           </div>
 
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-emerald-600 to-teal-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-500 text-white mb-2 shadow-sm">
+              <Sun className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.lunchReservations)}</p>
+            <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Lunch</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.lunchGuests)} guests)</p>
+          </div>
+
+          <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-indigo-600 to-blue-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-500 text-white mb-2 shadow-sm">
+              <Moon className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.dinnerReservations)}</p>
+            <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Dinner</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.dinnerGuests)} guests)</p>
+          </div>
+
+          <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
             <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-violet-600 to-purple-500 opacity-10 rounded-bl-[40px]" />
             <div className="inline-flex p-2 rounded-2xl bg-gradient-to-br from-violet-600 to-purple-500 text-white mb-2 shadow-sm">
               <Users className="w-4 h-4" />
@@ -775,7 +745,6 @@ export default function ReportsPage() {
             <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Walk-in Guests</p>
             <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.walkInCount)} walk-ins)</p>
           </div>
-
 
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
             <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-amber-600 to-orange-500 opacity-10 rounded-bl-[40px]" />
@@ -789,37 +758,69 @@ export default function ReportsPage() {
 
         {/* Filters */}
         <section className="bg-white rounded-3xl border border-gray-200 shadow-sm p-5 md:p-6">
-          <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
               <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-rose-700 to-pink-600 text-white grid place-items-center shadow-sm">
                 <ListFilter className="w-5 h-5" />
-              </div>
+            </div>
               <div>
                 <p className="text-sm font-extrabold text-gray-900">Filters</p>
                 <p className="text-xs text-gray-500 font-semibold">Quickly narrow down your list</p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                setSearchQuery("");
-                setStatusFilter("all");
-                setGroupBy("none");
-              }}
-              className="h-10 px-4 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold text-gray-700 hover:bg-rose-50 hover:border-rose-300 transition-all"
-            >
-              Reset
-            </button>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              {/* Sort By */}
+              <div className="flex items-center gap-2">
+                <ArrowUpDown className="w-4 h-4 text-gray-500" />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="h-10 px-3 rounded-2xl border border-gray-200 bg-white text-xs font-extrabold text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300 cursor-pointer"
+                >
+                  <option value="time">Time</option>
+                  <option value="date">Date</option>
+                  <option value="name">Name</option>
+                </select>
+                <button
+                  onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+                  className={cn(
+                    "h-10 w-10 rounded-2xl border border-gray-200 bg-white transition-all inline-flex items-center justify-center",
+                    "hover:bg-rose-50 hover:border-rose-300"
+                  )}
+                  title={`Sort ${sortOrder === "asc" ? "Ascending" : "Descending"}`}
+                >
+                  {sortOrder === "asc" ? (
+                    <ArrowUp className="w-4 h-4 text-gray-700" />
+                  ) : (
+                    <ArrowDown className="w-4 h-4 text-gray-700" />
+                  )}
+                </button>
+          </div>
+          
+                  <button
+                onClick={() => {
+                  setSearchQuery("");
+                  setStatusFilter("all");
+                  setGroupBy("none");
+                  setSortBy("time");
+                  setSortOrder("asc");
+                }}
+                className="h-10 px-4 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold text-gray-700 hover:bg-rose-50 hover:border-rose-300 transition-all"
+              >
+                Reset
+                  </button>
+            </div>
+          </div>
+          
+            <div className="flex flex-wrap gap-2">
             {statusFilters.map((f) => {
               const Icon = f.icon;
               const active = statusFilter === f.value;
               const count = getStatusCount(f.value);
-
-              return (
-                <button
+            
+            return (
+              <button
                   key={f.value}
                   onClick={() => setStatusFilter(f.value)}
                   className={cn(
@@ -832,18 +833,18 @@ export default function ReportsPage() {
                   <Icon className={cn("w-4 h-4", active ? "text-white" : "text-gray-500")} />
                   {f.label}
 
-                  <span
+                    <span 
                     className={cn(
                       "ml-1 inline-flex h-5 min-w-[22px] items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold",
                       active ? "bg-white/20 text-white" : "bg-gray-100 text-gray-600"
                     )}
-                  >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                    >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+            </div>
         </section>
 
         {/* List */}
@@ -855,7 +856,7 @@ export default function ReportsPage() {
         ) : error ? (
           <div className="bg-white rounded-3xl border border-red-200 shadow-sm p-6 text-center">
             <p className="text-red-700 font-extrabold">{error}</p>
-          </div>
+            </div>
         ) : displayList.length === 0 ? (
           <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-10 text-center">
             <div className="w-14 h-14 rounded-2xl bg-gray-100 mx-auto mb-4 grid place-items-center">
@@ -891,7 +892,7 @@ export default function ReportsPage() {
                         <div className="flex items-center gap-2">
                           <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-rose-700 to-pink-600 text-white grid place-items-center shadow-sm">
                             <Clock className="w-5 h-5" />
-                          </div>
+                        </div>
                           <div>
                             <p className="text-lg font-extrabold text-gray-900">
                               {hourKey.startsWith("Unknown") ? "Unknown Time" : formatTime(hourKey)}
@@ -933,7 +934,7 @@ export default function ReportsPage() {
                         <div className="flex items-center gap-2">
                           <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-rose-700 to-pink-600 text-white grid place-items-center shadow-sm">
                             <Calendar className="w-5 h-5" />
-                          </div>
+                        </div>
                           <div>
                             <p className="text-lg font-extrabold text-gray-900">
                               {dayKey === "Unknown" ? "Unknown Date" : formatDate(dayKey)}

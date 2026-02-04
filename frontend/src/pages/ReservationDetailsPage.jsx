@@ -333,24 +333,37 @@ export default function ReservationDetailsPage() {
   const time = reservation.reservationTime || reservation.ReservationTime || "";
   const status = reservation.status || reservation.bookingStatus || reservation.Status || reservation.BookingStatus || "";
 
-  // Table info
+  // Table info — support single table or multiple (tables array / tableIds comma-separated)
   let tableId = reservation.tableId || reservation.TableID;
   let tableName = reservation.tableName || reservation.TableName;
   let tableNo = reservation.tableNo || reservation.TableNO;
   let tableInfo = reservation.tableInfo || reservation.TableInfo;
 
+  let table = "Unassigned";
+
   if (reservation.tables && Array.isArray(reservation.tables) && reservation.tables.length > 0) {
     const firstTable = reservation.tables[0];
-    tableId = firstTable.tableId || firstTable.tableID || firstTable.TableID || tableId;
-    tableName = firstTable.tableName || firstTable.TableName || tableName;
-    tableNo = firstTable.tableNo || firstTable.TableNO || tableNo;
+    tableId = firstTable.tableId ?? firstTable.tableID ?? firstTable.TableID ?? tableId;
+    tableName = firstTable.tableName ?? firstTable.TableName ?? tableName;
+    tableNo = firstTable.tableNo ?? firstTable.TableNO ?? tableNo;
+    if (reservation.tables.length === 1) {
+      if (firstTable.tableName || firstTable.TableName) table = firstTable.tableName || firstTable.TableName;
+      else if (firstTable.tableNo != null || firstTable.TableNO != null) table = `Table ${firstTable.tableNo ?? firstTable.TableNO}`;
+      else table = `Table ${firstTable.tableId ?? firstTable.tableID ?? firstTable.TableID}`;
+    } else {
+      table = reservation.tables
+        .map((t) => t.tableName || t.TableName || (t.tableNo != null || t.TableNO != null ? `Table ${t.tableNo ?? t.TableNO}` : `Table ${t.tableId ?? t.tableID ?? t.TableID}`))
+        .join(", ");
+    }
+  } else if (reservation.tableIds && String(reservation.tableIds).trim() && String(reservation.tableIds) !== "0") {
+    const ids = String(reservation.tableIds).split(",").map((s) => s.trim()).filter(Boolean);
+    table = ids.map((id) => `Table ${id}`).join(", ");
+  } else {
+    if (tableName) table = tableName;
+    else if (tableInfo) table = tableInfo;
+    else if (tableNo) table = `Table ${tableNo}`;
+    else if (tableId != null && tableId !== "" && tableId !== 0) table = `Table ${tableId}`;
   }
-
-  let table = "Unassigned";
-  if (tableName) table = tableName;
-  else if (tableInfo) table = tableInfo;
-  else if (tableNo) table = `Table ${tableNo}`;
-  else if (tableId && tableId !== 0) table = `Table ${tableId}`;
 
   // Area info
   let areaId = reservation.areaId || reservation.AreaID;

@@ -44,10 +44,21 @@ async function getNextIdTx(controlName, tx) {
   return Number(rs.recordset[0].val);
 }
 
+/**
+ * Get next BookingChildID within a transaction (for use by update reservation route).
+ * @param {mssql.Transaction} tx - Active transaction
+ * @returns {Promise<number>} Next BookingChildID
+ */
+export async function getNextBookingChildIdTx(tx) {
+  return getNextIdTx("BookingChild", tx);
+}
+
 // Helper to check if customer exists by phone number
 async function findCustomerByPhone(phone, tx) {
+  const trimmed = String(phone || "").trim();
+  if (!trimmed) return null; // No phone - cannot match by phone
   const req = new mssql.Request(tx);
-  req.input("phone", mssql.VarChar(25), String(phone).trim());
+  req.input("phone", mssql.VarChar(25), trimmed);
 
   const sql = `
     SELECT TOP 1 ${q("CustomerID")}
@@ -198,6 +209,40 @@ async function createCustomer(customerData, tx) {
 }
 
 /**
+ * Update an existing customer in CustomerMaster (name, phone, email).
+ * Used when user selects a customer then changes their details on the reservation form.
+ * @param {number} customerId - CustomerID to update
+ * @param {{ name?: string, email?: string, phone?: string }} customerData
+ * @param {mssql.Transaction} tx - Active transaction
+ */
+export async function updateCustomer(customerId, customerData, tx) {
+  const { name, email, phone } = customerData;
+  const cleanName = String(name ?? "").trim() || null;
+  const cleanEmail = String(email ?? "").trim() || null;
+  const cleanPhone = String(phone ?? "").trim().replace(/[^0-9+]/g, "") || null;
+
+  const req = new mssql.Request(tx);
+  req.input("CustomerID", mssql.BigInt, Number(customerId));
+  req.input("CustomerName", mssql.VarChar(200), cleanName);
+  req.input("Email", mssql.VarChar(75), cleanEmail);
+  req.input("MobileNo", mssql.VarChar(25), cleanPhone);
+  req.input("ModBy", mssql.VarChar(50), "ONLINE");
+  req.input("ModOn", mssql.DateTime, new Date());
+
+  const sql = `
+    UPDATE ${T_CUSTOMER}
+    SET ${q("CustomerName")} = @CustomerName,
+        ${q("Email")} = @Email,
+        ${q("MobileNo")} = @MobileNo,
+        ${q("ModBy")} = @ModBy,
+        ${q("ModOn")} = @ModOn
+    WHERE ${q("CustomerID")} = @CustomerID
+  `;
+  await req.query(sql);
+  console.log("[RESERVATION] Updated customer ID:", customerId);
+}
+
+/**
  * Create a reservation (BookingMaster + BookingChild)
  * @param {Object} reservationData
  * @param {number|Array} reservationData.tableId - Table ID or array of table IDs
@@ -233,6 +278,7 @@ export async function createReservation(reservationData) {
     isWalkIn = false,
     bookingSource = "ONLINE", // Default to ONLINE, can be "ONLINE", "WALKIN", or "POS"
     initialStatus = null, // Initial status: null = default (BOOKED), "SEATED" for walk-ins, etc.
+    customerId: providedCustomerId, // If user selected existing customer, update that customer with form name/phone/email
   } = reservationData;
 
   // Convert tableId to array if single value
@@ -289,9 +335,7 @@ export async function createReservation(reservationData) {
   if (!name || name.trim() === '') {
     throw new Error("Missing required field: name");
   }
-  if (!phone || phone.trim() === '') {
-    throw new Error("Missing required field: phone");
-  }
+  // Phone is optional - some guests prefer not to share
   
   // Validate guests - handle both number and string
   if (guests == null || guests === '' || guests === undefined) {
@@ -337,20 +381,27 @@ export async function createReservation(reservationData) {
       }
     }
 
-    // 1. Check if customer exists by phone, if not create new customer
-    let customerID = await findCustomerByPhone(phone, tx);
-    
-    if (!customerID) {
-      console.log("[RESERVATION] Customer not found for phone:", phone, "- Creating new customer");
-      try {
-        customerID = await createCustomer({ name, email, phone }, tx);
-        console.log("[RESERVATION] Successfully created customer with ID:", customerID);
-      } catch (customerError) {
-        console.error("[RESERVATION] Failed to create customer:", customerError);
-        throw new Error(`Customer creation failed: ${customerError.message}`);
-      }
+    // 1. Resolve customer: if selected customer (customerId) provided, update that customer and use it; else find by phone or create new
+    let customerID;
+    const providedId = providedCustomerId != null && providedCustomerId !== "" ? parseInt(providedCustomerId, 10) : null;
+    if (providedId && !isNaN(providedId)) {
+      await updateCustomer(providedId, { name, email, phone }, tx);
+      customerID = providedId;
+      console.log("[RESERVATION] Using selected customer ID (updated):", customerID);
     } else {
-      console.log("[RESERVATION] Found existing customer ID:", customerID);
+      customerID = await findCustomerByPhone(phone, tx);
+      if (!customerID) {
+        console.log("[RESERVATION] Customer not found for phone:", phone, "- Creating new customer");
+        try {
+          customerID = await createCustomer({ name, email, phone }, tx);
+          console.log("[RESERVATION] Successfully created customer with ID:", customerID);
+        } catch (customerError) {
+          console.error("[RESERVATION] Failed to create customer:", customerError);
+          throw new Error(`Customer creation failed: ${customerError.message}`);
+        }
+      } else {
+        console.log("[RESERVATION] Found existing customer ID:", customerID);
+      }
     }
 
     // 2. Get server date/time for EnteredDate (within transaction)
@@ -560,8 +611,7 @@ export async function createReservation(reservationData) {
     const bookingChildIDs = [];
     
     if (isGuestReservation) {
-      // No tables selected - Create BookingChild with TableID = 0 (unassigned)
-      // Table will be assigned later when guest arrives
+      // No tables selected - Create BookingChild with TableID = "0" (unassigned)
       const bookingChildID = await getNextIdTx("BookingChild", tx);
       bookingChildIDs.push(bookingChildID);
       console.log("[RESERVATION] No tables selected - creating BookingChild with TableID = 0 (unassigned):", bookingChildID);
@@ -569,7 +619,7 @@ export async function createReservation(reservationData) {
       const bookingChildReq = new mssql.Request(tx);
       bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
       bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-      bookingChildReq.input("TableID", mssql.BigInt, 0); // 0 = No table assigned yet
+      bookingChildReq.input("TableID", mssql.NVarChar(200), "0"); // 0 = no table assigned yet
       bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId || 0); // 0 if no area selected
       // Use initialStatus if provided, otherwise default to "BOOKED"
       const bookingStatus = initialStatus || "BOOKED";
@@ -596,58 +646,36 @@ export async function createReservation(reservationData) {
       await bookingChildReq.query(bookingChildSql);
       console.log("[RESERVATION] BookingChild created with TableID = 0 (unassigned)");
     } else {
-      // Regular reservation: Create BookingChild for each table
-      for (let i = 0; i < tableIds.length; i++) {
-        const currentTableId = parseInt(tableIds[i]);
-        
-        // Get areaId for this table if not provided
-        let tableAreaId = finalAreaId;
-        if (!tableAreaId && currentTableId) {
-          const areaReq = new mssql.Request(tx);
-          areaReq.input("tableId", mssql.BigInt, currentTableId);
-          const areaResult = await areaReq.query(`
-            SELECT TOP 1 ${q("AreaId")} AS AreaID
-            FROM dbo.[TableMaster]
-            WHERE ${q("TableID")} = @tableId
-          `);
-          if (areaResult.recordset.length > 0) {
-            tableAreaId = parseInt(areaResult.recordset[0].AreaID) || 0;
-          }
-        }
+      // Regular reservation: ONE BookingChild with TableID = comma-separated (e.g. "66,67")
+      const tableIdsStr = tableIds.join(",");
+      const bookingChildID = await getNextIdTx("BookingChild", tx);
+      bookingChildIDs.push(bookingChildID);
 
-        const bookingChildID = await getNextIdTx("BookingChild", tx);
-        bookingChildIDs.push(bookingChildID);
+      const bookingChildReq = new mssql.Request(tx);
+      bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
+      bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
+      bookingChildReq.input("TableID", mssql.NVarChar(200), tableIdsStr);
+      bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId || 0);
+      bookingChildReq.input("Status", mssql.VarChar(50), initialStatus || "BOOKED");
+      bookingChildReq.input("Notes", mssql.NVarChar(500), null);
+      bookingChildReq.input("SeatedTime", mssql.DateTime, null);
+      bookingChildReq.input("VacatedTime", mssql.DateTime, null);
+      bookingChildReq.input("CreatedOn", mssql.DateTime, enteredDate);
+      bookingChildReq.input("ModifiedOn", mssql.DateTime, null);
 
-        const bookingChildReq = new mssql.Request(tx);
-        bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
-        bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-        bookingChildReq.input("TableID", mssql.BigInt, currentTableId);
-        bookingChildReq.input("AreaID", mssql.BigInt, tableAreaId);
-        // Use initialStatus if provided (e.g., "SEATED" for walk-ins), otherwise default to "BOOKED"
-        const childStatus = initialStatus || "BOOKED";
-        bookingChildReq.input("Status", mssql.VarChar(50), childStatus);
-        bookingChildReq.input("Notes", mssql.NVarChar(500), null);
-        bookingChildReq.input("SeatedTime", mssql.DateTime, null);
-        bookingChildReq.input("VacatedTime", mssql.DateTime, null);
-        bookingChildReq.input("CreatedOn", mssql.DateTime, enteredDate);
-        bookingChildReq.input("ModifiedOn", mssql.DateTime, null);
-
-        const bookingChildSql = `
-          INSERT INTO ${T_BOOKINGC} (
-            ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
-            ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
-            ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
-          )
-          VALUES (
-            @BookingChildID, @BookingID, @TableID,
-            @AreaID, @Status, @Notes,
-            @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
-          )
-        `;
-
-        await bookingChildReq.query(bookingChildSql);
-        console.log("[RESERVATION] Inserted BookingChild:", bookingChildID, "for Table:", currentTableId);
-      }
+      await bookingChildReq.query(`
+        INSERT INTO ${T_BOOKINGC} (
+          ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
+          ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
+          ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
+        )
+        VALUES (
+          @BookingChildID, @BookingID, @TableID,
+          @AreaID, @Status, @Notes,
+          @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
+        )
+      `);
+      console.log("[RESERVATION] Inserted single BookingChild with TableID:", tableIdsStr);
     }
 
     // Commit transaction
@@ -705,9 +733,7 @@ export async function createGuestReservation(guestData) {
   if (!name || name.trim() === '') {
     throw new Error("Customer name is required");
   }
-  if (!phone || phone.trim() === '') {
-    throw new Error("Phone number is required");
-  }
+  // Phone is optional - some guests prefer not to share
   if (!guests || guests < 1) {
     throw new Error("Number of guests must be at least 1");
   }
@@ -778,7 +804,7 @@ export async function createGuestReservation(guestData) {
     bookingMasterReq.input("BookingSource", mssql.VarChar(50), "GUEST_ONLINE");
     bookingMasterReq.input("StationID", mssql.BigInt, 10); // Default station
     bookingMasterReq.input("GuestName", mssql.NVarChar(100), name);
-    bookingMasterReq.input("GuestPhone", mssql.VarChar(25), phone);
+    bookingMasterReq.input("GuestPhone", mssql.VarChar(25), phone || null);
     bookingMasterReq.input("GuestEmail", mssql.VarChar(100), email || null);
     // Convert time string (HH:mm) to SQL Server Time format
     // Parse time and create Date object using local time (not UTC) to match server timezone
@@ -862,7 +888,7 @@ export async function createGuestReservation(guestData) {
     const bookingChildReq = new mssql.Request(tx);
     bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
     bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-    bookingChildReq.input("TableID", mssql.BigInt, 0); // 0 = No table assigned yet
+    bookingChildReq.input("TableID", mssql.NVarChar(200), "0"); // 0 = no table assigned yet
     bookingChildReq.input("AreaID", mssql.BigInt, parseInt(areaId) || 0); // Use preferred area if provided
     bookingChildReq.input("Status", mssql.VarChar(50), "PENDING");
     bookingChildReq.input("Notes", mssql.NVarChar(500), fullSpecialRequests || null);
@@ -922,6 +948,758 @@ try {
   } catch (error) {
     await tx.rollback();
     console.error("[GUEST RESERVATION] Error creating guest reservation:", error);
+    throw error;
+  }
+}
+
+/**
+ * Helper function to check which columns exist in BookingMaster and BookingChild
+ * @returns {Promise<Object>} Object with existingColumns sets for both tables
+ */
+async function checkReservationColumns() {
+  const pool = await connectToDb();
+  const checkColumnsReq = pool.request();
+  
+  const [masterColumns, childColumns] = await Promise.all([
+    checkColumnsReq.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingMaster'
+    `),
+    pool.request().query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'BookingChild'
+    `)
+  ]);
+  
+  return {
+    masterColumns: new Set(masterColumns.recordset.map(row => row.COLUMN_NAME)),
+    childColumns: new Set(childColumns.recordset.map(row => row.COLUMN_NAME))
+  };
+}
+
+/**
+ * Helper function to build dynamic SELECT fields based on existing columns
+ * @param {Set} existingColumns - Set of existing column names
+ * @returns {Object} Object with field strings for SQL query
+ */
+function buildReservationSelectFields(existingColumns) {
+  const guestNameField = existingColumns.masterColumns.has('GuestName') ? 'bm.[GuestName] AS guestName,' : '';
+  const guestPhoneField = existingColumns.masterColumns.has('GuestPhone') ? 'bm.[GuestPhone] AS guestPhone,' : '';
+  const guestEmailField = existingColumns.masterColumns.has('GuestEmail') ? 'bm.[GuestEmail] AS guestEmail,' : '';
+  const reservationTimeField = existingColumns.masterColumns.has('ReservationTime') ? 'bm.[ReservationTime] AS reservationTime,' : '';
+  const specialRequestsField = existingColumns.masterColumns.has('SpecialRequests') ? 'bm.[SpecialRequests] AS specialRequests,' : '';
+  const tagsField = existingColumns.masterColumns.has('Tags') ? 'bm.[Tags] AS tags,' : '';
+  const hostessIdField = existingColumns.masterColumns.has('HostessID') ? 'bm.[HostessID] AS hostessID,' : '';
+  const hostessNameField = existingColumns.masterColumns.has('HostessName') ? 'bm.[HostessName] AS hostessName,' : '';
+  const confirmationCodeField = existingColumns.masterColumns.has('ConfirmationCode') ? 'bm.[ConfirmationCode] AS confirmationCode,' : '';
+  const isWalkInField = existingColumns.masterColumns.has('IsWalkIn') ? 'bm.[IsWalkIn] AS isWalkIn,' : '';
+  const walkInArrivalTimeField = existingColumns.masterColumns.has('WalkInArrivalTime') ? 'bm.[WalkInArrivalTime] AS walkInArrivalTime,' : '';
+  
+  const advancePaymentColumn = existingColumns.masterColumns.has('AdvancePayment') ? 'AdvancePayment' : 
+                               existingColumns.masterColumns.has('AdavncePayment') ? 'AdavncePayment' : null;
+  const advancePaymentField = advancePaymentColumn ? `bm.[${advancePaymentColumn}] AS advancePayment,` : '';
+  
+  const tableNotesField = existingColumns.childColumns.has('Notes') ? 'bc.[Notes] AS tableNotes,' : '';
+  const seatedTimeField = existingColumns.childColumns.has('SeatedTime') ? 'bc.[SeatedTime] AS seatedTime,' : '';
+  const vacatedTimeField = existingColumns.childColumns.has('VacatedTime') ? 'bc.[VacatedTime] AS vacatedTime,' : '';
+  
+  return {
+    guestNameField,
+    guestPhoneField,
+    guestEmailField,
+    reservationTimeField,
+    specialRequestsField,
+    tagsField,
+    hostessIdField,
+    hostessNameField,
+    confirmationCodeField,
+    isWalkInField,
+    walkInArrivalTimeField,
+    advancePaymentField,
+    tableNotesField,
+    seatedTimeField,
+    vacatedTimeField
+  };
+}
+
+/**
+ * Helper function to map database row to reservation object
+ * @param {Object} row - Database row
+ * @param {string} selectedDate - Selected date for fallback
+ * @returns {Object} Formatted reservation object
+ */
+function mapReservationRow(row, selectedDate) {
+  const customerName = row.guestName || row.customerNameFromMaster || "Guest";
+  const customerPhone = row.guestPhone || row.customerPhoneFromMaster || "";
+  const customerEmail = row.guestEmail || row.customerEmailFromMaster || "";
+  
+  // Format reservation time
+  let reservationTime = null;
+  if (row.reservationTime) {
+    if (typeof row.reservationTime === 'string') {
+      reservationTime = row.reservationTime.slice(0, 5); // HH:mm
+    } else if (row.reservationTime instanceof Date) {
+      reservationTime = row.reservationTime.toTimeString().slice(0, 5);
+    } else {
+      const timeStr = String(row.reservationTime);
+      reservationTime = timeStr.slice(0, 5);
+    }
+  } else if (row.bookingDate) {
+    reservationTime = new Date(row.bookingDate).toTimeString().slice(0, 5);
+  }
+  
+  return {
+    reservationId: row.bookingID,
+    bookingID: row.bookingID,
+    bookingChildID: row.bookingChildID,
+    reservationDate: row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : selectedDate,
+    reservationTime: reservationTime,
+    customerID: row.customerID,
+    customerName: customerName,
+    customerPhone: customerPhone,
+    customerEmail: customerEmail,
+    numberOfGuests: row.partySize || 1,
+    pax: row.partySize || 1,
+    tableId: row.tableId && String(row.tableId).indexOf(",") >= 0
+      ? parseInt(String(row.tableId).split(",")[0], 10)
+      : Number(row.tableId),
+    tableIds: row.tableId && String(row.tableId).indexOf(",") >= 0 ? String(row.tableId).trim() : null,
+    tableNo: row.tableNo,
+    tableName: row.tableName,
+    areaId: row.areaId ? Number(row.areaId) : null,
+    areaName: row.areaName || "Dining",
+    status: row.status || row.bookingStatus || "PENDING",
+    partySize: row.partySize || 1,
+    advancePayment: parseFloat(row.advancePayment || 0),
+    specialRequests: row.specialRequests || "",
+    tags: row.tags || "",
+    hostessID: row.hostessID,
+    hostessName: row.hostessName || "",
+    confirmationCode: row.confirmationCode || "",
+    confirmationSent: row.confirmationSent || false,
+    reminderSent: row.reminderSent || false,
+    isWalkIn: row.isWalkIn || false,
+    bookingSource: row.bookingSource || "ONLINE",
+    walkInArrivalTime: row.walkInArrivalTime,
+    tableNotes: row.tableNotes || "",
+    seatedTime: row.seatedTime,
+    vacatedTime: row.vacatedTime
+  };
+}
+
+/**
+ * Get reservations by date range (from date to date)
+ * @param {Object} filters - Filter options
+ * @param {string} filters.fromDate - Start date (YYYY-MM-DD)
+ * @param {string} filters.toDate - End date (YYYY-MM-DD)
+ * @param {string|Array} filters.status - Status filter (optional)
+ * @param {number} filters.tableId - Table ID filter (optional)
+ * @returns {Promise<Array>} Array of reservations
+ */
+export async function getReservationsByDateRange(filters = {}) {
+  const { fromDate, toDate, status, tableId } = filters;
+  
+  if (!fromDate || !toDate) {
+    throw new Error("fromDate and toDate are required for date range query");
+  }
+  
+  const pool = await connectToDb();
+  const request = pool.request();
+  request.input("fromDate", mssql.Date, fromDate);
+  request.input("toDate", mssql.Date, toDate);
+  
+  if (tableId) {
+    request.input("tableIdStr", mssql.NVarChar(20), String(tableId));
+  }
+  
+  // Check existing columns
+  const existingColumns = await checkReservationColumns();
+  const fields = buildReservationSelectFields(existingColumns);
+  
+  let sql = `
+    SELECT 
+      bm.[BookingID] AS bookingID,
+      bm.[BookingDate] AS bookingDate,
+      bm.[EnteredDate] AS enteredDate,
+      bm.[CustomerID] AS customerID,
+      ${fields.advancePaymentField}
+      bm.[BookingStatus] AS bookingStatus,
+      bm.[PartySize] AS partySize,
+      bm.[BookingSource] AS bookingSource,
+      ${fields.guestNameField}
+      ${fields.guestPhoneField}
+      ${fields.guestEmailField}
+      ${fields.reservationTimeField}
+      ${fields.specialRequestsField}
+      ${fields.tagsField}
+      ${fields.hostessIdField}
+      ${fields.hostessNameField}
+      ${fields.confirmationCodeField}
+      ${fields.isWalkInField}
+      ${fields.walkInArrivalTimeField}
+      bc.[BookingChildID] AS bookingChildID,
+      bc.[TableID] AS tableId,
+      bc.[AreaID] AS areaId,
+      bc.[Status] AS status,
+      ${fields.tableNotesField}
+      ${fields.seatedTimeField}
+      ${fields.vacatedTimeField}
+      cm.[CustomerName] AS customerNameFromMaster,
+      cm.[MobileNo] AS customerPhoneFromMaster,
+      cm.[Email] AS customerEmailFromMaster,
+      t.[TableNO] AS tableNo,
+      t.[TableName] AS tableName,
+      a.[AreaName] AS areaName
+    FROM dbo.[BookingMaster] bm
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    WHERE CONVERT(date, bm.[BookingDate]) >= @fromDate
+      AND CONVERT(date, bm.[BookingDate]) <= @toDate
+  `;
+  
+  // Apply status filter if provided
+  if (status) {
+    const statusList = Array.isArray(status) ? status : status.split(',').map(s => s.trim().toUpperCase());
+    
+    // Log cancelled filter processing
+    if (statusList.includes('CANCELLED')) {
+      console.log("[BACKEND][SERVICE][CANCELLED FILTER] Processing cancelled filter:", {
+        fromDate,
+        toDate,
+        statusList,
+        tableId,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    if (statusList.length === 1) {
+      const statusValue = statusList[0];
+      if (statusValue === 'BOOKED') {
+        sql += ` AND bc.[Status] = 'BOOKED'`;
+      } else if (statusValue === 'CONFIRMED') {
+        sql += ` AND (COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = 'CONFIRMED' OR COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = '')`;
+      } else if (statusValue === 'CANCELLED') {
+        sql += ` AND COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) IN ('CANCELLED', 'CANCELLED_NOTIFY')`;
+        console.log("[BACKEND][SERVICE][CANCELLED FILTER] SQL filter added for CANCELLED status (includes CANCELLED and CANCELLED_NOTIFY)");
+      } else {
+        sql += ` AND COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = @status`;
+        request.input("status", mssql.NVarChar, statusValue);
+      }
+    } else {
+      const statusConditions = statusList.map((s, i) => {
+        if (s === 'CONFIRMED') {
+          return `(COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = 'CONFIRMED' OR COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = '')`;
+        } else if (s === 'BOOKED') {
+          return `bc.[Status] = 'BOOKED'`;
+        } else {
+          request.input(`status${i}`, mssql.NVarChar, s);
+          return `COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = @status${i}`;
+        }
+      });
+      sql += ` AND (${statusConditions.join(' OR ')})`;
+    }
+  }
+  
+  // Apply tableId filter (TableID is comma-separated string e.g. "66,67")
+  if (tableId) {
+    sql += ` AND (bc.[TableID] = @tableIdStr OR bc.[TableID] LIKE @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr)`;
+  }
+  
+  sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
+  
+  // Log SQL query for cancelled filter
+  if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
+    console.log("[BACKEND][SERVICE][CANCELLED FILTER] Executing SQL query (preview):", sql.substring(0, 500) + "...");
+  }
+  
+  const result = await request.query(sql);
+  
+  // Log query results for cancelled filter
+  if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
+    console.log("[BACKEND][SERVICE][CANCELLED FILTER] Query results:", {
+      totalRows: result.recordset.length,
+      first5Rows: result.recordset.slice(0, 5).map(row => ({
+        bookingID: row.bookingID,
+        bookingStatus: row.bookingStatus,
+        childStatus: row.status,
+        customerName: row.guestName || row.customerNameFromMaster,
+        bookingDate: row.bookingDate
+      })),
+      allStatuses: result.recordset.map(row => row.status || row.bookingStatus),
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  return result.recordset.map((row) => mapReservationRow(row, fromDate));
+}
+
+/**
+ * Get reservations for a specific date (current day)
+ * @param {Object} filters - Filter options
+ * @param {string} filters.date - Date (YYYY-MM-DD), defaults to today
+ * @param {string|Array} filters.status - Status filter (optional)
+ * @param {number} filters.tableId - Table ID filter (optional)
+ * @returns {Promise<Array>} Array of reservations
+ */
+export async function getReservationsByDate(filters = {}) {
+  const { date, status, tableId } = filters;
+  
+  // If no date provided, use today's date
+  const selectedDate = date || new Date().toISOString().split('T')[0];
+  
+  const pool = await connectToDb();
+  const request = pool.request();
+  request.input("selectedDate", mssql.Date, selectedDate);
+  
+  if (tableId) {
+    request.input("tableIdStr", mssql.NVarChar(20), String(tableId));
+  }
+  
+  // Check existing columns
+  const existingColumns = await checkReservationColumns();
+  const fields = buildReservationSelectFields(existingColumns);
+  
+  let sql = `
+    SELECT 
+      bm.[BookingID] AS bookingID,
+      bm.[BookingDate] AS bookingDate,
+      bm.[EnteredDate] AS enteredDate,
+      bm.[CustomerID] AS customerID,
+      ${fields.advancePaymentField}
+      bm.[BookingStatus] AS bookingStatus,
+      bm.[PartySize] AS partySize,
+      bm.[BookingSource] AS bookingSource,
+      ${fields.guestNameField}
+      ${fields.guestPhoneField}
+      ${fields.guestEmailField}
+      ${fields.reservationTimeField}
+      ${fields.specialRequestsField}
+      ${fields.tagsField}
+      ${fields.hostessIdField}
+      ${fields.hostessNameField}
+      ${fields.confirmationCodeField}
+      ${fields.isWalkInField}
+      ${fields.walkInArrivalTimeField}
+      bc.[BookingChildID] AS bookingChildID,
+      bc.[TableID] AS tableId,
+      bc.[AreaID] AS areaId,
+      bc.[Status] AS status,
+      ${fields.tableNotesField}
+      ${fields.seatedTimeField}
+      ${fields.vacatedTimeField}
+      cm.[CustomerName] AS customerNameFromMaster,
+      cm.[MobileNo] AS customerPhoneFromMaster,
+      cm.[Email] AS customerEmailFromMaster,
+      t.[TableNO] AS tableNo,
+      t.[TableName] AS tableName,
+      a.[AreaName] AS areaName
+    FROM dbo.[BookingMaster] bm
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
+  `;
+  
+  // Apply status filter if provided
+  if (status) {
+    const statusList = Array.isArray(status) ? status : status.split(',').map(s => s.trim().toUpperCase());
+    
+    // Log cancelled filter processing (single date)
+    if (statusList.includes('CANCELLED')) {
+      console.log("[BACKEND][SERVICE][CANCELLED FILTER] Processing cancelled filter (single date):", {
+        date: selectedDate,
+        statusList,
+        tableId,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    if (statusList.length === 1) {
+      const statusValue = statusList[0];
+      if (statusValue === 'BOOKED') {
+        sql += ` AND bc.[Status] = 'BOOKED'`;
+      } else if (statusValue === 'CONFIRMED') {
+        sql += ` AND (COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = 'CONFIRMED' OR COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = '')`;
+      } else if (statusValue === 'CANCELLED') {
+        sql += ` AND COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) IN ('CANCELLED', 'CANCELLED_NOTIFY')`;
+        console.log("[BACKEND][SERVICE][CANCELLED FILTER] SQL filter added for CANCELLED status (includes CANCELLED and CANCELLED_NOTIFY)");
+      } else {
+        sql += ` AND COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = @status`;
+        request.input("status", mssql.NVarChar, statusValue);
+      }
+    } else {
+      const statusConditions = statusList.map((s, i) => {
+        if (s === 'CONFIRMED') {
+          return `(COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = 'CONFIRMED' OR COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = '')`;
+        } else if (s === 'BOOKED') {
+          return `bc.[Status] = 'BOOKED'`;
+        } else {
+          request.input(`status${i}`, mssql.NVarChar, s);
+          return `COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(bc.[Status], ''))), ''), LTRIM(RTRIM(ISNULL(bm.[BookingStatus], '')))) = @status${i}`;
+        }
+      });
+      sql += ` AND (${statusConditions.join(' OR ')})`;
+    }
+  }
+  
+  // Apply tableId filter if provided
+  if (tableId) {
+    sql += ` AND (bc.[TableID] = @tableIdStr OR bc.[TableID] LIKE @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr)`;
+  }
+  
+  sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
+  
+  // Log SQL query for cancelled filter (single date)
+  if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
+    console.log("[BACKEND][SERVICE][CANCELLED FILTER] Executing SQL query (preview):", sql.substring(0, 500) + "...");
+  }
+  
+  const result = await request.query(sql);
+  
+  // Log query results for cancelled filter (single date)
+  if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
+    console.log("[BACKEND][SERVICE][CANCELLED FILTER] Query results (single date):", {
+      totalRows: result.recordset.length,
+      first5Rows: result.recordset.slice(0, 5).map(row => ({
+        bookingID: row.bookingID,
+        bookingStatus: row.bookingStatus,
+        childStatus: row.status,
+        customerName: row.guestName || row.customerNameFromMaster,
+        bookingDate: row.bookingDate
+      })),
+      allStatuses: result.recordset.map(row => row.status || row.bookingStatus),
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  return result.recordset.map((row) => mapReservationRow(row, selectedDate));
+}
+
+/**
+ * Get all reservations with optional filters
+ * Supports both single date and date range queries
+ * @param {Object} filters - Filter options
+ * @param {string} filters.date - Single date (YYYY-MM-DD) - for current day query
+ * @param {string} filters.fromDate - Start date (YYYY-MM-DD) - for date range query
+ * @param {string} filters.toDate - End date (YYYY-MM-DD) - for date range query
+ * @param {string|Array} filters.status - Status filter (optional)
+ * @param {number} filters.tableId - Table ID filter (optional)
+ * @returns {Promise<Array>} Array of reservations
+ */
+export async function getAllReservations(filters = {}) {
+  const { fromDate, toDate, date } = filters;
+  
+  // If both fromDate and toDate are provided, use date range query
+  if (fromDate && toDate) {
+    return await getReservationsByDateRange(filters);
+  }
+  
+  // Otherwise, use single date query (defaults to today if no date provided)
+  return await getReservationsByDate(filters);
+}
+
+/**
+ * Get a single reservation by booking ID
+ * @param {number|string} bookingId - Booking ID
+ * @returns {Promise<Object|null>} Reservation object or null if not found
+ */
+export async function getReservationById(bookingId) {
+  if (!bookingId) {
+    throw new Error("Booking ID is required");
+  }
+  
+  const pool = await connectToDb();
+  const request = pool.request();
+  request.input("BookingID", mssql.BigInt, parseInt(bookingId));
+  
+  // Check existing columns
+  const existingColumns = await checkReservationColumns();
+  const fields = buildReservationSelectFields(existingColumns);
+  
+  const sql = `
+    SELECT 
+      bm.[BookingID] AS bookingID,
+      bm.[BookingDate] AS bookingDate,
+      bm.[EnteredDate] AS enteredDate,
+      bm.[CustomerID] AS customerID,
+      ${fields.advancePaymentField}
+      bm.[BookingStatus] AS bookingStatus,
+      bm.[PartySize] AS partySize,
+      bm.[BookingSource] AS bookingSource,
+      ${fields.guestNameField}
+      ${fields.guestPhoneField}
+      ${fields.guestEmailField}
+      ${fields.reservationTimeField}
+      ${fields.specialRequestsField}
+      ${fields.tagsField}
+      ${fields.hostessIdField}
+      ${fields.hostessNameField}
+      ${fields.confirmationCodeField}
+      ${fields.isWalkInField}
+      ${fields.walkInArrivalTimeField}
+      bc.[BookingChildID] AS bookingChildID,
+      bc.[TableID] AS tableId,
+      bc.[AreaID] AS areaId,
+      bc.[Status] AS status,
+      ${fields.tableNotesField}
+      ${fields.seatedTimeField}
+      ${fields.vacatedTimeField}
+      cm.[CustomerName] AS customerNameFromMaster,
+      cm.[MobileNo] AS customerPhoneFromMaster,
+      cm.[Email] AS customerEmailFromMaster,
+      t.[TableNO] AS tableNo,
+      t.[TableName] AS tableName,
+      a.[AreaName] AS areaName
+    FROM dbo.[BookingMaster] bm
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+    WHERE bm.[BookingID] = @BookingID
+    ORDER BY bc.[TableID]
+  `;
+  
+  const result = await request.query(sql);
+  
+  if (result.recordset.length === 0) {
+    return null;
+  }
+  
+  // Use first row for master data (all rows have same BookingMaster data)
+  const row = result.recordset[0];
+  const customerName = row.guestName || row.customerNameFromMaster || "Guest";
+  const customerPhone = row.guestPhone || row.customerPhoneFromMaster || "";
+  const customerEmail = row.guestEmail || row.customerEmailFromMaster || "";
+  
+  // Format reservation time
+  let reservationTime = null;
+  if (row.reservationTime) {
+    if (typeof row.reservationTime === 'string') {
+      reservationTime = row.reservationTime.slice(0, 5);
+    } else if (row.reservationTime instanceof Date) {
+      reservationTime = row.reservationTime.toTimeString().slice(0, 5);
+    } else {
+      const timeStr = String(row.reservationTime);
+      reservationTime = timeStr.slice(0, 5);
+    }
+  } else if (row.bookingDate) {
+    reservationTime = new Date(row.bookingDate).toTimeString().slice(0, 5);
+  }
+  
+  const reservationDate = row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : null;
+
+  const tableIdStr = row.tableId ? String(row.tableId).trim() : "";
+  const ids = !tableIdStr ? [] : tableIdStr.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+
+  let tables = ids.map((tid, i) => ({
+    bookingChildID: row.bookingChildID,
+    tableID: tid,
+    tableId: tid,
+    tableNo: i === 0 ? row.tableNo : null,
+    tableName: i === 0 ? row.tableName : null,
+    areaID: row.areaId ? Number(row.areaId) : null,
+    areaId: row.areaId ? Number(row.areaId) : null,
+    areaName: row.areaName || "Dining",
+    status: row.status,
+    notes: row.tableNotes || "",
+    seatedTime: row.seatedTime,
+    vacatedTime: row.vacatedTime
+  }));
+
+  if (ids.length > 0) {
+    const tableReq = pool.request();
+    ids.forEach((id, i) => { tableReq.input(`tid${i}`, mssql.BigInt, id); });
+    const inParams = ids.map((_, i) => `@tid${i}`).join(", ");
+    const tableResult = await tableReq.query(`
+      SELECT [TableID], [TableNO], [TableName]
+      FROM dbo.[TableMaster]
+      WHERE [TableID] IN (${inParams})
+    `);
+    const tableMap = new Map(
+      (tableResult.recordset || []).map((r) => [
+        Number(r.TableID),
+        { tableNo: r.TableNO, tableName: r.TableName }
+      ])
+    );
+    tables = ids.map((tid) => {
+      const existing = tables.find((t) => (t.tableId || t.tableID) === tid) || {};
+      const details = tableMap.get(tid);
+      return {
+        ...existing,
+        tableID: tid,
+        tableId: tid,
+        tableNo: details?.tableNo ?? existing.tableNo,
+        tableName: details?.tableName ?? existing.tableName,
+        areaID: row.areaId ? Number(row.areaId) : null,
+        areaId: row.areaId ? Number(row.areaId) : null,
+        areaName: row.areaName || "Dining",
+        status: row.status,
+        notes: row.tableNotes || "",
+        seatedTime: row.seatedTime,
+        vacatedTime: row.vacatedTime
+      };
+    });
+  }
+
+  return {
+    reservationId: row.bookingID,
+    bookingID: row.bookingID,
+    bookingDate: row.bookingDate,
+    enteredDate: row.enteredDate,
+    reservationDate: reservationDate,
+    reservationTime: reservationTime,
+    customerID: row.customerID,
+    customerName: customerName,
+    customerPhone: customerPhone,
+    customerEmail: customerEmail,
+    numberOfGuests: row.partySize || 1,
+    partySize: row.partySize || 1,
+    advancePayment: parseFloat(row.advancePayment || 0),
+    bookingStatus: row.bookingStatus,
+    status: row.status || row.bookingStatus || "PENDING",
+    bookingSource: row.bookingSource,
+    specialRequests: row.specialRequests || "",
+    tags: row.tags || "",
+    hostessID: row.hostessID,
+    hostessName: row.hostessName || "",
+    confirmationCode: row.confirmationCode || "",
+    isWalkIn: row.isWalkIn || false,
+    walkInArrivalTime: row.walkInArrivalTime,
+    tables
+  };
+}
+
+/**
+ * Get reservations for a specific table
+ * @param {number|string} tableId - Table ID
+ * @returns {Promise<Array>} Array of reservations for the table
+ */
+export async function getReservationsByTable(tableId) {
+  if (!tableId) {
+    throw new Error("Table ID is required");
+  }
+  
+  // Use getAllReservations with tableId filter
+  return await getAllReservations({ tableId: parseInt(tableId) });
+}
+
+/**
+ * Update reservation status
+ * @param {number|string} bookingId - Booking ID
+ * @param {string} status - New status
+ * @returns {Promise<Object>} Update result
+ */
+export async function updateReservationStatus(bookingId, status) {
+  if (!bookingId) {
+    throw new Error("Booking ID is required");
+  }
+  
+  if (!status) {
+    throw new Error("Status is required");
+  }
+  
+  // NO STATUS MAPPINGS - Every status remains exactly as set
+  // Each status is independent and won't be converted to another status
+  const statusMapping = {
+    // All mappings removed - statuses stay as-is
+  };
+  
+  const statusUpper = status.toUpperCase();
+  // All valid statuses - NO MAPPINGS, each status stays exactly as set
+  const validStatuses = [
+    'BOOKED', 'CONFIRMED', 'LEFT_MESSAGE', 'ARRIVED', 'CHECKED_IN', 'CANCELLED', 
+    'NO_SHOW', 'SEATED', 'PENDING', 'HOLD', 'LEFT', 'BUS_TABLE', 'PAID', 
+    'PARTIALLY_SEATED', 'NO_ANSWER', 'WRONG_NUMBER', 'PARTIALLY_ARRIVED', 
+    'LATE', 'CANCELLED_NOTIFY'
+  ];
+  
+  // Map status if needed, otherwise use as-is
+  let statusToUse = statusMapping[statusUpper] || statusUpper;
+  
+  // Validate the final status
+  if (!validStatuses.includes(statusToUse)) {
+    throw new Error(`Invalid status: ${status}. Valid statuses: ${validStatuses.join(', ')}`);
+  }
+  
+  const pool = await connectToDb();
+  const tx = new mssql.Transaction(pool);
+  
+  try {
+    await tx.begin();
+    
+    const request = new mssql.Request(tx);
+    request.input("BookingID", mssql.BigInt, parseInt(bookingId));
+    request.input("Status", mssql.VarChar(50), statusToUse);
+    
+    // Update BookingMaster status
+    const updateMasterSql = `
+      UPDATE dbo.[BookingMaster]
+      SET ${q("BookingStatus")} = @Status
+      WHERE ${q("BookingID")} = @BookingID
+    `;
+    
+    // Update BookingChild status
+    const updateChildSql = `
+      UPDATE dbo.[BookingChild]
+      SET ${q("Status")} = @Status
+      WHERE ${q("BookingID")} = @BookingID
+    `;
+    
+    const masterResult = await request.query(updateMasterSql);
+    const childResult = await request.query(updateChildSql);
+    
+    // Check if any rows were updated
+    const masterRowsAffected = masterResult.rowsAffected[0] || 0;
+    const childRowsAffected = childResult.rowsAffected[0] || 0;
+    
+    console.log(`[RESERVATION][UPDATE-STATUS] Update attempt for BookingID ${bookingId}: ${statusUpper} -> ${statusToUse}`);
+    console.log(`[RESERVATION][UPDATE-STATUS] Rows affected - Master: ${masterRowsAffected}, Child: ${childRowsAffected}`);
+    
+    if (masterRowsAffected === 0 && childRowsAffected === 0) {
+      await tx.rollback();
+      throw new Error(`Reservation with ID ${bookingId} not found`);
+    }
+    
+    // Verify the update by reading back the status before committing
+    const verifyRequest = new mssql.Request(tx);
+    verifyRequest.input("BookingID", mssql.BigInt, parseInt(bookingId));
+    const verifySql = `
+      SELECT TOP 1 
+        bm.[BookingStatus] AS bookingStatus,
+        bc.[Status] AS status
+      FROM dbo.[BookingMaster] bm
+      INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+      WHERE bm.[BookingID] = @BookingID
+    `;
+    const verifyResult = await verifyRequest.query(verifySql);
+    
+    if (verifyResult.recordset.length > 0) {
+      const verifiedStatus = verifyResult.recordset[0].status;
+      const verifiedBookingStatus = verifyResult.recordset[0].bookingStatus;
+      console.log(`[RESERVATION][UPDATE-STATUS] Verified status before commit - Status: ${verifiedStatus}, BookingStatus: ${verifiedBookingStatus}`);
+      
+      if (verifiedStatus !== statusToUse || verifiedBookingStatus !== statusToUse) {
+        console.error(`[RESERVATION][UPDATE-STATUS] WARNING: Status mismatch! Expected: ${statusToUse}, Got Status: ${verifiedStatus}, BookingStatus: ${verifiedBookingStatus}`);
+      }
+    }
+    
+    await tx.commit();
+    console.log(`[RESERVATION][UPDATE-STATUS] Transaction committed for BookingID ${bookingId}: ${statusUpper} -> ${statusToUse} (Master: ${masterRowsAffected} rows, Child: ${childRowsAffected} rows)`);
+    
+    return {
+      ok: true,
+      message: `Reservation status updated to ${statusToUse}`,
+      bookingID: parseInt(bookingId),
+      status: statusToUse,
+      originalStatus: statusUpper !== statusToUse ? statusUpper : undefined
+    };
+  } catch (error) {
+    await tx.rollback();
     throw error;
   }
 }
