@@ -109,6 +109,12 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
 
   if (!open || !item) return null;
 
+  // Unit price only (exclude tax) - match ItemCard display
+  const unitPriceVal = (() => {
+    const v = item["pc.UnitPrice"] ?? item["pc_UnitPrice"] ?? item._raw?.["pc.UnitPrice"] ?? item._raw?.["pc_UnitPrice"] ?? 0;
+    return Number.isFinite(Number(v)) ? Number(v) : 0;
+  })();
+
   // Get item name - use Arabic if available and language is Arabic
   const arabicName = item._raw?.["pm.DescriptionArabic"] || 
                      item._raw?.["pm_DescriptionArabic"] || 
@@ -273,7 +279,7 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
                 </h2>
                 <div className="flex-shrink-0 px-4 py-2 rounded-xl" style={{ background: 'rgba(139, 111, 71, 0.1)' }}>
                   <span className="text-xl sm:text-2xl font-bold" style={{ color: 'var(--grad-start)' }}>
-                    {formatAED(item.price)}
+                    {formatAED(unitPriceVal)}
                   </span>
                 </div>
               </div>

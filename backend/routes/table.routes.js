@@ -93,10 +93,10 @@ router.get("/tables/by-area/:areaId", async (req, res) => {
           WHEN EXISTS (
             SELECT 1 FROM dbo.[BookingChild] bc
             INNER JOIN dbo.[BookingMaster] bm ON bc.[BookingID] = bm.[BookingID]
-            WHERE (bc.[TableID] = CAST(t.[TableID] AS NVARCHAR(200)) OR bc.[TableID] LIKE CAST(t.[TableID] AS NVARCHAR(200)) + ',%' OR bc.[TableID] LIKE '%,' + CAST(t.[TableID] AS NVARCHAR(200)) + ',%' OR bc.[TableID] LIKE '%,' + CAST(t.[TableID] AS NVARCHAR(200)))
+            WHERE bc.[TableID] = t.[TableID]
             AND bc.[Status] = 'BOOKED'
             AND CONVERT(date, bm.[BookingDate]) = CONVERT(date, GETDATE())
-            AND TRY_CAST(bc.[AreaID] AS BIGINT) = @areaId
+            AND bc.[AreaID] = @areaId
           ) THEN 'Reserved'
           ELSE 'Available'
         END AS status

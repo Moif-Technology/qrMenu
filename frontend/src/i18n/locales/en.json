@@ -31,7 +31,7 @@
     "add": "Add",
     "customize": "Customize",
     "vat_inc": "Vat Inc.",
-    "vat_service_note": "VAT inclusive service charge not included",
+    "vat_service_note": "Prices are subject to VAT & service charge",
     "toast_added": "{{name}} added to order",
     "toast_suggestion": "How about {{name}}?"
   },

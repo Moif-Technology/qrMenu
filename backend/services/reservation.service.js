@@ -619,7 +619,7 @@ export async function createReservation(reservationData) {
       const bookingChildReq = new mssql.Request(tx);
       bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
       bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-      bookingChildReq.input("TableID", mssql.NVarChar(200), "0"); // 0 = no table assigned yet
+      bookingChildReq.input("TableID", mssql.BigInt, 0); // 0 = no table assigned yet
       bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId || 0); // 0 if no area selected
       // Use initialStatus if provided, otherwise default to "BOOKED"
       const bookingStatus = initialStatus || "BOOKED";
@@ -646,36 +646,46 @@ export async function createReservation(reservationData) {
       await bookingChildReq.query(bookingChildSql);
       console.log("[RESERVATION] BookingChild created with TableID = 0 (unassigned)");
     } else {
-      // Regular reservation: ONE BookingChild with TableID = comma-separated (e.g. "66,67")
-      const tableIdsStr = tableIds.join(",");
-      const bookingChildID = await getNextIdTx("BookingChild", tx);
-      bookingChildIDs.push(bookingChildID);
+      // Regular reservation: one BookingChild row per table (TableID bigint - no DB migration needed)
+      for (const tid of tableIds) {
+        const tidNum = typeof tid === "number" ? tid : parseInt(tid, 10);
+        if (isNaN(tidNum) || tidNum <= 0) continue;
 
-      const bookingChildReq = new mssql.Request(tx);
-      bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
-      bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
-      bookingChildReq.input("TableID", mssql.NVarChar(200), tableIdsStr);
-      bookingChildReq.input("AreaID", mssql.BigInt, finalAreaId || 0);
-      bookingChildReq.input("Status", mssql.VarChar(50), initialStatus || "BOOKED");
-      bookingChildReq.input("Notes", mssql.NVarChar(500), null);
-      bookingChildReq.input("SeatedTime", mssql.DateTime, null);
-      bookingChildReq.input("VacatedTime", mssql.DateTime, null);
-      bookingChildReq.input("CreatedOn", mssql.DateTime, enteredDate);
-      bookingChildReq.input("ModifiedOn", mssql.DateTime, null);
+        let tableAreaId = finalAreaId || 0;
+        const areaReq = new mssql.Request(tx);
+        areaReq.input("tableId", mssql.BigInt, tidNum);
+        const areaRes = await areaReq.query(`SELECT TOP 1 ${q("AreaId")} AS AreaID FROM dbo.[TableMaster] WHERE ${q("TableID")} = @tableId`);
+        if (areaRes.recordset.length > 0) tableAreaId = parseInt(areaRes.recordset[0].AreaID) || tableAreaId;
 
-      await bookingChildReq.query(`
-        INSERT INTO ${T_BOOKINGC} (
-          ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
-          ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
-          ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
-        )
-        VALUES (
-          @BookingChildID, @BookingID, @TableID,
-          @AreaID, @Status, @Notes,
-          @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
-        )
-      `);
-      console.log("[RESERVATION] Inserted single BookingChild with TableID:", tableIdsStr);
+        const bookingChildID = await getNextIdTx("BookingChild", tx);
+        bookingChildIDs.push(bookingChildID);
+
+        const bookingChildReq = new mssql.Request(tx);
+        bookingChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
+        bookingChildReq.input("BookingID", mssql.BigInt, bookingID);
+        bookingChildReq.input("TableID", mssql.BigInt, tidNum);
+        bookingChildReq.input("AreaID", mssql.BigInt, tableAreaId);
+        bookingChildReq.input("Status", mssql.VarChar(50), initialStatus || "BOOKED");
+        bookingChildReq.input("Notes", mssql.NVarChar(500), null);
+        bookingChildReq.input("SeatedTime", mssql.DateTime, null);
+        bookingChildReq.input("VacatedTime", mssql.DateTime, null);
+        bookingChildReq.input("CreatedOn", mssql.DateTime, enteredDate);
+        bookingChildReq.input("ModifiedOn", mssql.DateTime, null);
+
+        await bookingChildReq.query(`
+          INSERT INTO ${T_BOOKINGC} (
+            ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
+            ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
+            ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
+          )
+          VALUES (
+            @BookingChildID, @BookingID, @TableID,
+            @AreaID, @Status, @Notes,
+            @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
+          )
+        `);
+      }
+      console.log("[RESERVATION] Inserted", tableIds.length, "BookingChild row(s) for tables:", tableIds.join(", "));
     }
 
     // Commit transaction
@@ -957,9 +967,10 @@ try {
  * @returns {Promise<Object>} Object with existingColumns sets for both tables
  */
 async function checkReservationColumns() {
+  console.log("[RESERVATION-SERVICE-CHECK-COLUMNS] ENTRY");
   const pool = await connectToDb();
   const checkColumnsReq = pool.request();
-  
+  console.log("[RESERVATION-SERVICE-CHECK-COLUMNS] ABOUT TO RUN QUERY (INFORMATION_SCHEMA)");
   const [masterColumns, childColumns] = await Promise.all([
     checkColumnsReq.query(`
       SELECT COLUMN_NAME
@@ -1100,7 +1111,7 @@ function mapReservationRow(row, selectedDate) {
  */
 export async function getReservationsByDateRange(filters = {}) {
   const { fromDate, toDate, status, tableId } = filters;
-  
+  console.log("[RESERVATION-SERVICE-DATE-RANGE] ENTRY", { fromDate, toDate, status, tableId });
   if (!fromDate || !toDate) {
     throw new Error("fromDate and toDate are required for date range query");
   }
@@ -1111,41 +1122,38 @@ export async function getReservationsByDateRange(filters = {}) {
   request.input("toDate", mssql.Date, toDate);
   
   if (tableId) {
-    request.input("tableIdStr", mssql.NVarChar(20), String(tableId));
+    request.input("tableIdNum", mssql.BigInt, parseInt(tableId, 10) || 0);
   }
   
-  // Check existing columns
-  const existingColumns = await checkReservationColumns();
-  const fields = buildReservationSelectFields(existingColumns);
-  
-  let sql = `
+  // Working query: direct joins and explicit column list (matches SSMS-tested query)
+  const reservationSelectFromJoins = `
     SELECT 
       bm.[BookingID] AS bookingID,
       bm.[BookingDate] AS bookingDate,
       bm.[EnteredDate] AS enteredDate,
       bm.[CustomerID] AS customerID,
-      ${fields.advancePaymentField}
+      bm.[AdavncePayment] AS advancePayment,
       bm.[BookingStatus] AS bookingStatus,
       bm.[PartySize] AS partySize,
       bm.[BookingSource] AS bookingSource,
-      ${fields.guestNameField}
-      ${fields.guestPhoneField}
-      ${fields.guestEmailField}
-      ${fields.reservationTimeField}
-      ${fields.specialRequestsField}
-      ${fields.tagsField}
-      ${fields.hostessIdField}
-      ${fields.hostessNameField}
-      ${fields.confirmationCodeField}
-      ${fields.isWalkInField}
-      ${fields.walkInArrivalTimeField}
+      bm.[GuestName] AS guestName,
+      bm.[GuestPhone] AS guestPhone,
+      bm.[GuestEmail] AS guestEmail,
+      bm.[ReservationTime] AS reservationTime,
+      bm.[SpecialRequests] AS specialRequests,
+      bm.[Tags] AS tags,
+      bm.[HostessID] AS hostessID,
+      bm.[HostessName] AS hostessName,
+      bm.[ConfirmationCode] AS confirmationCode,
+      bm.[IsWalkIn] AS isWalkIn,
+      bm.[WalkInArrivalTime] AS walkInArrivalTime,
       bc.[BookingChildID] AS bookingChildID,
       bc.[TableID] AS tableId,
       bc.[AreaID] AS areaId,
       bc.[Status] AS status,
-      ${fields.tableNotesField}
-      ${fields.seatedTimeField}
-      ${fields.vacatedTimeField}
+      bc.[Notes] AS tableNotes,
+      bc.[SeatedTime] AS seatedTime,
+      bc.[VacatedTime] AS vacatedTime,
       cm.[CustomerName] AS customerNameFromMaster,
       cm.[MobileNo] AS customerPhoneFromMaster,
       cm.[Email] AS customerEmailFromMaster,
@@ -1153,10 +1161,12 @@ export async function getReservationsByDateRange(filters = {}) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
-    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
+  `;
+  let sql = reservationSelectFromJoins + `
     WHERE CONVERT(date, bm.[BookingDate]) >= @fromDate
       AND CONVERT(date, bm.[BookingDate]) <= @toDate
   `;
@@ -1204,9 +1214,10 @@ export async function getReservationsByDateRange(filters = {}) {
     }
   }
   
-  // Apply tableId filter (TableID is comma-separated string e.g. "66,67")
+  // Apply tableId filter (one row per table, TableID = bigint)
   if (tableId) {
-    sql += ` AND (bc.[TableID] = @tableIdStr OR bc.[TableID] LIKE @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr)`;
+    request.input("tableIdNum", mssql.BigInt, parseInt(tableId, 10) || 0);
+    sql += ` AND bc.[TableID] = @tableIdNum`;
   }
   
   sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
@@ -1216,7 +1227,30 @@ export async function getReservationsByDateRange(filters = {}) {
     console.log("[BACKEND][SERVICE][CANCELLED FILTER] Executing SQL query (preview):", sql.substring(0, 500) + "...");
   }
   
+  // ---- Query test logging: exact SQL that runs (params inlined for copy to SSMS) ----
+  const esc = (s) => String(s).replace(/'/g, "''");
+  let sqlInlined = sql
+    .replace(/@fromDate/g, `'${fromDate}'`)
+    .replace(/@toDate/g, `'${toDate}'`);
+  if (tableId != null) sqlInlined = sqlInlined.replace(/@tableIdNum/g, String(parseInt(tableId, 10) || 0));
+  if (status) {
+    const statusList = Array.isArray(status) ? status : status.split(',').map((s) => s.trim().toUpperCase());
+    if (statusList.length === 1 && !['BOOKED', 'CONFIRMED', 'CANCELLED'].includes(statusList[0])) {
+      sqlInlined = sqlInlined.replace(/@status\b/g, `N'${esc(statusList[0])}'`);
+    } else {
+      statusList.forEach((s, i) => {
+        if (s !== 'BOOKED' && s !== 'CONFIRMED' && s !== 'CANCELLED')
+          sqlInlined = sqlInlined.replace(new RegExp(`@status${i}\\b`, 'g'), `N'${esc(s)}'`);
+      });
+    }
+  }
+  console.log("[RESERVATION-QUERY-TEST] getReservationsByDateRange PARAMS: fromDate=" + fromDate + ", toDate=" + toDate + ", tableId=" + (tableId ?? 'null') + ", status=" + (status ?? 'null'));
+  console.log("[RESERVATION-QUERY-TEST] --- QUERY THAT RUNS IN SQL (copy to SSMS) ---\n" + sqlInlined + "\n--- END QUERY ---");
+  const queryStartMs = Date.now();
   const result = await request.query(sql);
+  const queryTimeMs = Date.now() - queryStartMs;
+  console.log("[RESERVATION-QUERY-TEST] getReservationsByDateRange EXECUTION TIME: " + queryTimeMs + " ms, ROWS: " + (result.recordset?.length ?? 0));
+  console.log("[RESERVATION-SERVICE-DATE-RANGE] QUERY OK rows:", result.recordset?.length);
   
   // Log query results for cancelled filter
   if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
@@ -1234,7 +1268,21 @@ export async function getReservationsByDateRange(filters = {}) {
     });
   }
   
-  return result.recordset.map((row) => mapReservationRow(row, fromDate));
+  const rows = result.recordset || [];
+  const byBooking = new Map();
+  for (const row of rows) {
+    const key = row.bookingID;
+    if (!byBooking.has(key)) byBooking.set(key, []);
+    byBooking.get(key).push(row);
+  }
+  return Array.from(byBooking.values()).map((group) => {
+    const first = group[0];
+    const tableIds = group.map((r) => Number(r.tableId)).filter((n) => !isNaN(n));
+    const merged = mapReservationRow(first, fromDate);
+    merged.tableId = tableIds[0] ?? merged.tableId;
+    merged.tableIds = tableIds.length > 1 ? tableIds.join(",") : (merged.tableIds || null);
+    return merged;
+  });
 }
 
 /**
@@ -1247,50 +1295,46 @@ export async function getReservationsByDateRange(filters = {}) {
  */
 export async function getReservationsByDate(filters = {}) {
   const { date, status, tableId } = filters;
-  
-  // If no date provided, use today's date
   const selectedDate = date || new Date().toISOString().split('T')[0];
+  console.log("[RESERVATION-SERVICE-DATE] ENTRY", { date, selectedDate, status, tableId });
   
   const pool = await connectToDb();
   const request = pool.request();
   request.input("selectedDate", mssql.Date, selectedDate);
   
   if (tableId) {
-    request.input("tableIdStr", mssql.NVarChar(20), String(tableId));
+    request.input("tableIdNum", mssql.BigInt, parseInt(tableId, 10) || 0);
   }
   
-  // Check existing columns
-  const existingColumns = await checkReservationColumns();
-  const fields = buildReservationSelectFields(existingColumns);
-  
-  let sql = `
+  // Use working query: direct joins and explicit column list (matches SSMS-tested query)
+  const reservationSelectFromJoinsDate = `
     SELECT 
       bm.[BookingID] AS bookingID,
       bm.[BookingDate] AS bookingDate,
       bm.[EnteredDate] AS enteredDate,
       bm.[CustomerID] AS customerID,
-      ${fields.advancePaymentField}
+      bm.[AdavncePayment] AS advancePayment,
       bm.[BookingStatus] AS bookingStatus,
       bm.[PartySize] AS partySize,
       bm.[BookingSource] AS bookingSource,
-      ${fields.guestNameField}
-      ${fields.guestPhoneField}
-      ${fields.guestEmailField}
-      ${fields.reservationTimeField}
-      ${fields.specialRequestsField}
-      ${fields.tagsField}
-      ${fields.hostessIdField}
-      ${fields.hostessNameField}
-      ${fields.confirmationCodeField}
-      ${fields.isWalkInField}
-      ${fields.walkInArrivalTimeField}
+      bm.[GuestName] AS guestName,
+      bm.[GuestPhone] AS guestPhone,
+      bm.[GuestEmail] AS guestEmail,
+      bm.[ReservationTime] AS reservationTime,
+      bm.[SpecialRequests] AS specialRequests,
+      bm.[Tags] AS tags,
+      bm.[HostessID] AS hostessID,
+      bm.[HostessName] AS hostessName,
+      bm.[ConfirmationCode] AS confirmationCode,
+      bm.[IsWalkIn] AS isWalkIn,
+      bm.[WalkInArrivalTime] AS walkInArrivalTime,
       bc.[BookingChildID] AS bookingChildID,
       bc.[TableID] AS tableId,
       bc.[AreaID] AS areaId,
       bc.[Status] AS status,
-      ${fields.tableNotesField}
-      ${fields.seatedTimeField}
-      ${fields.vacatedTimeField}
+      bc.[Notes] AS tableNotes,
+      bc.[SeatedTime] AS seatedTime,
+      bc.[VacatedTime] AS vacatedTime,
       cm.[CustomerName] AS customerNameFromMaster,
       cm.[MobileNo] AS customerPhoneFromMaster,
       cm.[Email] AS customerEmailFromMaster,
@@ -1298,12 +1342,13 @@ export async function getReservationsByDate(filters = {}) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
-    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
     WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
   `;
+  let sql = reservationSelectFromJoinsDate;
   
   // Apply status filter if provided
   if (status) {
@@ -1349,7 +1394,7 @@ export async function getReservationsByDate(filters = {}) {
   
   // Apply tableId filter if provided
   if (tableId) {
-    sql += ` AND (bc.[TableID] = @tableIdStr OR bc.[TableID] LIKE @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr + ',%' OR bc.[TableID] LIKE '%,' + @tableIdStr)`;
+    sql += ` AND bc.[TableID] = @tableIdNum`;
   }
   
   sql += ` ORDER BY bm.[BookingDate], bc.[TableID]`;
@@ -1359,7 +1404,28 @@ export async function getReservationsByDate(filters = {}) {
     console.log("[BACKEND][SERVICE][CANCELLED FILTER] Executing SQL query (preview):", sql.substring(0, 500) + "...");
   }
   
+  // ---- Query test logging: exact SQL that runs (params inlined for copy to SSMS) ----
+  const escDate = (s) => String(s).replace(/'/g, "''");
+  let sqlInlinedDate = sql.replace(/@selectedDate/g, `'${selectedDate}'`);
+  if (tableId != null) sqlInlinedDate = sqlInlinedDate.replace(/@tableIdNum/g, String(parseInt(tableId, 10) || 0));
+  if (status) {
+    const statusList = Array.isArray(status) ? status : status.split(',').map((s) => s.trim().toUpperCase());
+    if (statusList.length === 1 && !['BOOKED', 'CONFIRMED', 'CANCELLED'].includes(statusList[0])) {
+      sqlInlinedDate = sqlInlinedDate.replace(/@status\b/g, `N'${escDate(statusList[0])}'`);
+    } else {
+      statusList.forEach((s, i) => {
+        if (s !== 'BOOKED' && s !== 'CONFIRMED' && s !== 'CANCELLED')
+          sqlInlinedDate = sqlInlinedDate.replace(new RegExp(`@status${i}\\b`, 'g'), `N'${escDate(s)}'`);
+      });
+    }
+  }
+  console.log("[RESERVATION-QUERY-TEST] getReservationsByDate PARAMS: selectedDate=" + selectedDate + ", tableId=" + (tableId ?? 'null') + ", status=" + (status ?? 'null'));
+  console.log("[RESERVATION-QUERY-TEST] --- QUERY THAT RUNS IN SQL (copy to SSMS) ---\n" + sqlInlinedDate + "\n--- END QUERY ---");
+  const queryStartMsDate = Date.now();
   const result = await request.query(sql);
+  const queryTimeMsDate = Date.now() - queryStartMsDate;
+  console.log("[RESERVATION-QUERY-TEST] getReservationsByDate EXECUTION TIME: " + queryTimeMsDate + " ms, ROWS: " + (result.recordset?.length ?? 0));
+  console.log("[RESERVATION-SERVICE-DATE] QUERY OK rows:", result.recordset?.length);
   
   // Log query results for cancelled filter (single date)
   if (status && (status.toUpperCase() === 'CANCELLED' || (Array.isArray(status) && status.includes('CANCELLED')))) {
@@ -1377,7 +1443,21 @@ export async function getReservationsByDate(filters = {}) {
     });
   }
   
-  return result.recordset.map((row) => mapReservationRow(row, selectedDate));
+  const rows = result.recordset || [];
+  const byBooking = new Map();
+  for (const row of rows) {
+    const key = row.bookingID;
+    if (!byBooking.has(key)) byBooking.set(key, []);
+    byBooking.get(key).push(row);
+  }
+  return Array.from(byBooking.values()).map((group) => {
+    const first = group[0];
+    const tableIds = group.map((r) => Number(r.tableId)).filter((n) => !isNaN(n));
+    const merged = mapReservationRow(first, selectedDate);
+    merged.tableId = tableIds[0] ?? merged.tableId;
+    merged.tableIds = tableIds.length > 1 ? tableIds.join(",") : (merged.tableIds || null);
+    return merged;
+  });
 }
 
 /**
@@ -1393,13 +1473,14 @@ export async function getReservationsByDate(filters = {}) {
  */
 export async function getAllReservations(filters = {}) {
   const { fromDate, toDate, date } = filters;
-  
+  console.log("[RESERVATION-SERVICE-GET-ALL] ENTRY", { fromDate, toDate, date });
   // If both fromDate and toDate are provided, use date range query
   if (fromDate && toDate) {
+    console.log("[RESERVATION-SERVICE-GET-ALL] -> calling getReservationsByDateRange");
     return await getReservationsByDateRange(filters);
   }
-  
   // Otherwise, use single date query (defaults to today if no date provided)
+  console.log("[RESERVATION-SERVICE-GET-ALL] -> calling getReservationsByDate");
   return await getReservationsByDate(filters);
 }
 
@@ -1409,46 +1490,45 @@ export async function getAllReservations(filters = {}) {
  * @returns {Promise<Object|null>} Reservation object or null if not found
  */
 export async function getReservationById(bookingId) {
+  console.log("[RESERVATION-SERVICE-BY-ID] ENTRY", bookingId);
   if (!bookingId) {
     throw new Error("Booking ID is required");
   }
   
   const pool = await connectToDb();
   const request = pool.request();
-  request.input("BookingID", mssql.BigInt, parseInt(bookingId));
+  request.input("BookingID", mssql.BigInt, parseInt(bookingId, 10));
   
-  // Check existing columns
-  const existingColumns = await checkReservationColumns();
-  const fields = buildReservationSelectFields(existingColumns);
-  
+  // Use working query: direct joins and explicit column list (matches SSMS-tested query)
+  console.log("[RESERVATION-SERVICE-BY-ID] ABOUT TO RUN QUERY (getReservationById SELECT)");
   const sql = `
     SELECT 
       bm.[BookingID] AS bookingID,
       bm.[BookingDate] AS bookingDate,
       bm.[EnteredDate] AS enteredDate,
       bm.[CustomerID] AS customerID,
-      ${fields.advancePaymentField}
+      bm.[AdavncePayment] AS advancePayment,
       bm.[BookingStatus] AS bookingStatus,
       bm.[PartySize] AS partySize,
       bm.[BookingSource] AS bookingSource,
-      ${fields.guestNameField}
-      ${fields.guestPhoneField}
-      ${fields.guestEmailField}
-      ${fields.reservationTimeField}
-      ${fields.specialRequestsField}
-      ${fields.tagsField}
-      ${fields.hostessIdField}
-      ${fields.hostessNameField}
-      ${fields.confirmationCodeField}
-      ${fields.isWalkInField}
-      ${fields.walkInArrivalTimeField}
+      bm.[GuestName] AS guestName,
+      bm.[GuestPhone] AS guestPhone,
+      bm.[GuestEmail] AS guestEmail,
+      bm.[ReservationTime] AS reservationTime,
+      bm.[SpecialRequests] AS specialRequests,
+      bm.[Tags] AS tags,
+      bm.[HostessID] AS hostessID,
+      bm.[HostessName] AS hostessName,
+      bm.[ConfirmationCode] AS confirmationCode,
+      bm.[IsWalkIn] AS isWalkIn,
+      bm.[WalkInArrivalTime] AS walkInArrivalTime,
       bc.[BookingChildID] AS bookingChildID,
       bc.[TableID] AS tableId,
       bc.[AreaID] AS areaId,
       bc.[Status] AS status,
-      ${fields.tableNotesField}
-      ${fields.seatedTimeField}
-      ${fields.vacatedTimeField}
+      bc.[Notes] AS tableNotes,
+      bc.[SeatedTime] AS seatedTime,
+      bc.[VacatedTime] AS vacatedTime,
       cm.[CustomerName] AS customerNameFromMaster,
       cm.[MobileNo] AS customerPhoneFromMaster,
       cm.[Email] AS customerEmailFromMaster,
@@ -1456,15 +1536,16 @@ export async function getReservationById(bookingId) {
       t.[TableName] AS tableName,
       a.[AreaName] AS areaName
     FROM dbo.[BookingMaster] bm
-    INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
-    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
-    LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
+    INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+    LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+    LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
+    LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
     WHERE bm.[BookingID] = @BookingID
     ORDER BY bc.[TableID]
   `;
   
   const result = await request.query(sql);
+  console.log("[RESERVATION-SERVICE-BY-ID] QUERY OK rows:", result.recordset?.length);
   
   if (result.recordset.length === 0) {
     return null;
@@ -1493,58 +1574,25 @@ export async function getReservationById(bookingId) {
   
   const reservationDate = row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : null;
 
-  const tableIdStr = row.tableId ? String(row.tableId).trim() : "";
-  const ids = !tableIdStr ? [] : tableIdStr.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
-
-  let tables = ids.map((tid, i) => ({
-    bookingChildID: row.bookingChildID,
-    tableID: tid,
-    tableId: tid,
-    tableNo: i === 0 ? row.tableNo : null,
-    tableName: i === 0 ? row.tableName : null,
-    areaID: row.areaId ? Number(row.areaId) : null,
-    areaId: row.areaId ? Number(row.areaId) : null,
-    areaName: row.areaName || "Dining",
-    status: row.status,
-    notes: row.tableNotes || "",
-    seatedTime: row.seatedTime,
-    vacatedTime: row.vacatedTime
-  }));
-
-  if (ids.length > 0) {
-    const tableReq = pool.request();
-    ids.forEach((id, i) => { tableReq.input(`tid${i}`, mssql.BigInt, id); });
-    const inParams = ids.map((_, i) => `@tid${i}`).join(", ");
-    const tableResult = await tableReq.query(`
-      SELECT [TableID], [TableNO], [TableName]
-      FROM dbo.[TableMaster]
-      WHERE [TableID] IN (${inParams})
-    `);
-    const tableMap = new Map(
-      (tableResult.recordset || []).map((r) => [
-        Number(r.TableID),
-        { tableNo: r.TableNO, tableName: r.TableName }
-      ])
-    );
-    tables = ids.map((tid) => {
-      const existing = tables.find((t) => (t.tableId || t.tableID) === tid) || {};
-      const details = tableMap.get(tid);
-      return {
-        ...existing,
-        tableID: tid,
-        tableId: tid,
-        tableNo: details?.tableNo ?? existing.tableNo,
-        tableName: details?.tableName ?? existing.tableName,
-        areaID: row.areaId ? Number(row.areaId) : null,
-        areaId: row.areaId ? Number(row.areaId) : null,
-        areaName: row.areaName || "Dining",
-        status: row.status,
-        notes: row.tableNotes || "",
-        seatedTime: row.seatedTime,
-        vacatedTime: row.vacatedTime
-      };
-    });
-  }
+  // Build tables from ALL BookingChild rows (one row per table)
+  const tables = (result.recordset || []).map((r) => {
+    const tid = r.tableId != null ? Number(r.tableId) : null;
+    return {
+      bookingChildID: r.bookingChildID,
+      tableID: tid,
+      tableId: tid,
+      tableNo: r.tableNo,
+      tableName: r.tableName,
+      areaID: r.areaId ? Number(r.areaId) : null,
+      areaId: r.areaId ? Number(r.areaId) : null,
+      areaName: r.areaName || "Dining",
+      status: r.status,
+      notes: r.tableNotes || "",
+      seatedTime: r.seatedTime,
+      vacatedTime: r.vacatedTime
+    };
+  });
+  const tableIdsStr = tables.map((t) => t.tableId).filter((id) => id != null && id !== 0).join(",") || null;
 
   return {
     reservationId: row.bookingID,
@@ -1570,7 +1618,8 @@ export async function getReservationById(bookingId) {
     confirmationCode: row.confirmationCode || "",
     isWalkIn: row.isWalkIn || false,
     walkInArrivalTime: row.walkInArrivalTime,
-    tables
+    tables,
+    tableIds: tableIdsStr
   };
 }
 
@@ -1580,10 +1629,10 @@ export async function getReservationById(bookingId) {
  * @returns {Promise<Array>} Array of reservations for the table
  */
 export async function getReservationsByTable(tableId) {
+  console.log("[RESERVATION-SERVICE-GET-BY-TABLE] ENTRY", tableId);
   if (!tableId) {
     throw new Error("Table ID is required");
   }
-  
   // Use getAllReservations with tableId filter
   return await getAllReservations({ tableId: parseInt(tableId) });
 }
@@ -1595,6 +1644,7 @@ export async function getReservationsByTable(tableId) {
  * @returns {Promise<Object>} Update result
  */
 export async function updateReservationStatus(bookingId, status) {
+  console.log("[RESERVATION-SERVICE-UPDATE-STATUS] ENTRY", { bookingId, status });
   if (!bookingId) {
     throw new Error("Booking ID is required");
   }
@@ -1636,21 +1686,23 @@ export async function updateReservationStatus(bookingId, status) {
     request.input("BookingID", mssql.BigInt, parseInt(bookingId));
     request.input("Status", mssql.VarChar(50), statusToUse);
     
-    // Update BookingMaster status
+    // Update BookingMaster status (BookingID column may be varchar in DB)
     const updateMasterSql = `
       UPDATE dbo.[BookingMaster]
       SET ${q("BookingStatus")} = @Status
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
-    // Update BookingChild status
+    // Update BookingChild status (BookingID column may be varchar in DB)
     const updateChildSql = `
       UPDATE dbo.[BookingChild]
       SET ${q("Status")} = @Status
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
+    console.log("[RESERVATION-SERVICE-UPDATE-STATUS] ABOUT TO RUN QUERY (UPDATE BookingMaster)");
     const masterResult = await request.query(updateMasterSql);
+    console.log("[RESERVATION-SERVICE-UPDATE-STATUS] ABOUT TO RUN QUERY (UPDATE BookingChild)");
     const childResult = await request.query(updateChildSql);
     
     // Check if any rows were updated
@@ -1673,9 +1725,10 @@ export async function updateReservationStatus(bookingId, status) {
         bm.[BookingStatus] AS bookingStatus,
         bc.[Status] AS status
       FROM dbo.[BookingMaster] bm
-      INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
-      WHERE bm.[BookingID] = @BookingID
+      INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = TRY_CAST(bm.[BookingID] AS BIGINT)
+      WHERE TRY_CAST(bm.[BookingID] AS BIGINT) = @BookingID
     `;
+    console.log("[RESERVATION-SERVICE-UPDATE-STATUS] ABOUT TO RUN QUERY (verify SELECT)");
     const verifyResult = await verifyRequest.query(verifySql);
     
     if (verifyResult.recordset.length > 0) {

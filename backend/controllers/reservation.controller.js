@@ -77,6 +77,7 @@ export async function createReservationController(req, res) {
  * Get reservations for a specific table
  */
 export async function getReservationsByTableController(req, res) {
+  console.log("[RESERVATION-API-GET-BY-TABLE] ENTRY", req.params?.tableId);
   try {
     const { tableId } = req.params;
     const reservations = await getReservationsByTable(tableId);
@@ -88,7 +89,7 @@ export async function getReservationsByTableController(req, res) {
     });
   } catch (err) {
     const diag = unwrapSqlError(err);
-    console.error("[RESERVATION] GET by table ERROR:", diag.message || err);
+    console.error("[RESERVATION-API-GET-BY-TABLE] ERROR (varchar/bigint?):", diag.message || err);
     
     const msg = String(diag.message || "").toLowerCase();
     const code = (msg.includes("required") || msg.includes("invalid") || msg.includes("valid")) ? 400 : 500;
@@ -111,6 +112,7 @@ export async function getReservationsByTableController(req, res) {
  *   - tableId=5 (optional)
  */
 export async function getAllReservationsController(req, res) {
+  console.log("[RESERVATION-API-GET-ALL] ENTRY", { status: req.query?.status, date: req.query?.date, fromDate: req.query?.fromDate, toDate: req.query?.toDate, tableId: req.query?.tableId });
   try {
     const { status, date, fromDate, toDate, tableId } = req.query;
     
@@ -161,7 +163,7 @@ export async function getAllReservationsController(req, res) {
     });
   } catch (err) {
     const diag = unwrapSqlError(err);
-    console.error("[RESERVATION] GET all ERROR:", diag.message || err);
+    console.error("[RESERVATION-API-GET-ALL] ERROR (varchar/bigint?):", diag.message || err);
     
     return res.status(500).json({
       ok: false,
@@ -176,6 +178,7 @@ export async function getAllReservationsController(req, res) {
  * Get a single reservation by booking ID
  */
 export async function getReservationByIdController(req, res) {
+  console.log("[RESERVATION-API-GET-BY-ID] ENTRY", req.params?.bookingId);
   try {
     const { bookingId } = req.params;
     
@@ -201,7 +204,7 @@ export async function getReservationByIdController(req, res) {
     });
   } catch (err) {
     const diag = unwrapSqlError(err);
-    console.error("[RESERVATION] GET by ID ERROR:", diag.message || err);
+    console.error("[RESERVATION-API-GET-BY-ID] ERROR (varchar/bigint?):", diag.message || err);
     
     const msg = String(diag.message || "").toLowerCase();
     const code = msg.includes("required") || msg.includes("not found") ? 400 : 500;
@@ -220,6 +223,7 @@ export async function getReservationByIdController(req, res) {
  * Body: { status: "BOOKED" | "CONFIRMED" | "CANCELLED" | "ARRIVED" | "SEATED" | "NO_SHOW" | etc. }
  */
 export async function updateReservationStatusController(req, res) {
+  console.log("[RESERVATION-API-UPDATE-STATUS] ENTRY", { bookingId: req.params?.bookingId, status: req.body?.status });
   try {
     const { bookingId } = req.params;
     const { status } = req.body;
@@ -243,7 +247,7 @@ export async function updateReservationStatusController(req, res) {
     return res.json(result);
   } catch (err) {
     const diag = unwrapSqlError(err);
-    console.error("[RESERVATION] UPDATE status ERROR:", diag.message || err);
+    console.error("[RESERVATION-API-UPDATE-STATUS] ERROR (varchar/bigint?):", diag.message || err);
     
     const msg = String(diag.message || "").toLowerCase();
     const code = (msg.includes("required") || msg.includes("invalid") || msg.includes("not found")) ? 400 : 500;

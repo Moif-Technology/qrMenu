@@ -18,6 +18,7 @@ const q = (n) => `[${n}]`; // Helper to quote SQL identifiers
  * Query params: areaId (optional) - filter tables by area
  */
 router.get("/reservation/tables", async (req, res) => {
+  console.log("[RESERVATION-ROUTE-TABLES] ENTRY", { areaId: req.query?.areaId, date: req.query?.date });
   try {
     const pool = await connectToDb();
     const { areaId, date } = req.query;
@@ -44,7 +45,7 @@ router.get("/reservation/tables", async (req, res) => {
             AND ISNULL(km.[KotStatus], '') <> 'CANCELLED'
             AND ISNULL(km.[KotStatus], '') <> 'COMPLETED'
           ) THEN 'Occupied'
-          -- Then check for reservations
+          -- Then check for reservations (one BookingChild row per table, TableID = bigint)
           WHEN EXISTS (
             SELECT 1 FROM dbo.[BookingChild] bc
             INNER JOIN dbo.[BookingMaster] bm ON bc.[BookingID] = bm.[BookingID]
@@ -116,7 +117,9 @@ router.get("/reservation/tables", async (req, res) => {
     sql += ` ORDER BY t.[TableNO], t.[TableID]`;
     
     try {
+      console.log("[RESERVATION-ROUTE-TABLES] ABOUT TO RUN QUERY (tables list with reservation check)");
       const result = await request.query(sql);
+      console.log("[RESERVATION-ROUTE-TABLES] QUERY OK tables:", result.recordset?.length);
       const tables = result.recordset.map((row) => ({
         id: row.id,
         number: row.tableNo || row.number || row.id,
@@ -135,11 +138,11 @@ router.get("/reservation/tables", async (req, res) => {
       res.json({ ok: true, tables });
     } catch (queryError) {
       // If TableMaster doesn't exist or query fails, return empty array
-      console.warn("[/reservation/tables] TableMaster query failed, returning empty array:", queryError?.message);
+      console.error("[RESERVATION-ROUTE-TABLES] QUERY ERROR (varchar/bigint?):", queryError?.message || queryError);
       res.json({ ok: true, tables: [] });
     }
   } catch (e) {
-    console.error("[/reservation/tables] ERROR", e?.message || e);
+    console.error("[RESERVATION-ROUTE-TABLES] ERROR", e?.message || e);
     // Return empty array on error so frontend can use dummy data
     res.json({ ok: true, tables: [] });
   }
@@ -467,6 +470,108 @@ router.post("/reservation/guest", async (req, res) => {
 });
 
 /**
+ * GET /api/reservation/diagnose-columns
+ * Diagnose which table/column causes "varchar to bigint" - reports column types and non-numeric ID values
+ */
+router.get("/reservation/diagnose-columns", async (req, res) => {
+  try {
+    const pool = await connectToDb();
+    const report = { columnTypes: [], nonNumericChecks: [], message: "" };
+
+    // 1) Get actual data types for ID columns in reservation-related tables
+    const typeSql = `
+      SELECT 
+        c.TABLE_SCHEMA,
+        c.TABLE_NAME,
+        c.COLUMN_NAME,
+        c.DATA_TYPE,
+        c.CHARACTER_MAXIMUM_LENGTH
+      FROM INFORMATION_SCHEMA.COLUMNS c
+      WHERE c.TABLE_SCHEMA = 'dbo'
+        AND (
+          (c.TABLE_NAME = 'BookingMaster'   AND c.COLUMN_NAME IN ('BookingID','CustomerID'))
+          OR (c.TABLE_NAME = 'BookingChild' AND c.COLUMN_NAME IN ('BookingID','AreaID','TableID'))
+          OR (c.TABLE_NAME = 'CustomerMaster' AND c.COLUMN_NAME = 'CustomerID')
+          OR (c.TABLE_NAME = 'AreaMaster'    AND c.COLUMN_NAME = 'AreaID')
+          OR (c.TABLE_NAME = 'TableMaster'   AND c.COLUMN_NAME = 'TableID')
+        )
+      ORDER BY c.TABLE_NAME, c.COLUMN_NAME
+    `;
+    const typeResult = await pool.request().query(typeSql);
+    report.columnTypes = typeResult.recordset || [];
+
+    // 2) For each character-type ID column, find rows with non-numeric or empty values (would fail CAST to BIGINT)
+    const charCols = report.columnTypes.filter(
+      (r) => ["varchar", "nvarchar", "char", "nchar", "text", "ntext"].includes((r.DATA_TYPE || "").toLowerCase())
+    );
+
+    for (const col of charCols) {
+      const tableName = col.TABLE_NAME;
+      const columnName = col.COLUMN_NAME;
+      const fullName = `dbo.[${tableName}].[${columnName}]`;
+      try {
+        const checkSql = `
+          SELECT COUNT(*) AS total,
+            SUM(CASE WHEN LTRIM(RTRIM(ISNULL(${q(columnName)}, ''))) = '' THEN 1 ELSE 0 END) AS empty_count,
+            SUM(CASE WHEN LTRIM(RTRIM(ISNULL(${q(columnName)}, ''))) <> '' AND ISNUMERIC(LTRIM(RTRIM(${q(columnName)}))) = 0 THEN 1 ELSE 0 END) AS non_numeric_count
+          FROM dbo.[${tableName}]
+        `;
+        const checkResult = await pool.request().query(checkSql);
+        const row = checkResult.recordset[0];
+        const total = Number(row.total) || 0;
+        const emptyCount = Number(row.empty_count) || 0;
+        const nonNumericCount = Number(row.non_numeric_count) || 0;
+        report.nonNumericChecks.push({
+          table: tableName,
+          column: columnName,
+          fullName,
+          dataType: col.DATA_TYPE,
+          totalRows: total,
+          emptyCount,
+          nonNumericCount,
+          problematic: nonNumericCount > 0 || emptyCount > 0,
+        });
+
+        if (nonNumericCount > 0) {
+          const sampleSql = `
+            SELECT TOP 5 ${q(columnName)} AS value
+            FROM dbo.[${tableName}]
+            WHERE LTRIM(RTRIM(ISNULL(${q(columnName)}, ''))) <> ''
+              AND ISNUMERIC(LTRIM(RTRIM(${q(columnName)}))) = 0
+          `;
+          const sampleResult = await pool.request().query(sampleSql);
+          const last = report.nonNumericChecks[report.nonNumericChecks.length - 1];
+          last.sampleBadValues = (sampleResult.recordset || []).map((r) => r.value);
+        }
+      } catch (err) {
+        report.nonNumericChecks.push({
+          table: tableName,
+          column: columnName,
+          fullName,
+          error: err.message || String(err),
+          problematic: true,
+        });
+      }
+    }
+
+    const problematic = report.nonNumericChecks.filter((c) => c.problematic);
+    if (problematic.length > 0) {
+      report.message = "These columns are character type or contain non-numeric/empty values and can cause 'varchar to bigint' when compared to BIGINT: " +
+        problematic.map((c) => c.fullName + (c.nonNumericCount != null ? ` (${c.nonNumericCount} non-numeric, ${c.emptyCount || 0} empty)` : "")).join("; ");
+    } else if (charCols.length > 0) {
+      report.message = "All checked ID columns are character type but have no non-numeric/empty values in the sample. Join/WHERE may still compare to BIGINT elsewhere.";
+    } else {
+      report.message = "All listed ID columns are numeric type. If error persists, the conversion may happen in another part of the query or in a different table.";
+    }
+
+    res.json({ ok: true, diagnose: report });
+  } catch (e) {
+    console.error("[/reservation/diagnose-columns] ERROR", e?.message || e);
+    res.status(500).json({ ok: false, error: e?.message || "Diagnostic failed", diagnose: null });
+  }
+});
+
+/**
  * GET /api/reservation/time-slots
  * Get available time slots for a specific date
  */
@@ -641,7 +746,7 @@ router.get("/reservation/area-layout/:areaId", async (req, res) => {
       }));
 
       const occupiedTableIds = new Set(kotResult.recordset.map(row => row.TableID));
-      const reservedTableIds = new Set(reservedResult.recordset.map(row => row.TableID));
+      const reservedTableIds = new Set((reservedResult.recordset || []).map(row => row.TableID).filter(Boolean));
       
       // Create a map of table ID to KOT info for quick lookup
       const kotInfoMap = new Map();
@@ -726,6 +831,7 @@ router.get("/reservation", getAllReservationsController);
  * Query params: date (YYYY-MM-DD format) - required
  */
 router.get("/reservation/list", async (req, res) => {
+  console.log("[RESERVATION-ROUTE-LIST] ENTRY", { date: req.query?.date });
   try {
     const { date } = req.query;
     
@@ -740,6 +846,7 @@ router.get("/reservation/list", async (req, res) => {
     const request = pool.request();
     request.input("selectedDate", mssql.Date, date);
 
+    // Use working query: direct joins (matches SSMS-tested query)
     const sql = `
       SELECT 
         bm.[BookingID],
@@ -763,16 +870,18 @@ router.get("/reservation/list", async (req, res) => {
         a.[AreaName],
         a.[AreaNameArabic]
       FROM dbo.[BookingMaster] bm
-      INNER JOIN dbo.[BookingChild] bc ON TRY_CAST(bc.[BookingID] AS BIGINT) = bm.[BookingID]
-      LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = TRY_CAST(bm.[CustomerID] AS BIGINT)
-      LEFT JOIN dbo.[TableMaster] t ON CAST(t.[TableID] AS NVARCHAR(200)) = LTRIM(RTRIM(LEFT(bc.[TableID], CHARINDEX(',', bc.[TableID] + ',') - 1)))
-      LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = TRY_CAST(bc.[AreaID] AS BIGINT)
+      INNER JOIN dbo.[BookingChild] bc ON bc.[BookingID] = bm.[BookingID]
+      LEFT JOIN dbo.[CustomerMaster] cm ON cm.[CustomerID] = bm.[CustomerID]
+      LEFT JOIN dbo.[TableMaster] t ON t.[TableID] = bc.[TableID]
+      LEFT JOIN dbo.[AreaMaster] a ON a.[AreaID] = bc.[AreaID]
       WHERE CONVERT(date, bm.[BookingDate]) = @selectedDate
         AND bc.[Status] = 'BOOKED'
       ORDER BY bm.[BookingDate], bc.[TableID]
     `;
 
+    console.log("[RESERVATION-ROUTE-LIST] ABOUT TO RUN QUERY (list SELECT)");
     const result = await request.query(sql);
+    console.log("[RESERVATION-ROUTE-LIST] QUERY OK rows:", result.recordset?.length);
     
     // Group reservations by BookingID
     const reservationsMap = new Map();
@@ -820,7 +929,7 @@ router.get("/reservation/list", async (req, res) => {
       count: reservations.length
     });
   } catch (e) {
-    console.error("[/reservation/list] ERROR", e?.message || e);
+    console.error("[RESERVATION-ROUTE-LIST] ERROR (varchar/bigint?):", e?.message || e);
     res.status(500).json({ 
       ok: false, 
       error: e?.message || "Failed to fetch reservations" 
@@ -967,7 +1076,7 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
       });
     }
     
-      // Update BookingMaster
+      // Update BookingMaster (direct comparison - matches working query)
     const updateSql = `
       UPDATE ${q("BookingMaster")}
       SET ${updates.join(", ")}
@@ -984,7 +1093,8 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
           let resolvedAreaId = parseInt(areaId) || 0;
           if (!resolvedAreaId && validTableIds[0]) {
             const areaReq = new mssql.Request(tx);
-            areaReq.input("tableId", mssql.BigInt, validTableIds[0]);
+            // Use VarChar so WHERE [TableID] = @tableId works whether column is bigint or nvarchar (avoids nvarchar-to-bigint conversion)
+            areaReq.input("tableId", mssql.VarChar(50), String(validTableIds[0]));
             const areaResult = await areaReq.query(`
               SELECT TOP 1 [AreaId] AS AreaID FROM dbo.[TableMaster] WHERE [TableID] = @tableId
             `);
@@ -998,33 +1108,39 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
           deleteChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
           await deleteChildReq.query(`DELETE FROM ${q("BookingChild")} WHERE ${q("BookingID")} = @BookingID`);
 
-          // Insert ONE BookingChild with TableID = comma-separated (e.g. "66,67")
-          const tableIdsStr = validTableIds.join(",");
-          const bookingChildID = await getNextBookingChildIdTx(tx);
-          const insertChildReq = new mssql.Request(tx);
-          insertChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
-          insertChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
-          insertChildReq.input("TableID", mssql.NVarChar(200), tableIdsStr);
-          insertChildReq.input("AreaID", mssql.BigInt, resolvedAreaId);
-          insertChildReq.input("Status", mssql.VarChar(50), "BOOKED");
-          insertChildReq.input("Notes", mssql.NVarChar(500), null);
-          insertChildReq.input("SeatedTime", mssql.DateTime, null);
-          insertChildReq.input("VacatedTime", mssql.DateTime, null);
-          insertChildReq.input("CreatedOn", mssql.DateTime, new Date());
-          insertChildReq.input("ModifiedOn", mssql.DateTime, null);
+          // Insert one BookingChild row per table (TableID stays bigint - no DB migration needed)
+          for (const tid of validTableIds) {
+            const areaReq = new mssql.Request(tx);
+            areaReq.input("tableId", mssql.BigInt, tid);
+            const areaRes = await areaReq.query(`SELECT TOP 1 [AreaId] AS AreaID FROM dbo.[TableMaster] WHERE [TableID] = @tableId`);
+            const tableAreaId = areaRes.recordset.length > 0 ? parseInt(areaRes.recordset[0].AreaID) || resolvedAreaId : resolvedAreaId;
 
-          await insertChildReq.query(`
-            INSERT INTO ${q("BookingChild")} (
-              ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
-              ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
-              ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
-            )
-            VALUES (
-              @BookingChildID, @BookingID, @TableID,
-              @AreaID, @Status, @Notes,
-              @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
-            )
-          `);
+            const bookingChildID = await getNextBookingChildIdTx(tx);
+            const insertChildReq = new mssql.Request(tx);
+            insertChildReq.input("BookingChildID", mssql.BigInt, bookingChildID);
+            insertChildReq.input("BookingID", mssql.BigInt, parseInt(bookingId));
+            insertChildReq.input("TableID", mssql.BigInt, tid);
+            insertChildReq.input("AreaID", mssql.BigInt, tableAreaId);
+            insertChildReq.input("Status", mssql.VarChar(50), "BOOKED");
+            insertChildReq.input("Notes", mssql.NVarChar(500), null);
+            insertChildReq.input("SeatedTime", mssql.DateTime, null);
+            insertChildReq.input("VacatedTime", mssql.DateTime, null);
+            insertChildReq.input("CreatedOn", mssql.DateTime, new Date());
+            insertChildReq.input("ModifiedOn", mssql.DateTime, null);
+
+            await insertChildReq.query(`
+              INSERT INTO ${q("BookingChild")} (
+                ${q("BookingChildID")}, ${q("BookingID")}, ${q("TableID")},
+                ${q("AreaID")}, ${q("Status")}, ${q("Notes")},
+                ${q("SeatedTime")}, ${q("VacatedTime")}, ${q("CreatedOn")}, ${q("ModifiedOn")}
+              )
+              VALUES (
+                @BookingChildID, @BookingID, @TableID,
+                @AreaID, @Status, @Notes,
+                @SeatedTime, @VacatedTime, @CreatedOn, @ModifiedOn
+              )
+            `);
+          }
         }
       }
       
@@ -1035,15 +1151,26 @@ router.put("/reservation/update/:bookingId", async (req, res) => {
       message: "Reservation updated successfully",
       bookingID: parseInt(bookingId)
     });
-    } catch (e) {
-      await tx.rollback();
-      throw e;
+    } catch (innerErr) {
+      // Save original error before rollback - rollback() often throws "Transaction has been aborted" and would hide the real cause
+      const originalError = innerErr;
+      try {
+        await tx.rollback();
+      } catch (rollbackErr) {
+        // Ignore rollback error (e.g. "Transaction has been aborted"); we care about the original failure
+        console.warn("[/reservation/update] Rollback warning:", rollbackErr?.message);
+      }
+      const originalMessage = originalError?.message || originalError?.originalError?.message || String(originalError);
+      const fromPreceding = originalError?.precedingErrors?.[0]?.message;
+      throw new Error(fromPreceding || originalMessage);
     }
   } catch (e) {
-    console.error("[/reservation/update] ERROR", e?.message || e);
+    const errorMessage = e?.message || e?.originalError?.message || "Failed to update reservation";
+    console.error("[/reservation/update] ERROR", errorMessage, e?.stack);
     res.status(500).json({ 
       ok: false, 
-      error: e?.message || "Failed to update reservation" 
+      error: errorMessage,
+      debug: process.env.NODE_ENV !== "production" ? { message: e?.message, number: e?.number } : undefined
     });
   }
 });
@@ -1067,18 +1194,18 @@ router.put("/reservation/cancel/:bookingId", async (req, res) => {
     const request = pool.request();
     request.input("BookingID", mssql.BigInt, parseInt(bookingId));
     
-    // Update BookingMaster status to CANCELLED
+    // Update BookingMaster status to CANCELLED (BookingID may be varchar in DB)
     const updateMasterSql = `
       UPDATE dbo.[BookingMaster]
       SET ${q("BookingStatus")} = 'CANCELLED'
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
-    // Update BookingChild status to CANCELLED
+    // Update BookingChild status to CANCELLED (BookingID may be varchar in DB)
     const updateChildSql = `
       UPDATE dbo.[BookingChild]
       SET ${q("Status")} = 'CANCELLED'
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
     await request.query(updateMasterSql);
@@ -1117,18 +1244,18 @@ router.put("/reservation/checkin/:bookingId", async (req, res) => {
     const request = pool.request();
     request.input("BookingID", mssql.BigInt, parseInt(bookingId));
     
-    // Update BookingMaster status to CHECKED_IN
+    // Update BookingMaster status to CHECKED_IN (BookingID may be varchar in DB)
     const updateMasterSql = `
       UPDATE dbo.[BookingMaster]
       SET ${q("BookingStatus")} = 'CHECKED_IN'
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
-    // Update BookingChild status to CHECKED_IN
+    // Update BookingChild status to CHECKED_IN (BookingID may be varchar in DB)
     const updateChildSql = `
       UPDATE dbo.[BookingChild]
       SET ${q("Status")} = 'CHECKED_IN'
-      WHERE ${q("BookingID")} = @BookingID
+      WHERE TRY_CAST(${q("BookingID")} AS BIGINT) = @BookingID
     `;
     
     await request.query(updateMasterSql);

@@ -122,7 +122,7 @@ function ItemCard({
 
   const initial = (itemName || "?").trim().charAt(0).toUpperCase() || "?";
 
-  const unitPrice = useMemo(() => {
+  const unitPriceVal = useMemo(() => {
     // Don't use item.price as fallback since it's the total (UnitPrice + Tax1Amount)
     const v =
       getVal(item, "pc.UnitPrice") ??
@@ -139,8 +139,8 @@ function ItemCard({
     return num(v);
   }, [item]);
 
-  const totalPrice = useMemo(() => Number((unitPrice + tax1Amount).toFixed(2)), [
-    unitPrice,
+  const totalPrice = useMemo(() => Number((unitPriceVal + tax1Amount).toFixed(2)), [
+    unitPriceVal,
     tax1Amount,
   ]);
 
@@ -345,7 +345,7 @@ function ItemCard({
                 {t("menu.price")}
               </div>
               <div className="text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                AED {totalPrice.toFixed(2)}
+                AED {unitPriceVal.toFixed(2)}
               </div>
         </div>
 

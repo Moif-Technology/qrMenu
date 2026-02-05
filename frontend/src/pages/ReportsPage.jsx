@@ -99,6 +99,21 @@ export default function ReportsPage() {
     return "Unassigned";
   };
 
+  // Count tables assigned to a reservation (supports tables array or tableIds)
+  const getTableCount = (r) => {
+    if (r.tables && Array.isArray(r.tables) && r.tables.length > 0) {
+      return r.tables.filter((t) => (t.tableId ?? t.tableID ?? t.TableID) != null && (t.tableId ?? t.tableID ?? t.TableID) !== 0).length;
+    }
+    if (r.tableIds && String(r.tableIds).trim() && String(r.tableIds) !== "0") {
+      return String(r.tableIds)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s && s !== "0").length;
+    }
+    const tid = r.tableId ?? r.TableID;
+    return tid != null && tid !== 0 && tid !== "" ? 1 : 0;
+  };
+
   // Single source of truth for effective status calculation
   // Child status (BookingChild.Status) always wins over master status (BookingMaster.BookingStatus)
   const getEffectiveStatus = (res) => {
@@ -280,6 +295,11 @@ export default function ReportsPage() {
       }
       return sum;
     }, 0),
+    lunchTables: safeAllReservations.reduce((sum, r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      if (getTimeCategory(time) === "lunch") return sum + getTableCount(r);
+      return sum;
+    }, 0),
     // Dinner reservations (after 6 PM)
     dinnerReservations: safeAllReservations.filter((r) => {
       const time = r.reservationTime || r.ReservationTime;
@@ -291,6 +311,11 @@ export default function ReportsPage() {
         const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
+      return sum;
+    }, 0),
+    dinnerTables: safeAllReservations.reduce((sum, r) => {
+      const time = r.reservationTime || r.ReservationTime;
+      if (getTimeCategory(time) === "dinner") return sum + getTableCount(r);
       return sum;
     }, 0),
   };
@@ -724,6 +749,7 @@ export default function ReportsPage() {
             <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.lunchReservations)}</p>
             <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Lunch</p>
             <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.lunchGuests)} guests)</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.lunchTables)} tables reserved)</p>
           </div>
 
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
@@ -734,6 +760,7 @@ export default function ReportsPage() {
             <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.dinnerReservations)}</p>
             <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Dinner</p>
             <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.dinnerGuests)} guests)</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 font-bold">({formatNumber(stats.dinnerTables)} tables reserved)</p>
           </div>
 
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
