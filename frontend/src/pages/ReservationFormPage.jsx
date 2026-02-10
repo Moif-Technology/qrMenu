@@ -150,13 +150,9 @@ export default function ReservationFormPage() {
       setLoadingReservation(true);
       setError(null);
       try {
-        console.log("[RESERVATION_FORM] Loading reservation for edit:", editBookingId);
         const result = await getReservationById(editBookingId);
-        
         if (result.ok && result.reservation) {
           const reservation = result.reservation;
-          console.log("[RESERVATION_FORM] Loaded reservation data:", reservation);
-          
           // Extract area and tables from reservation
           // Check if reservation has tables array (from getReservationById) or single table fields
           let areaIdFromTables = null;
@@ -203,7 +199,7 @@ export default function ReservationFormPage() {
                     }
                   }
                 } catch (err) {
-                  console.warn("Failed to load table details:", err);
+                  // Table details load failed; continue with available data
                 }
               }
             }
@@ -283,15 +279,6 @@ export default function ReservationFormPage() {
                           tableFromState.area?.AreaID || 
                           (tableFromState.area && typeof tableFromState.area === 'object' ? 
                            (tableFromState.area.areaId || tableFromState.area.AreaID) : null);
-      
-      console.log("[RESERVATION_FORM] Table from state:", {
-        tableFromState,
-        areaIdFromState,
-        areaIdValue,
-        areaId: tableFromState.areaId,
-        area: tableFromState.area
-      });
-      
       const tableData = {
         id: tableId,
         number: tableNumber,
@@ -313,15 +300,7 @@ export default function ReservationFormPage() {
       // Set the section/area - use areaIdValue or areaIdFromState
       const finalAreaId = areaIdValue || areaIdFromState;
       if (finalAreaId) {
-        const areaIdStr = String(finalAreaId);
-        console.log("[RESERVATION_FORM] Setting section to:", areaIdStr);
-        // Always set it immediately
-        setFormData(prev => ({ ...prev, section: areaIdStr }));
-      } else {
-        console.warn("[RESERVATION_FORM] No areaId found in table or state:", {
-          table: tableFromState,
-          state: location.state
-        });
+        setFormData(prev => ({ ...prev, section: String(finalAreaId) }));
       }
       
       // Clear the location state immediately to prevent re-adding on re-render
@@ -363,16 +342,9 @@ export default function ReservationFormPage() {
         // Load floor layout (same as ReservationPage)
         try {
           const layout = await getFloorLayoutByArea(areaId);
-          console.log("[FLOOR_LAYOUT] Loaded layout:", {
-            areaId,
-            tables: layout?.tables?.length || 0,
-            shapes: layout?.shapes?.length || 0,
-            borderPoints: layout?.borderPoints?.length || 0
-          });
           setFloorLayout(layout);
-        } catch (layoutErr) {
-          console.warn("[FLOOR_LAYOUT] Failed to load floor layout:", layoutErr);
-          setFloorLayout(null); // Continue without layout if it fails
+        } catch {
+          setFloorLayout(null);
         }
       } catch (err) {
         console.error("Failed to load floor map:", err);
@@ -691,16 +663,9 @@ export default function ReservationFormPage() {
       // Load floor layout (same as ReservationPage)
       try {
         const layout = await getFloorLayoutByArea(areaId);
-        console.log("[FLOOR_LAYOUT] Loaded layout for availability check:", {
-          areaId,
-          tables: layout?.tables?.length || 0,
-          shapes: layout?.shapes?.length || 0,
-          borderPoints: layout?.borderPoints?.length || 0
-        });
         setFloorLayout(layout);
-      } catch (layoutErr) {
-        console.warn("[FLOOR_LAYOUT] Failed to load floor layout:", layoutErr);
-        setFloorLayout(null); // Continue without layout if it fails
+      } catch {
+        setFloorLayout(null);
       }
 
       // Pre-populate temp selection with currently selected tables when opening modal
@@ -776,16 +741,6 @@ export default function ReservationFormPage() {
         bookingSource: "ONLINE",
         customerId: formData.customerId ?? null // If user selected existing customer, backend updates that customer with form name/phone/email
       };
-
-      console.log("[RESERVATION_FORM] Sending reservation data:", {
-        tableIds: reservationData.tableIds,
-        name: reservationData.name,
-        phone: reservationData.phone,
-        date: reservationData.date,
-        time: reservationData.time,
-        guests: reservationData.guests
-      });
-
       let result;
       
       if (isEditMode && editBookingId) {

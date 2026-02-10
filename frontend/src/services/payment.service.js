@@ -26,9 +26,7 @@ export async function getPaymentMethods() {
  */
 export async function processPayFull(paymentData) {
   try {
-    console.log("[PAYMENT SERVICE] processPayFull - Request payload:", paymentData);
     const { data } = await API.post("/payment/pay-full", paymentData);
-    console.log("[PAYMENT SERVICE] processPayFull - Response:", data);
     if (data.ok) {
       return data;
     }
@@ -41,9 +39,7 @@ export async function processPayFull(paymentData) {
 
 export async function createTelrSession(sessionData) {
   try {
-    console.log("[PAYMENT SERVICE] createTelrSession - Request payload:", sessionData);
     const { data } = await API.post("/telr/create", sessionData);
-    console.log("[PAYMENT SERVICE] createTelrSession - Response:", data);
     return data;
   } catch (err) {
     console.error("Error creating Telr session:", err);
@@ -54,9 +50,7 @@ export async function createTelrSession(sessionData) {
 export async function checkTelrStatus(orderRef) {
   try {
     const payload = typeof orderRef === "object" && orderRef !== null ? orderRef : { orderRef };
-    console.log("[PAYMENT SERVICE] checkTelrStatus - Request payload:", payload);
     const { data } = await API.post("/telr/check", payload);
-    console.log("[PAYMENT SERVICE] checkTelrStatus - Response:", data);
     if (data?.ok) {
       return data;
     }
@@ -75,9 +69,7 @@ export async function checkTelrStatus(orderRef) {
  */
 export async function processEqualSplit(paymentData) {
   try {
-    console.log("[PAYMENT SERVICE] processEqualSplit - Request payload:", paymentData);
     const { data } = await API.post("/payment/equal-split", paymentData);
-    console.log("[PAYMENT SERVICE] processEqualSplit - Response:", data);
     if (data.ok) {
       return data;
     }
@@ -90,9 +82,7 @@ export async function processEqualSplit(paymentData) {
 
 export async function processCustomSplit(paymentData) {
   try {
-    console.log("[PAYMENT SERVICE] processCustomSplit - Request payload:", paymentData);
     const { data } = await API.post("/payment/custom-split", paymentData);
-    console.log("[PAYMENT SERVICE] processCustomSplit - Response:", data);
     if (data.ok) {
       return data;
     }
@@ -110,9 +100,7 @@ export async function processCustomSplit(paymentData) {
  */
 export async function processItemSplit(paymentData) {
   try {
-    console.log("[PAYMENT SERVICE] processItemSplit - Request payload:", paymentData);
     const { data } = await API.post("/payment/item-split", paymentData);
-    console.log("[PAYMENT SERVICE] processItemSplit - Response:", data);
     if (data.ok) {
       return data;
     }
@@ -181,18 +169,7 @@ export async function checkTableOrders(token) {
     const lines = data.lines || [];
     const tableId = data.tableId;
     
-    // The /r/resolve endpoint already returns only unpaid KOTs
-    // So if there are lines, there are unpaid orders
-    // If no lines, either no orders exist or all are paid
     const hasOrders = lines.length > 0;
-    
-    console.log("[checkTableOrders] Check result:", {
-      tableId,
-      linesCount: lines.length,
-      hasOrders,
-      area: data.area
-    });
-    
     return {
       hasOrders,
       tableId,

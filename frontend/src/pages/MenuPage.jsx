@@ -49,24 +49,6 @@ function normalizeImage(src) {
 }
 
 function mapRowToItem(row, lang = "en") {
-  // 🔍 DEBUG: Log the row data and language
-  const arabicNameDebug = row.name_ar || row.DescriptionArabic || row["pm.DescriptionArabic"] || row["pm_DescriptionArabic"] || null;
-  console.log("🔍 [mapRowToItem] DEBUG:", {
-    lang,
-    rowKeys: Object.keys(row),
-    name: row.name,
-    name_ar: row.name_ar,
-    DescriptionArabic: row.DescriptionArabic,
-    "pm.DescriptionArabic": row["pm.DescriptionArabic"],
-    "pm_DescriptionArabic": row["pm_DescriptionArabic"],
-    Description: row.Description,
-    "pm.Description": row["pm.Description"],
-    "pm_Description": row["pm_Description"],
-    arabicNameFound: arabicNameDebug,
-    hasArabicName: !!(arabicNameDebug && typeof arabicNameDebug === "string" && arabicNameDebug.trim() !== ""),
-    willUseArabic: lang === "ar" && arabicNameDebug && typeof arabicNameDebug === "string" && arabicNameDebug.trim() !== ""
-  });
-
   const rawImages = Array.isArray(row.images)
     ? row.images
     : typeof row.images === "string"
@@ -191,11 +173,31 @@ function toApiSort(uiSort) {
 export default function MenuPage() {
   const add = useCart((s) => s.add);
   const tableId = useCart((s) => s.tableId);
+  const tableArea = useCart((s) => s.tableArea);
+  const tableNo = useCart((s) => s.tableNo);
+  const tableName = useCart((s) => s.tableName);
   const token = useCart((s) => s.token);
   const navigate = useNavigate();
   const { t } = useTranslation();
   const lang = useUI((s) => s.lang);
-  
+  const linkDetailsLoggedRef = useRef(false);
+
+  // Dev: show full link details in console when this page is opened from generated link (menu view)
+  useEffect(() => {
+    if (linkDetailsLoggedRef.current || !token) return;
+    linkDetailsLoggedRef.current = true;
+    if (typeof window !== "undefined") {
+      console.log("[Link details]", {
+        url: window.location.href,
+        token,
+        tableId: tableId ?? null,
+        tableNo: tableNo ?? null,
+        tableName: tableName ?? null,
+        area: tableArea ?? null,
+      });
+    }
+  }, [token, tableId, tableArea, tableNo, tableName]);
+
   // 🔍 DEBUG: Log language changes
   useEffect(() => {
     // Optimized: Removed debug logging
@@ -293,31 +295,17 @@ export default function MenuPage() {
         loadingCategoriesRef.current = true;
         setLoading(true);
         setError("");
-        
-        console.log("🔄 Fetching QR categories...");
-        // Use QR Menu categories instead of normal categories
-        const raw = await getQrCategories(); // [{ groupId, name, code, name_ar, subgroups: [...] }, ...]
-        
-        console.log("📦 Raw QR categories from API:", raw);
-        console.log("📦 Is array?", Array.isArray(raw));
-        console.log("📦 Length:", raw?.length);
-        
+        const raw = await getQrCategories();
         if (!raw || !Array.isArray(raw)) {
           throw new Error("Invalid response from API: expected array of groups");
         }
         
         if (raw.length === 0) {
-          console.warn("⚠️ No QR groups found in database");
           setCats([]);
           setQrGroups([]);
           setError("No QR menu groups found. Please create groups in the management page.");
           return;
         }
-        
-        console.log("📦 First group:", raw[0]);
-        console.log("📦 First group subgroups:", raw[0]?.subgroups);
-        console.log("📦 First group subgroups length:", raw[0]?.subgroups?.length);
-        
         // Store full structure
         setQrGroups(raw);
         
@@ -384,16 +372,12 @@ export default function MenuPage() {
               // Don't set selectedGroupId on initial load - only set it when user clicks
               // This prevents auto-expanding to subgroups on initial load
               setSelectedGroupId(null);
-              console.log("✅ Set first group as active (initial load, no subgroup expansion):", firstGroupId);
             }
           }
         } else if (groupsOnly.length > 0) {
           const firstGroupId = groupsOnly[0].id;
           setActiveCat(firstGroupId);
-          // Don't set selectedGroupId on initial load - only set it when user clicks
-          // This prevents auto-expanding to subgroups on initial load
           setSelectedGroupId(null);
-          console.log("✅ Set first group as active (initial load, no subgroup expansion):", firstGroupId);
         }
       } catch (e) {
         console.error("❌ Error loading QR categories:", e);
@@ -457,42 +441,17 @@ export default function MenuPage() {
 
   // Handle category selection - show subgroups if group has them, otherwise show products
   const handleCategoryChange = useCallback((categoryId) => {
-    console.log("🔵 handleCategoryChange called:", categoryId);
-    console.log("🔵 qrGroups:", qrGroups);
-    console.log("🔵 qrGroups length:", qrGroups.length);
-    console.log("🔵 Current selectedGroupId:", selectedGroupId);
-    console.log("🔵 Current activeCat:", activeCat);
-    
-    // Check if it's a group or subgroup
     if (categoryId.startsWith('group_')) {
       const groupIdStr = categoryId.replace('group_', '');
       const groupId = parseInt(groupIdStr);
-      console.log("🔵 Looking for groupId:", groupId, "(from string:", groupIdStr + ")");
-      
-      // Try to find group - handle both number and string comparison
       const group = qrGroups.find(g => {
         const gId = typeof g.groupId === 'number' ? g.groupId : parseInt(g.groupId);
         return gId === groupId;
       });
-      
-      console.log("🔵 Found group:", group);
-      console.log("🔵 Group subgroups:", group?.subgroups);
-      console.log("🔵 Group subgroups length:", group?.subgroups?.length);
-      console.log("🔵 Is array?", Array.isArray(group?.subgroups));
-      
-      // Check if this group is already selected and showing subgroups
       const isCurrentlyShowingSubgroups = selectedGroupId === groupId && cats.some(c => c.type === 'subgroup');
-      
       if (group && group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0) {
-        // If already showing subgroups for this group, do nothing
-        if (isCurrentlyShowingSubgroups) {
-          console.log("🔵 Same group clicked, already showing subgroups - do nothing");
-          return; // Already showing subgroups for this group, don't change anything
-        }
-        
-        // FIRST CLICK: Immediately show subgroups (changed from requiring two clicks)
-        console.log("✅ Group has subgroups, showing subgroups immediately:", group.subgroups.length);
-        setSelectedGroupId(groupId); // Set selectedGroupId to track that we're showing subgroups
+        if (isCurrentlyShowingSubgroups) return;
+        setSelectedGroupId(groupId);
         
         // Use Arabic name if language is Arabic and name_ar is available
         const subgroups = group.subgroups.map((subgroup) => ({
@@ -644,9 +603,7 @@ export default function MenuPage() {
         sort: toApiSort(sort)
       });
       
-      // Map items in batch (optimized)
       const mappedItems = res.data.map((row) => mapRowToItem(row, lang));
-      
       // Defensive filter: Ensure RAW MATERIAL products are never displayed (even if backend filter fails)
       // Filter out any products that might have ProductType = 'RAW MATERIAL' or similar
       // Include packages (IsPackageHeader = 1) - they will be displayed using PackageCard in MenuGrid

@@ -52,63 +52,7 @@ export default function CartDrawer({ open, onClose }) {
     }
     try {
       setSending(true);
-      
-      // ========== DETAILED CONSOLE LOGGING ==========
-      console.log("==========================================");
-      console.log("🍽️  SEND TO KITCHEN - ORDER DETAILS");
-      console.log("==========================================");
-      
-      console.log("📋 HEADER INFORMATION:");
-      console.log("  - Table ID:", orderPayload.header.tableId);
-      console.log("  - Area ID:", orderPayload.header.areaId || "(no area ID)");
-      console.log("  - Note:", orderPayload.header.note || "(no note)");
-      console.log("  - Subtotal:", orderPayload.header.subtotal, orderPayload.header.currency);
-      console.log("  - Items Count:", orderPayload.header.itemsCount);
-      console.log("  - Currency:", orderPayload.header.currency);
-      
-      console.log("\n📦 ITEMS BEING SENT (" + orderPayload.items.length + " items):");
-      orderPayload.items.forEach((item, index) => {
-        console.log(`\n  Item ${index + 1}:`);
-        console.log("    - Key:", item.key);
-        console.log("    - Quantity:", item.qty);
-        console.log("    - Unit Price:", item.unitPrice, orderPayload.header.currency);
-        console.log("    - Line Total:", item.lineTotal, orderPayload.header.currency);
-        console.log("    - Product ID:", item.product?.ProductID || item.product?.id || item.product?.productId || "N/A");
-        console.log("    - Product Name:", item.product?.Description || item.product?.name || item.product?.ShortDescription || "N/A");
-        console.log("    - Modifiers Count:", item.mods?.length || 0);
-        
-        if (item.mods && item.mods.length > 0) {
-          console.log("    - Modifiers:");
-          item.mods.forEach((mod, modIndex) => {
-            console.log(`      Modifier ${modIndex + 1}:`);
-            console.log("        - ID:", mod.id || "N/A");
-            console.log("        - Name:", mod.name);
-            console.log("        - Price:", mod.price, orderPayload.header.currency);
-          });
-        } else {
-          console.log("    - Modifiers: None");
-        }
-        
-        // Log full product object for debugging
-        console.log("    - Full Product Object:", item.product);
-      });
-      
-      console.log("\n📊 ORDER SUMMARY:");
-      console.log("  - Total Items:", orderPayload.items.length);
-      console.log("  - Total Quantity:", orderPayload.items.reduce((sum, item) => sum + item.qty, 0));
-      console.log("  - Subtotal:", orderPayload.header.subtotal, orderPayload.header.currency);
-      
-      console.log("\n📤 FULL PAYLOAD BEING SENT TO BACKEND:");
-      console.log(JSON.stringify(orderPayload, null, 2));
-      console.log("==========================================\n");
-      
       const res = await submitOrder(orderPayload);
-      
-      console.log("✅ RESPONSE FROM BACKEND:");
-      console.log("  - Full Response:", res);
-      console.log("  - KOT ID:", res?.kotId ?? res?.id ?? res?.data?.kotId ?? res?.data?.id ?? null);
-      console.log("  - ETA (minutes):", res?.etaMin ?? res?.data?.etaMin ?? null);
-      
       const kotId =
         res?.kotId ?? res?.id ?? res?.data?.kotId ?? res?.data?.id ?? null;
       const etaMin = res?.etaMin ?? res?.data?.etaMin ?? null;

@@ -13,7 +13,11 @@ const {
   TELR_TEST_MODE,
   APP_BASE_URL,
   FRONTEND_URL = "http://localhost:5173",
+  RESTAURANT_BASE_PATH = "opaia",
 } = process.env;
+
+// Restaurant base path for frontend URLs (e.g. opaia -> /opaia)
+const FRONTEND_BASE_PATH = String(RESTAURANT_BASE_PATH || "opaia").replace(/^\/|\/$/g, "") || "opaia";
 
 // Normalize APP_BASE_URL to remove trailing /api if present
 // This prevents double /api/api/ in return URLs
@@ -150,7 +154,8 @@ async function telrCheck(orderRef) {
 
 function buildRedirectUrl(status, orderRef, sessionMeta, extraParams = {}, fallback = {}) {
   const effectiveToken = sessionMeta?.token || fallback?.token || null;
-  const basePath = effectiveToken ? `/r/${encodeURIComponent(effectiveToken)}` : "/";
+  const path = effectiveToken ? `/r/${encodeURIComponent(effectiveToken)}` : "";
+  const basePath = `/${FRONTEND_BASE_PATH}${path || ""}`.replace(/\/$/, "") || `/${FRONTEND_BASE_PATH}`;
   const url = new URL(basePath, FRONTEND_URL.endsWith("/") ? FRONTEND_URL : `${FRONTEND_URL}/`);
 
   url.searchParams.set("telrStatus", status);

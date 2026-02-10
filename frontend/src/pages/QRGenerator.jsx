@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { generateQRCode } from "../services/qr.service";
 import { getAreas } from "../services/menu.service";
 import { getTablesByArea } from "../services/table.service";
-import { Download, QrCode, Loader2, Copy, Check } from "lucide-react";
+import { Download, QrCode, Loader2, Copy, Check, ExternalLink } from "lucide-react";
 
 export default function QRGenerator() {
   const [tableId, setTableId] = useState("");
@@ -107,6 +107,8 @@ export default function QRGenerator() {
       
       if (result.ok) {
         setQrData(result);
+        // Dev debug: confirm URL has tableId and area (browser console only)
+        console.log("[QR generate]", { tableId: result.tableId, area: result.area, url: result.url });
       } else {
         setError(result.error || "Failed to generate QR code");
       }
@@ -408,14 +410,23 @@ export default function QRGenerator() {
                   </div>
 
                   <div className="bg-gray-50 rounded-xl p-4">
-                    <p className="text-sm text-gray-600 mb-2">URL</p>
-                    <div className="flex items-center gap-2">
+                    <p className="text-sm text-gray-600 mb-2">Generated link (Table: {qrData.tableId}, Area: {qrData.area})</p>
+                    <div className="flex flex-wrap items-center gap-2">
                       <input
                         type="text"
                         value={qrData.url}
                         readOnly
-                        className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[var(--grad-end)]"
+                        className="flex-1 min-w-0 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[var(--grad-end)]"
                       />
+                      <button
+                        type="button"
+                        onClick={() => window.open(qrData.url, "_blank", "noopener,noreferrer")}
+                        className="btn-pill px-4 py-2 text-sm inline-flex items-center gap-2"
+                        title="Open link in new tab"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        Open link
+                      </button>
                       <button
                         onClick={handleCopyUrl}
                         className="btn-pill px-4 py-2 text-sm"

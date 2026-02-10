@@ -186,27 +186,13 @@ export default function ReservationDetailsPage() {
 
         if (result.ok && result.reservation) {
           data = result.reservation;
-          console.log("[RESERVATION_DETAILS] Fetched reservation from getReservationById:", {
-            bookingID: data.bookingID,
-            status: data.status,
-            bookingStatus: data.bookingStatus,
-          });
         } else {
-          console.log("[RESERVATION_DETAILS] getReservationById failed, trying getAllReservations");
           const allResult = await getAllReservations({});
           const allReservations = Array.isArray(allResult) ? allResult : allResult?.reservations || [];
           const found = allReservations.find(
             (r) => (r.reservationId || r.bookingID || r.ReservationID) === parseInt(reservationId)
           );
           data = found || null;
-
-          if (data) {
-            console.log("[RESERVATION_DETAILS] Fetched reservation from getAllReservations:", {
-              bookingID: data.bookingID,
-              status: data.status,
-              bookingStatus: data.bookingStatus,
-            });
-          }
         }
       }
 

@@ -76,8 +76,8 @@ export default function BottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Determine active route
-  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
+  // Determine active route (pathname includes base e.g. /opaia/walk-in)
+  const isActive = (path) => location.pathname === path || location.pathname.endsWith(path) || location.pathname.startsWith(path + "/");
 
   const navItems = [
     {

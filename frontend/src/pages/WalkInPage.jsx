@@ -191,8 +191,7 @@ export default function WalkInPage() {
       try {
         const layout = await getFloorLayoutByArea(areaId);
         setFloorLayout(layout);
-      } catch (layoutErr) {
-        console.warn("[FLOOR_LAYOUT] Failed to load floor layout:", layoutErr);
+      } catch {
         setFloorLayout(null);
       }
 
@@ -258,13 +257,8 @@ export default function WalkInPage() {
         bookingSource: "WALKIN",
         initialStatus: "SEATED" // Create directly as SEATED, skip CHECKED_IN
       };
-
-      console.log("[WALK_IN] Creating walk-in booking with SEATED status:", reservationData);
-
       const result = await createReservation(reservationData);
-      
       if (result.ok) {
-        console.log("[WALK_IN] Walk-in created successfully with SEATED status");
         // No need to update status - already created as SEATED
         
         // Update local table status
@@ -491,14 +485,6 @@ export default function WalkInPage() {
                           (tableFromState.area && typeof tableFromState.area === 'object' ? 
                            (tableFromState.area.areaId || tableFromState.area.AreaID) : null);
       
-      console.log("[WALK_IN] Table from state:", {
-        tableFromState,
-        areaIdFromState,
-        areaIdValue,
-        areaId: tableFromState.areaId,
-        area: tableFromState.area
-      });
-      
       const tableData = {
         id: tableId,
         number: tableNumber,
@@ -520,15 +506,7 @@ export default function WalkInPage() {
       // Set the section/area - use areaIdValue or areaIdFromState
       const finalAreaId = areaIdValue || areaIdFromState;
       if (finalAreaId && !formData.seatingPreference) {
-        const areaIdStr = String(finalAreaId);
-        console.log("[WALK_IN] Setting seatingPreference to:", areaIdStr);
-        // Always set it immediately
-        setFormData(prev => ({ ...prev, seatingPreference: areaIdStr }));
-      } else {
-        console.warn("[WALK_IN] No areaId found in table or state:", {
-          table: tableFromState,
-          state: location.state
-        });
+        setFormData(prev => ({ ...prev, seatingPreference: String(finalAreaId) }));
       }
       
       // Clear the location state immediately to prevent re-adding on re-render

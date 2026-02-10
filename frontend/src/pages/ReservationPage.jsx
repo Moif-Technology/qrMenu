@@ -290,34 +290,19 @@ export default function ReservationPage() {
 
   // Load tables and floor layout for a specific area
   const loadTables = useCallback(async (areaId) => {
-    if (!areaId) {
-      console.warn("[FLOOR_LAYOUT] No areaId provided to loadTables");
-      return;
-    }
-    
+    if (!areaId) return;
     isLoadingTablesRef.current = true;
-    console.log("[FLOOR_LAYOUT] Loading tables for areaId:", areaId);
     setLoading(true);
     setError(null);
     try {
       // Load tables
       const tablesData = await getTablesByArea(areaId);
-      console.log("[FLOOR_LAYOUT] Loaded tables:", tablesData?.length || 0);
       setTables(tablesData || []);
-      
-      // Load floor layout
       try {
         const layout = await getFloorLayoutByArea(areaId);
-        console.log("[FLOOR_LAYOUT] Loaded layout:", {
-          areaId,
-          tables: layout?.tables?.length || 0,
-          shapes: layout?.shapes?.length || 0,
-          borderPoints: layout?.borderPoints?.length || 0
-        });
         setFloorLayout(layout);
-      } catch (layoutErr) {
-        console.warn("[FLOOR_LAYOUT] Failed to load floor layout:", layoutErr);
-        setFloorLayout(null); // Continue without layout if it fails
+      } catch {
+        setFloorLayout(null);
       }
     } catch (err) {
       console.error("[FLOOR_LAYOUT] Failed to load tables:", err);
@@ -365,23 +350,12 @@ export default function ReservationPage() {
           // Load tables
           const tablesData = await getTablesByArea(firstAreaId);
           if (!mounted) return;
-          console.log("[FLOOR_LAYOUT] Tables loaded:", tablesData?.length || 0, tablesData);
           setTables(tablesData || []);
-          
-          // Load floor layout
           try {
             const layout = await getFloorLayoutByArea(firstAreaId);
             if (!mounted) return;
-            console.log("[FLOOR_LAYOUT] Layout loaded:", {
-              hasLayout: !!layout,
-              borderPoints: layout?.borderPoints?.length || 0,
-              tables: layout?.tables?.length || 0,
-              shapes: layout?.shapes?.length || 0,
-              fullLayout: layout
-            });
             setFloorLayout(layout);
-          } catch (layoutErr) {
-            console.warn("[FLOOR_LAYOUT] Floor layout error:", layoutErr);
+          } catch {
             if (mounted) setFloorLayout(null);
           }
         } catch (err) {
@@ -424,10 +398,7 @@ export default function ReservationPage() {
     }
     
     // Load tables when area is manually changed (not during initial load)
-    if (selectedAreaId) {
-      console.log("[FLOOR_LAYOUT] Area changed, loading tables for:", selectedAreaId);
-      loadTables(selectedAreaId);
-    }
+    if (selectedAreaId) loadTables(selectedAreaId);
   }, [selectedAreaId, loadTables]);
 
   // Load reservations for selected date
@@ -535,7 +506,7 @@ export default function ReservationPage() {
   };
 
   const handleSearch = (query) => {
-    console.log("Search:", query);
+    // Search filter applied to reservations list
   };
 
   const handleDateChange = (newDate) => {

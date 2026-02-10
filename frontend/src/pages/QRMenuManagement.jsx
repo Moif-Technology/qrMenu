@@ -1688,9 +1688,6 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     try {
       // EXACT SAME LOGIC AS ProductsTab (lines 483-527)
       const allProductsData = await getAllProductsFromMaster({});
-      console.log("[LOAD-FILTERS] Loaded products:", allProductsData.length);
-      console.log("[LOAD-FILTERS] Sample product fields:", allProductsData[0]);
-      
       // Extract unique groups - EXACT COPY from ProductsTab
       const groups = Array.from(
         new Map(
@@ -1726,8 +1723,6 @@ function PackageManagementTab({ groups, subgroups, loading }) {
       
       setNormalGroups(groups);
       setNormalSubgroups(subgroups);
-      console.log("[LOAD-FILTERS] Groups loaded:", groups.length, "- Sample:", groups.slice(0, 3).map(g => g.GroupDescription));
-      console.log("[LOAD-FILTERS] Subgroups loaded:", subgroups.length);
     } catch (err) {
       console.error("Error loading groups/subgroups:", err);
     }
@@ -1767,9 +1762,7 @@ function PackageManagementTab({ groups, subgroups, loading }) {
       if (searchTerm && searchTerm.trim()) {
         params.searchTerm = searchTerm.trim();
       }
-      console.log("[LOAD-PRODUCTS] Params:", params);
       const products = await getAllProductsFromMaster(params);
-      console.log("[LOAD-PRODUCTS] Loaded:", products?.length || 0, "products");
       setAllProducts(products || []);
     } catch (err) {
       console.error("Error loading products:", err);
@@ -1793,13 +1786,6 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     }
     
     try {
-      console.log("[CREATE-PACKAGE] Submitting:", {
-        description: newPackageForm.name,
-        price: newPackageForm.price,
-        qrSubgroupId: selectedSubgroup,
-      });
-      
-      // Create the package product
       const result = await createNewPackage({
         description: newPackageForm.name,
         descriptionArabic: newPackageForm.nameArabic || newPackageForm.name,
@@ -1808,9 +1794,6 @@ function PackageManagementTab({ groups, subgroups, loading }) {
         qrSubgroupId: parseInt(selectedSubgroup),
         cloudinaryUrl: null, // TODO: Add image upload later
       });
-      
-      console.log("[CREATE-PACKAGE] Result:", result);
-      
       alert("✅ Package created successfully!");
       setShowCreatePackageModal(false);
       setNewPackageForm({ name: "", nameArabic: "", description: "", price: "" });
@@ -1850,32 +1833,19 @@ function PackageManagementTab({ groups, subgroups, loading }) {
       return;
     }
 
-    // Prevent multiple clicks
-    if (isAddingItems) {
-      console.log("[ADD-ITEMS] Already adding items, ignoring click");
-      return;
-    }
+    if (isAddingItems) return;
 
     setIsAddingItems(true);
     
     try {
       const startOrder = packageContents.length + 1;
-      const count = selectedProductIds.length;
-      
-      console.log(`[ADD-ITEMS] Adding ${count} items to package...`);
-      
-      // Add items one by one (correct signature: productId, packageProductId, displayOrder)
       for (let i = 0; i < selectedProductIds.length; i++) {
-        console.log(`[ADD-ITEMS] Adding item ${i + 1}/${count}...`);
         await addProductToPackage(
           selectedProductIds[i],
           selectedPackage.ProductID,
           startOrder + i
         );
       }
-
-      console.log("[ADD-ITEMS] All items added, refreshing...");
-      
       // Refresh package contents
       await loadPackageContents(selectedPackage.ProductID);
       

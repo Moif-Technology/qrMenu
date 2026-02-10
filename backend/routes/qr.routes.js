@@ -8,6 +8,8 @@ const router = Router();
 
 // Get frontend URL from environment variable
 const FRONT = process.env.FRONTEND_URL || process.env.VITE_FRONTEND_URL || "https://deynoqr.com";
+// Restaurant base path (e.g. opaia) – all frontend URLs start with /opaia
+const BASE_PATH = (process.env.RESTAURANT_BASE_PATH || "opaia").replace(/^\/|\/$/g, "");
 
 // POST /api/qr/generate -> { tableId, area? } => { qrCode: base64, url, token }
 router.post("/qr/generate", async (req, res) => {
@@ -21,9 +23,13 @@ router.post("/qr/generate", async (req, res) => {
       });
     }
 
-    // Generate token and URL
+    // Generate token and URL (include restaurant base path so QR opens correct frontend route)
     const token = makeToken(tableId, area);
-    const url = `${FRONT}/r/${token}`;
+    const base = FRONT.replace(/\/$/, "");
+    const url = `${base}/${BASE_PATH}/r/${token}`;
+
+    // Debug: confirm URL has tableId and area (token encodes both)
+    console.log("[QR generate]", { tableId: String(tableId), area: String(area), url });
 
     // Generate QR code as data URL (base64)
     const qrCodeDataUrl = await QRCode.toDataURL(url, { 

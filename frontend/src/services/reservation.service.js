@@ -20,9 +20,7 @@ import { API } from "../lib/api.js";
  */
 export async function createReservation(reservationData) {
   try {
-    console.log("[Reservation Service] Sending to API:", reservationData);
     const response = await API.post("/reservation/create", reservationData);
-    console.log("[Reservation Service] Response:", response.data);
     return response.data;
   } catch (error) {
     console.error("[Reservation Service] Create error:", error);
@@ -114,9 +112,7 @@ export async function updateReservationStatus(reservationId, status) {
  */
 export async function updateReservation(bookingId, reservationData) {
   try {
-    console.log("[Reservation Service] Updating reservation:", bookingId, reservationData);
     const response = await API.put(`/reservation/update/${bookingId}`, reservationData);
-    console.log("[Reservation Service] Update response:", response.data);
     return response.data;
   } catch (error) {
     console.error("[Reservation Service] Update error:", error);
@@ -171,10 +167,7 @@ export async function createGuestReservation(guestData) {
       tags: guestData.occasion || null,
       specialRequests: guestData.specialRequests || null
     };
-
-    console.log("[Guest Reservation Service] Creating guest reservation:", reservationData);
-    const response = await API.post("/reservation/guest", reservationData); // Dedicated guest endpoint
-    console.log("[Guest Reservation Service] Response:", response.data);
+    const response = await API.post("/reservation/guest", reservationData);
     return response.data;
   } catch (error) {
     console.error("[Guest Reservation Service] Create error:", error);
@@ -234,9 +227,7 @@ export async function getCustomerHistory() {
  */
 export async function updateCustomer(customerId, customerData) {
   try {
-    console.log("[Reservation Service] Updating customer:", customerId, customerData);
     const response = await API.put(`/reservation/customers/${customerId}`, customerData);
-    console.log("[Reservation Service] Update customer response:", response.data);
     return response.data;
   } catch (error) {
     console.error("[Reservation Service] Update customer error:", error);

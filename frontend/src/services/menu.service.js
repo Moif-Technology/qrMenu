@@ -36,9 +36,6 @@ export async function getItems(params = {}) {
   const { data } = await API.get("/menu/items", {
     params: { page, pageSize, search, groupId, groupCode, sort }
   });
-  console.log(data,"ith engane verunath?");
-
-  // data = { ok, paging: { page, pageSize, total }, data: [...] }
   return data;
 }
 
@@ -91,22 +88,13 @@ export async function getImageMapping() {
 /** GET /api/qr-menu/categories */
 export async function getQrCategories() {
   try {
-    console.log("🌐 Calling API: /qr-menu/categories");
     const response = await API.get("/qr-menu/categories");
-    console.log("🌐 API Response:", response);
-    console.log("🌐 Response data:", response.data);
-    console.log("🌐 Response data.data:", response.data?.data);
-    
     if (!response.data || !response.data.ok) {
       throw new Error(response.data?.error || "Invalid response from server");
     }
-    
-    const categories = response.data.data || [];
-    console.log("🌐 Categories returned:", categories.length, "items");
-    return categories; // [{ groupId, name, code, name_ar, subgroups: [...] }, ...]
+    return response.data.data || [];
   } catch (error) {
-    console.error("❌ Error in getQrCategories:", error);
-    console.error("❌ Error response:", error.response?.data);
+    console.error("[MENU] getQrCategories failed:", error?.response?.data || error?.message);
     throw error;
   }
 }

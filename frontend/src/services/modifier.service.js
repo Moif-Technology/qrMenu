@@ -6,8 +6,5 @@ export async function fetchAllModifiers() {
   if (!data?.ok || !Array.isArray(data.data)) {
     throw new Error("Failed to fetch modifiers");
   }
-  console.log(data,"Modifeirs veruuundo?");
-
-  // data.data: [{ Modifier, ModifierID, ModifierArabic, UploadStatus }, ...]
   return data.data;
 }

@@ -113,12 +113,6 @@ export default function ReservationListPage() {
         reservationsArray = [result.reservations];
       }
       
-      // DEBUG: Log to check bookingSource
-      console.log('[ReservationList] Loaded reservations:', reservationsArray.length);
-      reservationsArray.forEach((res, i) => {
-        console.log(`[ReservationList] ${i + 1}. ID:${res.bookingID} ${res.customerName} - Source: ${res.bookingSource || 'MISSING'}`);
-      });
-      
       // Store all reservations for counting (without status filter)
       setAllReservations(reservationsArray);
       
@@ -290,7 +284,6 @@ export default function ReservationListPage() {
         if (!result.ok) {
           throw new Error(result.error || "Failed to update status");
         }
-        console.log("[ReservationList] Status update successful:", result);
       }
       // Update local state immediately for instant UI feedback
       setLocalReservations(prev => {
@@ -300,13 +293,11 @@ export default function ReservationListPage() {
           const rId = r.reservationId || r.bookingID || r.ReservationID;
           // Use String comparison to handle number/string mismatches
           if (String(rId) === String(reservationId)) {
-            console.log("[ReservationList] Updating reservation:", { rId, reservationId, oldStatus: r.status, newStatus: "ARRIVED" });
-            return { ...r, status: "ARRIVED", Status: "ARRIVED" }; // Update both possible field names
+            return { ...r, status: "ARRIVED", Status: "ARRIVED" };
           }
           return r;
         });
-        console.log("[ReservationList] Updated local state:", { reservationId, totalReservations: updated.length, updated: updated.find(r => String(r.reservationId || r.bookingID || r.ReservationID) === String(reservationId)) });
-        return updated; // Return new array reference
+        return updated;
       });
       
       // Also update store for consistency

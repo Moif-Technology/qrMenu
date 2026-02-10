@@ -4,6 +4,9 @@ import "./App.css";
 import OrderSuccess from "./component/OrderSuccess";
 import "./index.css";
 
+// Restaurant base path – all URLs start with /opaia (change later for multi-restaurant)
+export const RESTAURANT_BASE_PATH = "/opaia";
+
 import MenuPage from "./pages/MenuPage";
 import PackageDetailsPage from "./pages/PackageDetailsPage";
 import TableSummary from "./pages/TableSummary";
@@ -24,7 +27,7 @@ import GuestReservationPage from "./pages/GuestReservationPage";
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={RESTAURANT_BASE_PATH}>
       <>
         <Routes>
           <Route path="/" element={<MenuPage />} />

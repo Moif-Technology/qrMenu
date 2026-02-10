@@ -146,8 +146,8 @@ export default function WalkInEditModal({
             if (tablesResult.ok) {
               setDisplayTables(tablesResult.tables || []);
             }
-          } catch (err) {
-            console.warn("Failed to load tables for area:", err);
+          } catch {
+            // Tables load failed; displayTables unchanged
           }
         };
         loadTablesForArea();
@@ -201,17 +201,10 @@ export default function WalkInEditModal({
         // Load floor layout
         try {
           const layout = await getFloorLayoutByArea(areaId);
-          console.log("[WALKIN_EDIT] Loaded layout:", {
-            areaId,
-            tables: layout?.tables?.length || 0,
-            shapes: layout?.shapes?.length || 0,
-            borderPoints: layout?.borderPoints?.length || 0
-          });
           setFloorLayout(layout);
-        } catch (layoutErr) {
-          console.warn("[WALKIN_EDIT] Failed to load floor layout:", layoutErr);
-          setFloorLayout(null); // Continue without layout if it fails
-      }
+        } catch {
+          setFloorLayout(null);
+        }
       } catch (err) {
         console.error("[WALKIN_EDIT] Failed to load floor map:", err);
         setFloorLayout(null);

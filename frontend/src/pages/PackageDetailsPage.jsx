@@ -24,17 +24,12 @@ export default function PackageDetailsPage() {
   // Check if we came from packages page
   const fromPackages = location.state?.fromPackages;
   
-  // Debug logging
-  console.log('[PACKAGE-DETAILS] Location state:', location.state);
-  console.log('[PACKAGE-DETAILS] fromPackages:', fromPackages);
-
   // Load image mapping on mount (same as MenuPage)
   useEffect(() => {
     (async () => {
       try {
         const mapping = await getImageMapping();
         imageMappingRef.current = mapping;
-        console.log("[PACKAGE] Loaded image mapping:", Object.keys(mapping).length, "products");
       } catch (err) {
         console.error("[PACKAGE] Failed to load image mapping:", err);
       }
@@ -66,23 +61,12 @@ export default function PackageDetailsPage() {
       const contentsWithImages = (contents || []).map((item, index) => {
         const productId = String(item.ProductID);
         const imageInfo = imageMappingRef.current[productId];
-        
-        // Log first 3 items for debugging
-        if (index < 3) {
-          console.log(`[PACKAGE-IMAGE] Item ${index + 1}: ${item.Description}`);
-          console.log(`  ProductID: ${productId}`);
-          console.log(`  Has mapping: ${!!imageInfo}`);
-          console.log(`  Image info:`, imageInfo);
-        }
-        
-        // Get Cloudinary URL from mapping
         if (imageInfo && typeof imageInfo === 'object' && imageInfo.cloudinaryUrl) {
           const cloudinaryUrl = String(imageInfo.cloudinaryUrl).trim();
           if (cloudinaryUrl && 
               cloudinaryUrl !== "null" && 
               cloudinaryUrl !== "undefined" &&
               (cloudinaryUrl.startsWith('http://') || cloudinaryUrl.startsWith('https://'))) {
-            console.log(`[PACKAGE-IMAGE] ✅ Found image for ${item.Description}: ${cloudinaryUrl.substring(0, 80)}...`);
             return {
               ...item,
               cloudinaryUrl: cloudinaryUrl,
@@ -90,8 +74,6 @@ export default function PackageDetailsPage() {
             };
           }
         }
-        
-        console.log(`[PACKAGE-IMAGE] ❌ No image for ${item.Description} (ProductID: ${productId})`);
         return item;
       });
       

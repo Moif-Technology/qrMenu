@@ -62,6 +62,8 @@ export const useCart = create((set, get) => {
     tableId: initialMeta.tableId ?? null, // Table ID from QR code token
     tableArea: initialMeta.tableArea ?? null, // Area name
     tableAreaId: initialMeta.tableAreaId ?? null, // Area ID
+    tableNo: initialMeta.tableNo ?? null, // Table number (display)
+    tableName: initialMeta.tableName ?? null, // Table name (display)
   token: initialToken ?? null, // QR code token for navigation to payment page
 
   // Normalize incoming mods: [{ id?, name?/label?, price?, raw? }]
@@ -176,7 +178,7 @@ export const useCart = create((set, get) => {
 
   clear: () => set({ items: [], note: "" }),
   setNote: (note) => set({ note }),
-    setTableId: (tableId, tableArea = null, tableAreaId = null) =>
+    setTableId: (tableId, tableArea = null, tableAreaId = null, tableNo = null, tableName = null) =>
       set((state) => {
         const next = {
           tableId: tableId ?? null,
@@ -186,6 +188,8 @@ export const useCart = create((set, get) => {
           tableAreaId: tableId
             ? tableAreaId ?? state.tableAreaId ?? null
             : null,
+          tableNo: tableId ? (tableNo ?? state.tableNo ?? null) : null,
+          tableName: tableId ? (tableName ?? state.tableName ?? null) : null,
         };
         persistMeta(next);
         return next;
@@ -193,7 +197,7 @@ export const useCart = create((set, get) => {
     clearTableMeta: () => {
       persistMeta({});
       persistToken(null);
-      set({ tableId: null, tableArea: null, tableAreaId: null, token: null });
+      set({ tableId: null, tableArea: null, tableAreaId: null, tableNo: null, tableName: null, token: null });
     },
   setToken: (token) => {
     persistToken(token);

@@ -200,9 +200,6 @@ export default function GuestReservationPage() {
     try {
       // Call backend API to create guest reservation
       const result = await createGuestReservation(formData);
-      
-      console.log("[GuestReservation] Reservation created successfully:", result);
-      
       // Store confirmation data
       setConfirmationData({
         confirmationCode: result.confirmationCode,
