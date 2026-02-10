@@ -4,8 +4,13 @@ import "./App.css";
 import OrderSuccess from "./component/OrderSuccess";
 import "./index.css";
 
-// Restaurant base path – all URLs start with /opaia (change later for multi-restaurant)
-export const RESTAURANT_BASE_PATH = "/opaia";
+// Support both /opaia/ and root (/) so existing QR codes with /opaia/ keep working
+// and the app also works without /opaia (e.g. at root). No change to existing QR codes needed.
+function getBasename() {
+  const p = typeof window !== "undefined" ? window.location.pathname : "";
+  return p.startsWith("/opaia") ? "/opaia" : "";
+}
+export const RESTAURANT_BASE_PATH = "/opaia"; // for reference; router uses getBasename()
 
 import MenuPage from "./pages/MenuPage";
 import PackageDetailsPage from "./pages/PackageDetailsPage";
@@ -27,7 +32,7 @@ import GuestReservationPage from "./pages/GuestReservationPage";
 
 export default function App() {
   return (
-    <BrowserRouter basename={RESTAURANT_BASE_PATH}>
+    <BrowserRouter basename={getBasename()}>
       <>
         <Routes>
           <Route path="/" element={<MenuPage />} />
