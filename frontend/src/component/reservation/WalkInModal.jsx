@@ -12,7 +12,7 @@ export default function WalkInModal() {
     seatingPreference: "",
     notes: ""
   });
-  
+   ///
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [suggestedTables, setSuggestedTables] = useState([]);
