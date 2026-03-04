@@ -1721,12 +1721,13 @@ export default function MenuPage() {
           <div className="relative mx-auto max-w-6xl px-4 sm:px-6 pb-16">
             {/* Premium Packages Header */}
            
-            {/* Package Listing Grid */}
-            <div className="grid gap-6 md:gap-8 [grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1fr))]">
-              {packageHeaders.map((pkg) => (
+            {/* Package Listing Grid - responsive: 1 col mobile, 2 col tablet, 3 col desktop */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 md:gap-8 auto-rows-fr">
+              {packageHeaders.map((pkg, index) => (
                 <PackageListingCard
                   key={pkg.ProductID}
                   packageData={pkg}
+                  placeholderIndex={index}
                   onClick={() => navigate(`/package/${pkg.ProductID}`, { 
                     state: { 
                       fromPackages: true,
