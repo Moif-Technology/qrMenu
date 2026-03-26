@@ -1584,7 +1584,7 @@ export default function MenuPage() {
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-gray-900">
-                    {tableId ? `Table ${tableId}` : "Your table"} has an ongoing order
+                    {tableId ? `Table ${tableNo}` : "Your table"} has an ongoing order
                   </div>
                   <div className="text-xs text-gray-600">
                     View your bill and make payment
