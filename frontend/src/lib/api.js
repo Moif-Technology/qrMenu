@@ -10,6 +10,37 @@ export const API = axios.create({
 });
 
 
+// Force fresh reads for time-sensitive QR/payment endpoints.
+API.interceptors.request.use((config) => {
+  const method = String(config.method || "get").toLowerCase();
+  const url = String(config.url || "");
+  const isSensitiveGet =
+    method === "get" && (
+      url.includes("/payment/balance/") ||
+      url.includes("/payment/paid-items/") ||
+      url.includes("/telr/check")
+    );
+  const isResolvePost = method === "post" && url.includes("/r/resolve");
+
+  if (isSensitiveGet || isResolvePost) {
+    config.headers = {
+      ...(config.headers || {}),
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    };
+  }
+
+  if (isSensitiveGet) {
+    const nextParams = { ...(config.params || {}) };
+    if (nextParams._t == null) nextParams._t = Date.now();
+    config.params = nextParams;
+  }
+
+  return config;
+});
+
+
 // Retry logic for rate limiting (429 errors)
 const MAX_RETRIES = 2;      // Reduced from 3 to 2
 const RETRY_DELAY = 2000;   // Increased to 2 seconds

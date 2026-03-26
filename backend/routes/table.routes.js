@@ -334,6 +334,14 @@ router.post("/r/resolve", async (req, res) => {
       // Continue without table name - not critical
     }
 
+    // Avoid any stale response reuse for QR table resolution.
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      Surrogate-Control: "no-store",
+    });
+
     res.json({ 
       ok: true, 
       tableId: String(tableId), 
