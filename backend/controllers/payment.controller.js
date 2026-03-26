@@ -169,6 +169,7 @@ export async function processEqualSplit(req, res) {
   const tableId = req.body?.tableId;
   const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
   const transId = req.body?.transId;
+  const sessionKey = req.body?.sessionKey || null; // used for tamper-check in service layer
   
   console.log(`[PAYMENT][${reqId}] Raw request body:`, JSON.stringify(req.body, null, 2));
   
@@ -201,7 +202,7 @@ export async function processEqualSplit(req, res) {
   console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
   
   try {
-    const result = await saveEqualSplitPayment({ billAmount, paidAmount, numberOfPeople, kotMasterID, transId, tableId });
+    const result = await saveEqualSplitPayment({ billAmount, paidAmount, numberOfPeople, kotMasterID, transId, tableId, sessionKey });
     console.log(`[PAYMENT][${reqId}] OK:`, result);
     return res.status(201).json({ 
       ok: true, 

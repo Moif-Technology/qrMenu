@@ -18,15 +18,23 @@ import telrRoutes from "./telr.routes.js";
 import { startAutoMigration, stopAutoMigration, getAutoMigrationStatus } from "./services/imageAutoMigration.service.js";
 const app = express();
 const PORT = process.env.PORT || 5001;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const isDevelopment = process.env.NODE_ENV !== "production";
 
-app.use(cors({ origin: CORS_ORIGIN }));
+// In production, only the actual frontend domain is allowed.
+// In development, all origins are allowed so local testing works.
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  || (isDevelopment ? "*" : (process.env.FRONTEND_URL || null));
+
+app.use(cors({
+  origin: CORS_ORIGIN,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json({ limit: "1mb" }));
 
 // Rate limiting configuration
 // DISABLED in development - React Strict Mode causes double API calls
 // Only enabled in production for security
-const isDevelopment = process.env.NODE_ENV !== 'production';
 
 // Create a no-op middleware for development (no rate limiting)
 const noOpLimiter = (req, res, next) => next();
@@ -58,13 +66,15 @@ const paymentLimiter = rateLimit({
   },
 });
 
-// Apply rate limiting: DISABLED in development, ENABLED in production
-if (isDevelopment) {
-  console.log("[RATE LIMIT] DISABLED in development mode");
+ // Apply rate limiting.
+// Explicitly set NODE_ENV=development to disable. Any other value (including
+// unset / empty) defaults to ENABLED so production servers are always protected.
+if (process.env.NODE_ENV === "development") {
+  console.log("[RATE LIMIT] DISABLED — NODE_ENV=development");
   app.use("/api", noOpLimiter);
   app.use("/api/payment", noOpLimiter);
 } else {
-  console.log("[RATE LIMIT] ENABLED in production mode");
+  console.log("[RATE LIMIT] ENABLED — NODE_ENV:", process.env.NODE_ENV || "(not set, defaulting to production rules)");
   app.use("/api", apiLimiter);
   app.use("/api/payment", paymentLimiter);
 }

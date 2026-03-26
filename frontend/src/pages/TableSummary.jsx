@@ -1,13 +1,17 @@
 // src/pages/TableSummaryPremium.jsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { List } from "react-window";
 
 import SplitCustomAmountSheet from "../component/SplitCustomAmountSheet";
 import SplitEqualSheet from "../component/SplitEqualSheet";
 import SplitOptionsSheet from "../component/SplitOptionSheet";
 import SplitPickItemsSheet from "../component/SplitPickItemsSheet";
 import PaymentSuccess from "../component/PaymentSuccess";
+import ConfirmModal from "../component/ConfirmModal";
+import Toast from "../component/Toast";
 import { API } from "../lib/api";
+import { log, error as logError } from "../lib/logger";
 import { useCart } from "../store/cartStore";
 import { getPaymentMethods, processEqualSplit, processCustomSplit, processItemSplit, getPaidItems, getBalance, createTelrSession, checkTelrStatus } from "../services/payment.service";
 import cardIcon from "../assets/payment/card.png";
@@ -140,35 +144,31 @@ function PayFullButton({
     
     // If there's an equal split in progress, continue with equal split method
     if (hasEqualSplitInProgress && equalSplitInfo) {
-      // For equal split, use the same equal split method (amount per person)
-      // Calculate amount per person from equalSplitInfo
-      const amountPerPerson = equalSplitInfo.amountPerPerson || grandTotal;
       const numberOfPeople = equalSplitInfo.numberOfPeople || 1;
+      // When "Pay remaining balance": charge the REMAINING BALANCE (grandTotal), not the original amount per person.
+      // grandTotal is already the remaining balance; amountPerPerson was from the original split and can be outdated
+      // if new items were added (e.g. original 35.70/person, but remaining is now 61.95).
+      const amountToCharge = Number(grandTotal);
       
-      // Create payment payload for equal split continuation
       const paymentPayload = {
         billAmount: Number(fullGrandTotal), // Full bill amount
-        paidAmount: Number(amountPerPerson), // Amount per person (equal share)
+        paidAmount: amountToCharge, // Amount being paid now (remaining balance)
         numberOfPeople: Number(numberOfPeople),
         tableId: tableId ? Number(tableId) : null,
         kotMasterID: kotMasterID ? Number(kotMasterID) : null
       };
       
-      // Set payment sheet data with equal split mode
-      // This will be handled by a callback that sets up the payment sheet
-      // We need to trigger the equal split payment flow through Telr
       if (onCardPay) {
-        // Pass the equal split payload so Telr knows to use equal split method
         onCardPay({
-          amount: Number(amountPerPerson), // Amount per person for equal split
+          amount: amountToCharge,
           tableId,
           kotMasterID,
           token,
           brand,
-          mode: "split-equal", // Indicate this is an equal split payment
+          mode: "split-equal",
           splitPayload: {
             paymentPayload,
-            amountPerPerson,
+            amountPerPerson: amountToCharge, // This payment: one person pays remaining
             numberOfPeople,
           }
         });
@@ -178,10 +178,10 @@ function PayFullButton({
     
     // If there's a custom split in progress (but not equal split), use custom split to pay the remaining balance
     if (hasCustomSplitInProgress && !hasEqualSplitInProgress) {
-      const confirmed = window.confirm(
-        `Confirm payment of ${fmt(grandTotal)} AED?\n\nThis will pay the remaining balance and complete the payment.`
-      );
-      if (!confirmed) return;
+      showConfirm(
+        `Pay ${fmt(grandTotal)} AED?`,
+        `This will pay the remaining balance and complete the payment.`,
+        async () => {
       
       try {
         setProcessing(true);
@@ -208,33 +208,28 @@ function PayFullButton({
               });
             }
           } else {
-            // Partial payment - show alert and stay on payment page
-            const message = `✅ Payment Successful!\n\nPayment ID: ${result.paymentId}\nAmount Paid: ${fmt(grandTotal)} AED\nRemaining Balance: ${fmt(result.balanceAmount)} AED\nStatus: ${result.paidStatus}`;
-            alert(message);
-            // Don't reload - stay on payment page to allow continued payment
-            // Refresh order data to get updated balance without reloading page
-            if (onRefreshData) {
-              onRefreshData();
-            } else if (loadOrderDataRef.current) {
-              loadOrderDataRef.current();
-            }
+            showToast(`Paid ${fmt(grandTotal)} AED · Remaining: ${fmt(result.balanceAmount)} AED`, "success", "Payment Successful");
+            if (onRefreshData) onRefreshData();
           }
         } else {
           throw new Error(result.error || "Payment processing failed");
         }
       } catch (err) {
-        console.error("Pay remaining balance error:", err);
+        logError("Pay remaining balance error:", err);
         const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-        alert(`❌ Payment Failed\n\n${errorMsg}`);
+        showToast(errorMsg, "error", "Payment Failed");
       } finally {
         setProcessing(false);
       }
+      },
+        { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
+      );
     } else if (hasItemSplitInProgress && !allItemsPaid) {
       // Item split in progress - pay for all remaining unpaid items
-      const confirmed = window.confirm(
-        `Confirm payment of ${fmt(grandTotal)} AED?\n\nThis will pay for all remaining unpaid items and complete the payment.`
-      );
-      if (!confirmed) return;
+      showConfirm(
+        `Pay ${fmt(grandTotal)} AED?`,
+        `This will pay for all remaining unpaid items and complete the payment.`,
+        async () => {
       
       try {
         setProcessing(true);
@@ -257,7 +252,7 @@ function PayFullButton({
           }));
         
         if (unpaidItems.length === 0) {
-          alert("All items are already paid.");
+          showToast("All items are already paid.", "info");
           setProcessing(false);
           return;
         }
@@ -292,27 +287,22 @@ function PayFullButton({
               });
             }
           } else {
-            // Partial payment - show alert and stay on payment page
-            const message = `✅ Payment Successful!\n\nPayment ID: ${result.paymentId}\nAmount Paid: ${fmt(result.itemsPaid || grandTotal)} AED\nRemaining Balance: ${fmt(balance)} AED\nStatus: ${paidStatus}`;
-            alert(message);
-            // Don't reload - stay on payment page to allow continued payment
-            // Refresh order data to get updated balance without reloading page
-            if (onRefreshData) {
-              onRefreshData();
-            } else if (loadOrderDataRef.current) {
-              loadOrderDataRef.current();
-            }
+            showToast(`Paid ${fmt(result.itemsPaid || grandTotal)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
+            if (onRefreshData) onRefreshData();
           }
         } else {
           throw new Error(result.error || "Payment processing failed");
         }
       } catch (err) {
-        console.error("Pay remaining items error:", err);
+        logError("Pay remaining items error:", err);
         const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-        alert(`❌ Payment Failed\n\n${errorMsg}`);
+        showToast(errorMsg, "error", "Payment Failed");
       } finally {
         setProcessing(false);
       }
+        },
+        { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
+      );
     } else {
       onCardPay?.({
         amount: Number(grandTotal),
@@ -373,6 +363,16 @@ export default function TableSummaryPremium() {
   const [showEqualSplitModal, setShowEqualSplitModal] = useState(false);
   const [showPaymentComplete, setShowPaymentComplete] = useState(false);
   const [paymentCompleteData, setPaymentCompleteData] = useState(null);
+  const [confirmState, setConfirmState] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = useCallback((message, variant = "info", title = null) => {
+    setToast({ message, variant, title });
+  }, []);
+
+  const showConfirm = useCallback((title, message, onConfirm, opts = {}) => {
+    setConfirmState({ title, message, onConfirm, ...opts });
+  }, []);
   const [paidKotChildIds, setPaidKotChildIds] = useState([]); // Track which items are paid
   const [equalSplitInfo, setEqualSplitInfo] = useState(null); // Track equal split information
   const [telrReturnStatus, setTelrReturnStatus] = useState(null);
@@ -385,17 +385,19 @@ export default function TableSummaryPremium() {
   const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const loadOrderDataRef = useRef(null);
+  const [billClosed, setBillClosed] = useState(false); // True when this QR bill is already settled / no active KOT
 
   const handlePaymentComplete = useCallback((data) => {
     setPaymentCompleteData(data);
     setShowPaymentComplete(true);
+    setShowEqualSplitModal(false);
   }, []);
 
   const handleAlternativeMethod = useCallback((method) => {
     setShowPaymentMethodsSheet(false);
     setPaymentSheetData(null);
-    alert(`${method} payment is coming soon. Please ask staff for assistance.`);
-  }, []);
+    showToast(`${method} is coming soon. Please ask staff for assistance.`, "info");
+  }, [showToast]);
 
   const handlePayFullRequest = useCallback((payload) => {
     // Check if this is an equal split continuation
@@ -403,6 +405,8 @@ export default function TableSummaryPremium() {
       setPaymentSheetData({
         ...payload,
         mode: "split-equal",
+        // Normalise: triggerCardPay reads paymentSheetData.payload
+        payload: payload.splitPayload,
         note: `Equal split · ${payload.splitPayload.numberOfPeople} ${payload.splitPayload.numberOfPeople === 1 ? "person" : "people"}`,
       });
     } else {
@@ -452,8 +456,17 @@ export default function TableSummaryPremium() {
           tableId,
           kotMasterID,
           token: payloadToken,
+          mode,
           customer: {},
         };
+        log("[EQUAL SPLIT] Step 2 - Telr session starting:", {
+          mode,
+          amount,
+          kotMasterID,
+          tableId,
+          splitPayload,
+          telrPayload
+        });
         const session = await createTelrSession(telrPayload);
 
         if (!session?.url || !session?.orderRef) {
@@ -464,6 +477,7 @@ export default function TableSummaryPremium() {
         // This ensures we can correctly identify the payment method when Telr returns
         const sessionData = {
           orderRef: session.orderRef,
+          sessionKey: session.sessionKey || null, // fallback if URL param is lost
           amount: Number(amount),
           tableId,
           kotMasterID,
@@ -476,9 +490,9 @@ export default function TableSummaryPremium() {
 
         window.location.href = session.url;
       } catch (err) {
-        console.error("Telr session error:", err);
+        logError("Telr session error:", err);
         const errorMsg = err?.response?.data?.error || err?.message || "Payment failed. Please try again.";
-        alert(`❌ Payment Failed\n\n${errorMsg}`);
+        showToast(errorMsg, "error", "Payment Failed");
       } finally {
         setIsPaymentProcessing(false);
         setShowPaymentMethodsSheet(false);
@@ -489,7 +503,7 @@ export default function TableSummaryPremium() {
   );
 
   const completeSplitPaymentFromTelr = useCallback(
-    async ({ mode, splitPayload, telrPaymentId, amountPaid }) => {
+    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey }) => {
       if (!mode || mode === "pay-full") return false;
       if (!splitPayload) return false;
 
@@ -499,7 +513,15 @@ export default function TableSummaryPremium() {
       try {
         if (mode === "split-equal") {
           const { paymentPayload, amountPerPerson, numberOfPeople } = splitPayload;
-          const result = await processEqualSplit(paymentPayload);
+          log("[EQUAL SPLIT] Step 3 - After Telr return, calling processEqualSplit:", {
+            mode,
+            splitPayload,
+            paymentPayload,
+            amountPerPerson,
+            numberOfPeople
+          });
+          // Include sessionKey so backend can verify paidAmount vs Telr-verified amount
+          const result = await processEqualSplit({ ...paymentPayload, sessionKey: sessionKey || undefined });
 
           if (!result.ok) {
             throw new Error(result.error || "Equal split payment processing failed");
@@ -516,8 +538,7 @@ export default function TableSummaryPremium() {
               status: paidStatus,
             });
           } else {
-            const message = `✅ Payment Successful!\n\nPayment ID: ${result.paymentId}\nAmount Paid: ${fmt(paidValue)} AED\nRemaining Balance: ${fmt(balance)} AED\nStatus: ${paidStatus}\n\nOther people can continue with equal split (${fmt(amountPerPerson || paidValue)} AED each) or use another payment method.`;
-            alert(message);
+            showToast(`Paid ${fmt(paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
             setRemainingBalance(balance);
             if (numberOfPeople > 0) {
               setEqualSplitInfo({
@@ -561,7 +582,7 @@ export default function TableSummaryPremium() {
               const paidItems = await getPaidItems(paymentPayload.kotMasterID);
               setPaidKotChildIds(paidItems);
             } catch (err) {
-              console.error("Error refreshing paid items:", err);
+              logError("Error refreshing paid items:", err);
             }
           }
 
@@ -576,7 +597,7 @@ export default function TableSummaryPremium() {
                   const paidItems = await getPaidItems(paymentPayload.kotMasterID);
                   setPaidKotChildIds(paidItems);
                 } catch (err) {
-                  console.error("Error refreshing paid items after loadOrderData:", err);
+                  logError("Error refreshing paid items after loadOrderData:", err);
                 }
               }
             }
@@ -586,8 +607,7 @@ export default function TableSummaryPremium() {
               status: paidStatus,
             });
           } else {
-            const message = `✅ Payment Successful!\n\nPayment ID: ${result.paymentId}\nAmount Paid: ${fmt(result.itemsPaid || paidValue)} AED\nRemaining Balance: ${fmt(balance)} AED\nStatus: ${paidStatus}\n\nOther users can continue paying for remaining items.`;
-            alert(message);
+            showToast(`Paid ${fmt(result.itemsPaid || paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
             // Don't reload - stay on payment page to allow continued payment
             // Refresh order data to get updated balance without reloading page
             if (loadOrderDataRef.current) {
@@ -598,7 +618,7 @@ export default function TableSummaryPremium() {
                 const paidItems = await getPaidItems(paymentPayload.kotMasterID);
                 setPaidKotChildIds(paidItems);
               } catch (err) {
-                  console.error("Error refreshing paid items after loadOrderData:", err);
+                  logError("Error refreshing paid items after loadOrderData:", err);
               }
             }
             }
@@ -633,8 +653,7 @@ export default function TableSummaryPremium() {
             setRemainingBalance(null);
             setSplitTransId(null);
           } else {
-            const message = `✅ Payment Successful!\n\nPayment ID: ${result.paymentId}\nAmount Paid: ${fmt(paidAmount || amountPaid)} AED\nRemaining Balance: ${fmt(balance)} AED\nStatus: ${paidStatus}\n\nOther users can continue paying the remaining balance.`;
-            alert(message);
+            showToast(`Paid ${fmt(paidAmount || amountPaid)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
             setRemainingBalance(balance);
             setSplitTransId(result.transId);
             // Don't reload - stay on payment page to allow continued payment
@@ -648,9 +667,9 @@ export default function TableSummaryPremium() {
 
         return false;
       } catch (err) {
-        console.error("Split payment completion error:", err);
+        logError("Split payment completion error:", err);
         const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-        alert(`❌ Payment Failed\n\n${errorMsg}`);
+        showToast(errorMsg, "error", "Payment Failed");
         return false;
       } finally {
         // Clear the flag after a short delay to allow loadOrderData to complete
@@ -666,6 +685,7 @@ export default function TableSummaryPremium() {
       setRemainingBalance,
       setSplitTransId,
       splitTransId,
+      showToast,
     ],
   );
 
@@ -679,7 +699,7 @@ export default function TableSummaryPremium() {
       token,
       brand: meta.brand,
       mode: paymentSheetData.mode,
-      splitPayload: paymentSheetData.mode === "pay-full" ? null : paymentSheetData.payload,
+      splitPayload: paymentSheetData.mode === "pay-full" ? null : (paymentSheetData.payload ?? paymentSheetData.splitPayload ?? null),
     };
 
     startTelrSession(basePayload);
@@ -746,7 +766,7 @@ export default function TableSummaryPremium() {
           const orderStatusCode = Number(telrData?.order?.status?.code);
           const authorised = transactionStatus === "A" || orderStatusCode === 3;
           if (!authorised) {
-            alert("We could not confirm the payment yet. Please contact a staff member.");
+            showToast("We could not confirm the payment yet. Please contact a staff member.", "warning", "Payment Unverified");
             telrHandledKeyRef.current = null;
           } else {
             // Set telrReturnStatus to "AUTH" BEFORE processing payment to prevent redirects
@@ -764,8 +784,11 @@ export default function TableSummaryPremium() {
               telrData?.transaction?.ref ||
               telrData?.order?.ref;
 
-            const mode = stored?.mode || "pay-full";
+            // Read mode: sessionStorage is primary, URL param is backup
+            const modeFromUrl = searchParams.get("mode");
+            const mode = stored?.mode || modeFromUrl || "pay-full";
             const splitPayload = stored?.splitPayload || null;
+            log("[EQUAL SPLIT] Telr return - mode:", mode, "| from storage:", stored?.mode, "| from URL:", modeFromUrl, "| kotMasterID:", stored?.kotMasterID);
             // CRITICAL: Determine the actual payment mode
             // Priority: 1. stored.mode, 2. infer from splitPayload structure, 3. default to pay-full
             // If splitPayload exists, it's ALWAYS a split payment - never pay-full
@@ -784,8 +807,8 @@ export default function TableSummaryPremium() {
                 actualMode = mode;
               } else {
                 // splitPayload exists but we can't determine type - this is an error
-                console.error("[FRONTEND] Telr callback - splitPayload exists but mode cannot be determined!", splitPayload);
-                alert("Payment error: Could not determine payment method. Please contact support.");
+                logError("[FRONTEND] Telr callback - splitPayload exists but mode cannot be determined!", splitPayload);
+                showToast("Payment error: Could not determine payment method. Please contact support.", "error", "Payment Error");
                 return;
               }
             }
@@ -799,13 +822,16 @@ export default function TableSummaryPremium() {
                 splitPayload,
                 telrPaymentId: paymentIdValue,
                 amountPaid: Number.isFinite(amountPaid) ? amountPaid : undefined,
+                // Pass sessionKey so the backend can verify the paidAmount
+                // against what Telr actually charged (tamper protection)
+                sessionKey: sessionKeyParam || stored?.sessionKey || null,
               });
               // If split payment has balance, don't do anything else - stay on page
               // The completeSplitPaymentFromTelr already handled the balance display
               if (splitResult) {
                 return;
               } else {
-                console.error("[FRONTEND] Split payment processing returned false - this should not happen");
+                logError("[FRONTEND] Split payment processing returned false - this should not happen");
               }
             } else {
               // CRITICAL: Do NOT create a Pay Full payment here!
@@ -825,8 +851,8 @@ export default function TableSummaryPremium() {
             }
           }
         } catch (err) {
-          console.error("Telr callback handling failed:", err);
-          alert("Payment authorised, but we could not verify the status. Please check with staff.");
+          logError("Telr callback handling failed:", err);
+          showToast("Payment authorised, but we could not verify the status. Please check with staff.", "warning", "Please Check With Staff");
           telrHandledKeyRef.current = null;
           isProcessingTelrSplitRef.current = false; // Clear flag on error
         } finally {
@@ -843,9 +869,9 @@ export default function TableSummaryPremium() {
       sessionStorage.removeItem("telr:lastSession");
 
       if (status === "CANCEL") {
-        alert("Payment was cancelled.");
+        showToast("Payment was cancelled.", "info");
       } else if (status === "DECLINED") {
-        alert("Payment was declined. Please try again with a different card.");
+        showToast("Payment was declined. Please try again with a different card.", "error", "Payment Declined");
       }
 
       clearParams();
@@ -860,7 +886,7 @@ export default function TableSummaryPremium() {
         
         setPaymentMethods(methods);
       } catch (err) {
-        console.error("Failed to load payment methods:", err);
+        logError("Failed to load payment methods:", err);
         // Keep default behavior if fetch fails
         setPaymentMethods([]);
       }
@@ -884,9 +910,64 @@ export default function TableSummaryPremium() {
   const showSplitItems = paymentMethods.length === 0 || hasMethodById(3); // Item Split
   const showCustomAmount = paymentMethods.length === 0 || hasMethodById(4); // Custom Split
 
+  // Lock rules:
+  //
+  //  Equal Split active  → Custom LOCKED (equal is a group agreement; custom breaks it)
+  //                      → Item   LOCKED (amount-based vs item-based conflict)
+  //                      → Equal  OPEN   (continue the agreement)
+  //
+  //  Custom Split active → Equal  OPEN   (both just track a running balance; flexible)
+  //                      → Custom OPEN   (continue)
+  //                      → Item   LOCKED (amount-based vs item-based conflict)
+  //
+  //  Item Split active   → Equal  LOCKED (item-based vs amount-based conflict)
+  //                      → Custom LOCKED (item-based vs amount-based conflict)
+  //                      → Item   OPEN   (continue picking items)
+
+  // Full bill total (for lock rules; same value as fullGrand used later)
+  const fullGrandTotal = useMemo(
+    () => lines.reduce((a, x) => a + (Number(x.LineTotal) || 0) + (Number(x.ServiceFee) || 0), 0),
+    [lines]
+  );
+
+  // True when all items in the current KOT are already paid (item split)
+  const allItemsPaid =
+    lines.length > 0 &&
+    lines.every((item) => {
+      const kotChildId = item.KotChildID || item.kotChildID || item.kotChildId || null;
+      return kotChildId && paidKotChildIds.includes(Number(kotChildId));
+    });
+
+  // Item split is active when at least one item has been marked paid but not all
+  const itemSplitActive = paidKotChildIds.length > 0 && !allItemsPaid;
+
+  const equalSplitActive =
+    equalSplitInfo !== null && remainingBalance !== null && remainingBalance > 0;
+
+  // Custom split is active when balance is partially reduced AND it is NOT an equal split
+  // and we are NOT in item-split mode. Item split also creates a remaining balance in the
+  // payments table, but it should not be treated as an amount-based split here.
+  const customSplitActive =
+    !equalSplitActive &&
+    !itemSplitActive &&
+    remainingBalance !== null &&
+    fullGrandTotal != null &&
+    remainingBalance > 0 &&
+    remainingBalance < fullGrandTotal;
+
+  // Any amount-based split (equal or custom) is in progress (never item split)
+  const amountSplitActive = equalSplitActive || customSplitActive;
+
+  // Per-option lock reasons (null = not locked)
+  const equalLockReason  = itemSplitActive   ? "Item split in progress — continue paying for items"   : null;
+  const customLockReason = equalSplitActive  ? "Equal split in progress — everyone pays their share"
+                         : itemSplitActive   ? "Item split in progress — continue paying for items"    : null;
+  const itemLockReason   = amountSplitActive ? "Amount split in progress — pay by amount to complete" : null;
+
   // Function to load order data
   const loadOrderData = useCallback(async () => {
     if (!token) return;
+    setBillClosed(false);
     try {
       setRefreshing(true);
       const { data } = await API.post("/r/resolve", { token });
@@ -906,7 +987,7 @@ export default function TableSummaryPremium() {
             areaId = areaObj.areaId;
           }
         } catch (err) {
-          console.error("Error fetching areas to get areaId:", err);
+          logError("Error fetching areas to get areaId:", err);
         }
       }
       
@@ -920,7 +1001,7 @@ export default function TableSummaryPremium() {
 
       // Dev: show full link details in console when this page is opened from generated link
       if (typeof window !== "undefined") {
-        console.log("[Link details]", {
+        log("[Link details]", {
           url: window.location.href,
           token,
           tableId,
@@ -932,10 +1013,32 @@ export default function TableSummaryPremium() {
 
       setCanPay(canPayValue);
       // If no orders exist, redirect to menu page
-      // But allow users to navigate back to menu even if there are orders
-      // EXCEPT: Don't redirect if we're processing a Telr return (might be checking balance after payment)
+      // EXCEPT: Don't redirect if we're processing a Telr return (split payment may have just been saved)
       const isProcessingTelrReturnCheck = isTelrAuthParam || telrReturnStatus === "AUTH" || isProcessingTelrSplitRef.current;
-      if (linesData.length === 0 && !isProcessingTelrReturnCheck) {
+      let resolvedLines = linesData;
+      // When returning from Telr (e.g. item split): backend may not see the new payment yet. Retry once after a short delay.
+      if (resolvedLines.length === 0 && isProcessingTelrReturnCheck) {
+        await new Promise((r) => setTimeout(r, 700));
+        const retryRes = await API.post("/r/resolve", { token });
+        const retryLines = retryRes?.data?.lines || [];
+        if (retryLines.length > 0) {
+          resolvedLines = retryLines;
+          // Use latest canPay and table info from retry
+          if (retryRes.data.canPay !== undefined) setCanPay(retryRes.data.canPay === true);
+          if (retryRes.data.tableName != null) data.tableName = retryRes.data.tableName;
+          if (retryRes.data.tableNo != null) data.tableNo = retryRes.data.tableNo;
+        }
+      }
+      if (resolvedLines.length === 0 && !isProcessingTelrReturnCheck) {
+        const isOnPaymentRoute = typeof window !== "undefined" && window.location.pathname.includes("/r/");
+        if (isOnPaymentRoute) {
+          setBillClosed(true);
+          setLines([]);
+          setRemainingBalance(null);
+          setPaidKotChildIds([]);
+          setEqualSplitInfo(null);
+          return;
+        }
         navigate("/");
         return;
       }
@@ -943,7 +1046,7 @@ export default function TableSummaryPremium() {
       
       // Extract kotMasterID from first line (all lines should have the same kotMasterID)
       // Check for different possible property names
-      const firstLine = linesData.length > 0 ? linesData[0] : null;
+      const firstLine = resolvedLines.length > 0 ? resolvedLines[0] : null;
       let kotMasterID = null;
       
       if (firstLine) {
@@ -957,15 +1060,14 @@ export default function TableSummaryPremium() {
         tableNo: data.tableNo || null,
         brand: data.brand || "Restaurant",
       });
-      setLines(linesData);
+      setLines(resolvedLines);
       setKotMasterID(kotMasterID);
       // Fetch remaining balance and check if table is fully paid
-      // IMPORTANT: If there are unpaid KOTs (lines.length > 0), we should show the payment page
-      // regardless of payment history, because there are new orders to pay
+      let balanceData = null;
       if (tableId && kotMasterID) {
         try {
           // Pass kotMasterID to get balance for this specific KOT
-          const balanceData = await getBalance(tableId, kotMasterID);
+          balanceData = await getBalance(tableId, kotMasterID);
           // CRITICAL: Never redirect if there's a remaining balance - user needs to stay on payment page
           // Also never redirect if we're processing a Telr return (split payments may have balance)
           // Check if this specific kotMasterID is fully paid (PaidStatus = "PAID")
@@ -998,15 +1100,13 @@ export default function TableSummaryPremium() {
             // Set equal split info if available (only if balance > 0)
             if (balanceData.equalSplitInfo) {
               setEqualSplitInfo(balanceData.equalSplitInfo);
-              // Show modal to inform user about equal split in progress
-              // Use a small delay if processing Telr return to allow page to settle
+              // Show modal to inform user about equal split in progress.
+              // The modal render is already guarded by !showPaymentComplete in JSX,
+              // so setting the flag here is safe even if payment completes shortly after.
               if (isProcessingTelrReturn) {
-                // Show modal after a short delay when returning from Telr
-                setTimeout(() => {
-                  setShowEqualSplitModal(true);
-                }, 1000);
+                setTimeout(() => setShowEqualSplitModal(true), 1000);
               } else {
-              setShowEqualSplitModal(true);
+                setShowEqualSplitModal(true);
               }
             }
           } else {
@@ -1016,7 +1116,7 @@ export default function TableSummaryPremium() {
             setSplitTransId(null);
           }
         } catch (err) {
-          console.error("Error fetching balance:", err);
+          logError("Error fetching balance:", err);
           setRemainingBalance(null);
         }
       }
@@ -1032,7 +1132,7 @@ export default function TableSummaryPremium() {
           fetchedPaidItems = await getPaidItems(kotMasterID);
           setPaidKotChildIds(fetchedPaidItems);
         } catch (err) {
-          console.error("Error fetching paid items:", err);
+          logError("Error fetching paid items:", err);
           setPaidKotChildIds([]);
         }
       } else {
@@ -1042,43 +1142,27 @@ export default function TableSummaryPremium() {
       
       // Now check for redirect AFTER fetching paid items
       // Check if item split is in progress (some items are paid but not all)
-      const hasItemSplitInProgressCheck = fetchedPaidItems.length > 0 && linesData.length > 0;
-      const allItemsPaidCheck = hasItemSplitInProgressCheck && linesData.every(item => {
+      const hasItemSplitInProgressCheck = fetchedPaidItems.length > 0 && resolvedLines.length > 0;
+      const allItemsPaidCheck = hasItemSplitInProgressCheck && resolvedLines.every(item => {
         const kotChildId = item.KotChildID || item.kotChildID || item.kotChildId || null;
         return kotChildId && fetchedPaidItems.includes(Number(kotChildId));
       });
       const hasUnpaidItemsCheck = hasItemSplitInProgressCheck && !allItemsPaidCheck;
       
-      // Final redirect check AFTER fetching paid items
-      // This ensures we don't redirect when item split is in progress
+      // Final redirect check AFTER fetching paid items (balanceData in outer scope for this block)
       if (tableId && kotMasterID) {
         try {
-          // CRITICAL: Check for unpaid items FIRST - if item split is in progress, NEVER redirect
           if (hasUnpaidItemsCheck) {
-            // Don't redirect - stay on payment page so user can continue paying for remaining items
-            return; // Exit early - don't proceed with any redirect
+            return;
           }
-          
-          // Get balance data if we don't have it yet (should already be fetched above)
           let finalBalanceData = balanceData;
           if (!finalBalanceData) {
             finalBalanceData = await getBalance(tableId, kotMasterID);
           }
-          
           const finalIsProcessingTelrReturn = isTelrAuthParam || telrReturnStatus === "AUTH" || isProcessingTelrSplitRef.current;
           const finalHasRemainingBalance = finalBalanceData.balance > 0;
-          const finalHasEqualSplitInfo = finalBalanceData.equalSplitInfo !== null && finalBalanceData.equalSplitInfo !== undefined;
+          const finalHasEqualSplitInfo = finalBalanceData.equalSplitInfo != null;
           const finalIsOnPaymentRoute = window.location.pathname.includes('/r/');
-          
-          // Only allow redirect if ALL of these are true:
-          // - No remaining balance
-          // - Not processing Telr return
-          // - Payment complete screen not showing
-          // - No equal split info
-          // - Balance is 0
-          // - Fully paid
-          // - NOT on /r/:token route
-          // (hasUnpaidItemsCheck already checked above and returned early if true)
           const shouldRedirectFinal = !finalHasRemainingBalance && 
                                      !finalIsProcessingTelrReturn && 
                                      !showPaymentComplete && 
@@ -1087,24 +1171,16 @@ export default function TableSummaryPremium() {
                                      finalBalanceData.isFullyPaid &&
                                      finalBalanceData.paidStatus === "PAID" &&
                                      !finalIsOnPaymentRoute;
-          
-          // Redirect if: no unpaid KOTs AND (no lines OR all items are paid)
-          // This handles both cases:
-          // 1. No orders at all (linesData.length === 0)
-          // 2. All items paid via item split (allItemsPaidCheck is true)
-          if (shouldRedirectFinal && !finalBalanceData.hasUnpaidKots && (linesData.length === 0 || allItemsPaidCheck)) {
+          if (shouldRedirectFinal && !finalBalanceData.hasUnpaidKots && (resolvedLines.length === 0 || allItemsPaidCheck)) {
             navigate("/");
             return;
-          } else if (finalIsProcessingTelrReturn || finalHasRemainingBalance) {
-            // Stay on payment page
           }
         } catch (err) {
-          console.error("Error in final redirect check:", err);
-          // Don't redirect on error - stay on payment page
+          logError("Error in final redirect check:", err);
         }
       }
     } catch (err) {
-      console.error("Error loading order data:", err);
+      logError("Error loading order data:", err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -1120,15 +1196,14 @@ export default function TableSummaryPremium() {
     loadOrderData();
   }, [loadOrderData]);
 
-  // Auto-refresh when order is not accepted (poll every 5 seconds)
+  // Auto-refresh when order is not accepted (poll every 5 seconds, only when tab visible)
   useEffect(() => {
-    if (!canPay && lines.length > 0 && !loading) {
-      const interval = setInterval(() => {
-        loadOrderData();
-      }, 5000);
-      
-      return () => clearInterval(interval);
-    }
+    if (!canPay || lines.length === 0 || loading) return;
+    const tick = () => {
+      if (document.visibilityState === "visible") loadOrderData();
+    };
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
   }, [canPay, lines.length, loading, loadOrderData]);
 
   const totals = useMemo(
@@ -1264,7 +1339,7 @@ export default function TableSummaryPremium() {
               TABLE
             </div>
             <h1 className="text-[40px] leading-none font-light text-gray-900 tracking-tight">
-              #{meta.tableId}
+              #{meta.tableNo}
             </h1>
             <p className="text-[13px] text-gray-600 mt-2">
               {lines.length} items • {canPay ? "Ready for payment" : "Waiting for order acceptance"}
@@ -1285,15 +1360,35 @@ export default function TableSummaryPremium() {
             </span>
           </div>
 
-          <ul className="grid gap-2">
-            {lines.map((item, index) => (
-              <ItemRow 
-                key={`${item.KotChildID || index}`} 
-                item={item} 
-                paidKotChildIds={paidKotChildIds}
-              />
-            ))}
-          </ul>
+          {lines.length > 30 ? (
+            <List
+              rowCount={lines.length}
+              rowHeight={80}
+              rowComponent={({ index, style }) => (
+                <div style={style} className="mb-2">
+                  <ItemRow
+                    item={lines[index]}
+                    paidKotChildIds={paidKotChildIds}
+                  />
+                </div>
+              )}
+              rowProps={{ lines, paidKotChildIds }}
+              style={{
+                height: Math.min(450, Math.max(250, (typeof window !== "undefined" ? window.innerHeight - 400 : 400))),
+                width: "100%",
+              }}
+            />
+          ) : (
+            <ul className="grid gap-2">
+              {lines.map((item, index) => (
+                <ItemRow
+                  key={`${item.KotChildID || index}`}
+                  item={item}
+                  paidKotChildIds={paidKotChildIds}
+                />
+              ))}
+            </ul>
+          )}
         </div>
       </section>
 
@@ -1313,8 +1408,11 @@ export default function TableSummaryPremium() {
             </div>
             <div className="text-[12px] text-gray-500">AED</div>
             {(remainingBalance !== null || hasItemSplitInProgress || hasEqualSplitInProgress) && (
-              <div className="text-[10px] text-red-600 mt-1 font-medium">
-                Total bill amount: {fmt(fullGrand)} AED
+              <div className="text-[10px] text-red-600 mt-1 font-medium space-y-0.5">
+                <div>Total bill amount: {fmt(fullGrand)} AED</div>
+                {(hasEqualSplitInProgress || (remainingBalance !== null && fullGrand != null && remainingBalance < fullGrand && !hasEqualSplitInProgress && !hasItemSplitInProgress)) && fullGrand > grand && (
+                  <div>Already paid from bill: {fmt(fullGrand - grand)} AED</div>
+                )}
               </div>
             )}
           </div>
@@ -1379,8 +1477,8 @@ export default function TableSummaryPremium() {
             </div>
           )}
 
-          {/* Actions - Payment buttons hidden */}
-          {/* <div className="mt-4 flex gap-3">
+          {/* Actions - Payment buttons hidden
+          <div className="mt-4 flex gap-3">
             {showSplitBill && (
               <button
                 onClick={() => setShowSplitOptions(true)}
@@ -1411,39 +1509,49 @@ export default function TableSummaryPremium() {
               />
             )}
           </div>
+          */}
 
           <div className="mt-3 text-center text-[12px] text-gray-500">
             {canPay 
               ? "Pay your bill now in 10 seconds. No need to call the waiter!"
               : "Please wait for your order to be accepted before making payment."
             }
-          </div> */}
+          </div>
         </div>
         <div className="h-2 safe-bottom" />
       </div>
 
       {/* Sheets - Payment sheets hidden */}
-      {/* {showSplitOptions && (
+      {showSplitOptions && (
         <SplitOptionsSheet
-          variant="pill" // 'pill' | 'cards' | 'radio' | 'grid'
+          variant="pill"
           onClose={() => setShowSplitOptions(false)}
-          onEqual={showSplitEqually ? () => {
-            setShowSplitOptions(false);
-            setShowEqualSheet(true);
-          } : undefined}
-          onItems={showSplitItems ? () => {
-            setShowSplitOptions(false);
-            setShowPickItems(true);
-          } : undefined}
-          onCustom={showCustomAmount ? () => {
-            setShowSplitOptions(false);
-            setShowCustomSheet(true);
-          } : undefined}
+          onEqual={
+            !showSplitEqually
+              ? undefined
+              : equalLockReason
+                ? equalLockReason
+                : () => { setShowSplitOptions(false); setShowEqualSheet(true); }
+          }
+          onItems={
+            !showSplitItems
+              ? undefined
+              : itemLockReason
+                ? itemLockReason
+                : () => { setShowSplitOptions(false); setShowPickItems(true); }
+          }
+          onCustom={
+            !showCustomAmount
+              ? undefined
+              : customLockReason
+                ? customLockReason
+                : () => { setShowSplitOptions(false); setShowCustomSheet(true); }
+          }
         />
-      )} */}
+      )}
 
-      {/* Equal Split Modal - Payment modals hidden */}
-      {/* {showEqualSplitModal && equalSplitInfo && (
+      {/* Equal Split Modal - hidden when payment is already complete */}
+      {showEqualSplitModal && equalSplitInfo && !showPaymentComplete && (
         <div className="fixed inset-0 z-[80] bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full border" style={{ borderColor: "var(--grad-end-soft)" }}>
             <div className="px-6 pt-6 pb-4">
@@ -1494,9 +1602,9 @@ export default function TableSummaryPremium() {
             </div>
           </div>
         </div>
-      )} */}
+      )}
 
-      {/* {showEqualSheet && (
+      {showEqualSheet && (
         <SplitEqualSheet
           total={grand}
           currency="AED"
@@ -1505,7 +1613,7 @@ export default function TableSummaryPremium() {
           onConfirm={async (shares) => {
             try {
               if (!shares || shares.length === 0) {
-                alert("Please set up equal split with at least one person.");
+                showToast("Please set up equal split with at least one person.", "warning");
                 return;
               }
 
@@ -1513,28 +1621,22 @@ export default function TableSummaryPremium() {
               const amountPerPerson = Number(shares[0]?.amount || 0);
               
               if (amountPerPerson <= 0) {
-                alert("Amount per person must be greater than 0.");
+                showToast("Amount per person must be greater than 0.", "warning");
                 return;
               }
 
               const numberOfPeople = shares.length;
-              
-              const confirmed = window.confirm(
-                `Confirm payment of ${fmt(amountPerPerson)} AED?\n\nThis is your equal share (${numberOfPeople} people splitting the bill).\n\nOther people can continue with equal split or use another payment method.`
-              );
-              
-              if (!confirmed) return;
 
               setShowEqualSheet(false);
 
               // Ensure we have valid values
               if (!kotMasterID) {
-                alert("Error: KOT Master ID is missing. Please refresh the page and try again.");
+                showToast("KOT Master ID is missing. Please refresh the page and try again.", "error", "Error");
                 return;
               }
               
               if (!fullGrand || fullGrand <= 0) {
-                alert("Error: Bill amount is invalid. Please refresh the page and try again.");
+                showToast("Bill amount is invalid. Please refresh the page and try again.", "error", "Error");
                 return;
               }
 
@@ -1549,6 +1651,14 @@ export default function TableSummaryPremium() {
                 tableId: meta.tableId ? Number(meta.tableId) : null,
                 kotMasterID: kotMasterID ? Number(kotMasterID) : null
               };
+              log("[EQUAL SPLIT] Step 1 - Payload built:", {
+                kotMasterID,
+                fullGrand,
+                originalBillAmount,
+                amountPerPerson,
+                numberOfPeople,
+                paymentPayload
+              });
               setPaymentSheetData({
                 mode: "split-equal",
                 amount: amountPerPerson,
@@ -1561,15 +1671,15 @@ export default function TableSummaryPremium() {
               });
               setShowPaymentMethodsSheet(true);
             } catch (err) {
-              console.error("Equal split payment error:", err);
+              logError("Equal split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-              alert(`❌ Payment Failed\n\n${errorMsg}`);
+              showToast(errorMsg, "error", "Payment Failed");
             }
           }}
         />
-      )} */}
+      )}
 
-      {/* {showPickItems && (
+      {showPickItems && (
         <SplitPickItemsSheet
           items={lines}
           paidKotChildIds={paidKotChildIds}
@@ -1579,7 +1689,7 @@ export default function TableSummaryPremium() {
           onConfirm={async (payload) => {
             try {
               if (!payload || payload.length === 0) {
-                alert("Please select at least one item to pay for.");
+                showToast("Please select at least one item to pay for.", "warning");
                 return;
               }
 
@@ -1587,15 +1697,9 @@ export default function TableSummaryPremium() {
               const totalAmount = payload.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
               
               if (totalAmount <= 0) {
-                alert("Selected items total must be greater than 0.");
+                showToast("Selected items total must be greater than 0.", "warning");
                 return;
               }
-
-              const confirmed = window.confirm(
-                `Confirm payment of ${fmt(totalAmount)} AED for selected items?\n\nThis will process the payment for the items you selected.`
-              );
-              
-              if (!confirmed) return;
 
               setShowPickItems(false);
 
@@ -1633,15 +1737,15 @@ export default function TableSummaryPremium() {
               });
               setShowPaymentMethodsSheet(true);
             } catch (err) {
-              console.error("Item split payment error:", err);
+              logError("Item split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-              alert(`❌ Payment Failed\n\n${errorMsg}`);
+              showToast(errorMsg, "error", "Payment Failed");
             }
           }}
         />
-      )} */}
+      )}
 
-      {/* {showCustomSheet && (
+      {showCustomSheet && (
         <SplitCustomAmountSheet
           total={grand}
           currency="AED"
@@ -1671,26 +1775,32 @@ export default function TableSummaryPremium() {
               setShowCustomSheet(false);
               setShowPaymentMethodsSheet(true);
             } catch (err) {
-              console.error("Custom split payment error:", err);
+              logError("Custom split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-              alert(`❌ Payment Failed\n\n${errorMsg}`);
+              showToast(errorMsg, "error", "Payment Failed");
             }
           }}
         />
-      )} */}
+      )}
+
+      {/* Confirm Modal - replaces window.confirm() */}
+      <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />
+
+      {/* Toast - replaces alert() */}
+      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {/* Payment Complete Screen - Hidden */}
-      {/* <PaymentSuccess
+      <PaymentSuccess
         open={showPaymentComplete}
         onClose={() => {
           setShowPaymentComplete(false);
           setPaymentCompleteData(null);
         }}
         paymentData={paymentCompleteData}
-      /> */}
+      />
 
       {/* Payment Methods Sheet - Hidden */}
-      {/* {showPaymentMethodsSheet && (
+      {showPaymentMethodsSheet && (
         <div className="payment-sheet-overlay" role="dialog" aria-modal="true">
           <button
             type="button"
@@ -1840,7 +1950,7 @@ export default function TableSummaryPremium() {
             </div>
           </div>
         </div>
-      )} */}
+      )}
     </div>
   );
 }

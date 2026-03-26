@@ -1,4 +1,5 @@
 import { API } from "../lib/api";
+import { error as logError, warn as logWarn } from "../lib/logger";
 
 
 /** GET /api/menu/categories */
@@ -57,7 +58,7 @@ export async function getProductImages(productIds = []) {
     });
     return data.data || {}; // Returns { productId: { image, images }, ... }
   } catch (error) {
-    console.error("[MENU] Failed to load product images:", error);
+    logError("[MENU] Failed to load product images:", error);
     return {}; // Return empty object on error, images will use fallback
   }
 }
@@ -94,7 +95,7 @@ export async function getQrCategories() {
     }
     return response.data.data || [];
   } catch (error) {
-    console.error("[MENU] getQrCategories failed:", error?.response?.data || error?.message);
+    logError("[MENU] getQrCategories failed:", error?.response?.data || error?.message);
     throw error;
   }
 }
@@ -177,7 +178,7 @@ export async function getSingleProductImageBinary(productId, retries = 1) {
       }
       // Last attempt failed or non-timeout error
       if (attempt === retries) {
-        console.warn(`[MENU] Failed to load binary image for product ${productId} after ${retries + 1} attempts:`, error.message);
+        logWarn(`[MENU] Failed to load binary image for product ${productId} after ${retries + 1} attempts:`, error.message);
       }
       return null;
     }
@@ -212,7 +213,7 @@ export async function getSingleProductImage(productId, retries = 1) {
       }
       // Last attempt failed or non-timeout error
       if (attempt === retries) {
-        console.warn(`[MENU] Failed to load image for product ${productId} after ${retries + 1} attempts:`, error.message);
+        logWarn(`[MENU] Failed to load image for product ${productId} after ${retries + 1} attempts:`, error.message);
       }
       return null;
     }

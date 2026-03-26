@@ -1,5 +1,6 @@
 // src/store/cartStore.js
 import { create } from "zustand";
+import { warn as logWarn } from "../lib/logger";
 
 const META_KEY = "qr.tableMeta";
 
@@ -9,7 +10,7 @@ const getInitialMeta = () => {
     const raw = window.localStorage.getItem(META_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch (err) {
-    console.warn("Failed to parse table meta", err);
+    logWarn("Failed to parse table meta", err);
     return {};
   }
 };
@@ -23,7 +24,7 @@ const persistMeta = (meta) => {
       window.localStorage.removeItem(META_KEY);
     }
   } catch (err) {
-    console.warn("Failed to persist table meta", err);
+    logWarn("Failed to persist table meta", err);
   }
 };
 
@@ -34,7 +35,7 @@ const getInitialToken = () => {
   try {
     return window.localStorage.getItem(TOKEN_KEY);
   } catch (err) {
-    console.warn("Failed to parse table token", err);
+    logWarn("Failed to parse table token", err);
     return null;
   }
 };
@@ -48,7 +49,7 @@ const persistToken = (token) => {
       window.localStorage.removeItem(TOKEN_KEY);
     }
   } catch (err) {
-    console.warn("Failed to persist table token", err);
+    logWarn("Failed to persist table token", err);
   }
 };
 

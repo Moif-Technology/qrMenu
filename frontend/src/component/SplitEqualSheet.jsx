@@ -6,28 +6,30 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
   const [count, setCount] = useState(2);
   const [shares, setShares] = useState([]);
 
-  // If equal split is already in progress, use the existing split info
+  // Initialise count once on mount.
+  // In continuation mode start at 1 so the current person decides how many
+  // are splitting the REMAINING balance with them.
   useEffect(() => {
-    if (equalSplitInfo && equalSplitInfo.amountPerPerson) {
-      // Use existing equal split information
-      const amountPerPerson = Number(equalSplitInfo.amountPerPerson);
-      const numberOfPeople = equalSplitInfo.numberOfPeople || 2;
-      setCount(numberOfPeople);
-      const arr = Array.from({ length: numberOfPeople }, (_, i) => ({
-        label: `Person ${i + 1}`,
-        amount: i === numberOfPeople - 1 ? +(total - amountPerPerson * (numberOfPeople - 1)).toFixed(2) : amountPerPerson,
-      }));
-      setShares(arr);
-    } else {
-      // New equal split - calculate from total
-      const eq = Math.round((total / Math.max(count, 1)) * 100) / 100;
-      const arr = Array.from({ length: count }, (_, i) => ({
-        label: `Person ${i + 1}`,
-        amount: i === count - 1 ? +(total - eq * (count - 1)).toFixed(2) : eq,
-      }));
-      setShares(arr);
+    if (equalSplitInfo?.numberOfPeople) {
+      // Default to 1: one person (this screen's user) paying their share now.
+      // They can tap + to split the remaining balance with more people.
+      setCount(1);
     }
-  }, [count, total, equalSplitInfo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Recalculate shares whenever count or total changes.
+  // Always divides `total` evenly — never uses equalSplitInfo.amountPerPerson
+  // so that continuation mode works correctly for any number of people.
+  useEffect(() => {
+    const n = Math.max(count, 1);
+    const eq = Math.round((total / n) * 100) / 100;
+    const arr = Array.from({ length: n }, (_, i) => ({
+      label: `Person ${i + 1}`,
+      amount: i === n - 1 ? +(total - eq * (n - 1)).toFixed(2) : eq,
+    }));
+    setShares(arr);
+  }, [count, total]);
 
   const sum = useMemo(() => shares.reduce((a, s) => a + (+s.amount || 0), 0), [shares]);
   const diff = Math.round((total - sum) * 100) / 100;
@@ -45,19 +47,23 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
 
           <div className="px-6 pt-3 pb-4 flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">
-              {equalSplitInfo ? "Continue equal split" : "Divide the bill equally"}
+              {equalSplitInfo ? "Split remaining balance" : "Divide the bill equally"}
             </h3>
             <button onClick={onClose} className="h-9 w-9 grid place-items-center rounded-full text-gray-500 hover:bg-gray-100">×</button>
           </div>
-          
+
           {equalSplitInfo && (
-            <div className="px-6 pb-3">
+            <div className="px-6 pb-3 space-y-2">
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
                 <div className="text-sm text-blue-900 font-medium mb-1">Equal split in progress</div>
-                <div className="text-xs text-blue-700">
-                  {equalSplitInfo.numberOfPeople} people • {fmt(equalSplitInfo.amountPerPerson)} {currency} per person
+                <div className="text-xs text-blue-700 space-y-0.5">
+                  <div>Original split: {equalSplitInfo.numberOfPeople} people · {fmt(equalSplitInfo.amountPerPerson)} {currency} per person</div>
+                  <div>Remaining to pay: <span className="font-semibold">{fmt(total)} {currency}</span></div>
                 </div>
               </div>
+              <p className="text-xs text-gray-500 px-1">
+                Choose how many people are splitting this remaining amount. Each person will pay their share one at a time.
+              </p>
             </div>
           )}
 
@@ -73,7 +79,7 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
                 </button>
                 <div className="text-center">
                   <div className="text-3xl font-bold text-gray-900">{count}</div>
-                  <div className="text-sm text-gray-600">people</div>
+                  <div className="text-sm text-gray-600">{count === 1 ? "person" : "people"}</div>
                 </div>
                 <button
                   onClick={() => setCount(Math.min(8, count + 1))}
@@ -89,7 +95,12 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
               {shares.map((s, i) => (
                 <div key={i} className="flex items-center justify-between border rounded-xl p-2"
                      style={{ borderColor: "var(--grad-end-soft)" }}>
-                  <span className="font-medium text-gray-800">{s.label}</span>
+                  <div>
+                    <span className="font-medium text-gray-800">{s.label}</span>
+                    {i === 0 && equalSplitInfo && (
+                      <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">pays now</span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
@@ -119,9 +130,13 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
                 onClick={() => onConfirm(shares)}
                 className="btn w-full h-12 rounded-xl disabled:opacity-50"
               >
-                {equalSplitInfo ? "Continue with equal split" : "Confirm equal split"}
+                {equalSplitInfo
+                  ? count === 1
+                    ? `Pay ${fmt(shares[0]?.amount || 0)} ${currency}`
+                    : `Pay my share · ${fmt(shares[0]?.amount || 0)} ${currency}`
+                  : "Confirm equal split"}
               </button>
-              
+
               {equalSplitInfo && (
                 <button
                   onClick={onClose}

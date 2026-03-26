@@ -16,6 +16,7 @@ import { useUI } from "../store/uiStore";
 import Icon from "../component/Icon";
 
 // 🔌 LIVE API
+import { log, error as logError } from "../lib/logger";
 import { getCategories, getItems, getSingleProductImage, getSingleProductImageBinary, getImageMapping, getQrCategories, getQrMenuItems } from "../services/menu.service";
 import { getPackageHeaders } from "../services/package.service";
 import { checkTableOrders } from "../services/payment.service";
@@ -187,7 +188,7 @@ export default function MenuPage() {
     if (linkDetailsLoggedRef.current || !token) return;
     linkDetailsLoggedRef.current = true;
     if (typeof window !== "undefined") {
-      console.log("[Link details]", {
+      log("[Link details]", {
         url: window.location.href,
         token,
         tableId: tableId ?? null,
@@ -249,7 +250,7 @@ export default function MenuPage() {
       const result = await checkTableOrders(token);
       setHasOngoingOrders(result.hasOrders);
     } catch (e) {
-      console.error("Error checking table orders:", e);
+      logError("Error checking table orders:", e);
       setHasOngoingOrders(false);
     } finally {
       setCheckingOrders(false);
@@ -380,8 +381,8 @@ export default function MenuPage() {
           setSelectedGroupId(null);
         }
       } catch (e) {
-        console.error("❌ Error loading QR categories:", e);
-        console.error("❌ Error details:", {
+        logError("❌ Error loading QR categories:", e);
+        logError("❌ Error details:", {
           message: e?.message,
           response: e?.response?.data,
           status: e?.response?.status,
@@ -621,7 +622,7 @@ export default function MenuPage() {
       
       if (categoryChanged) {
         loadingImagesRef.current.clear();
-        loadedImagesRef.current.clear();
+        // Keep loadedImagesRef - do NOT clear. Prevents re-fetching images when user returns to a category.
         previousActiveCatRef.current = currentCategory;
       }
       
@@ -652,7 +653,7 @@ export default function MenuPage() {
       // Images will load on-demand via Intersection Observer only
       // Previous items with images are automatically garbage collected by React
     } catch (e) {
-      console.error("❌ Error in loadItems:", e);
+      logError("❌ Error in loadItems:", e);
       setError(e?.response?.data?.error || e.message || "Failed to load items");
       // Don't clear items on error - keep existing items visible
       // setItems([]); // Commented out - don't clear items on error
@@ -740,7 +741,7 @@ export default function MenuPage() {
     // Try to load from cache first (instant)
     const cacheKey = 'imageMappingCache';
     const cacheTimestamp = 'imageMappingCacheTimestamp';
-    const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+    const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes TTL - reduces API requests for image mapping
     
     try {
       const cached = localStorage.getItem(cacheKey);

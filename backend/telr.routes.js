@@ -1,7 +1,15 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import express from "express";
 import axios from "axios";
 import { savePayFullPayment } from "./services/payment.service.js";
+import {
+  storeSession,
+  getSessionByOrderRef,
+  getSessionByKey,
+  updateSession,
+  deleteSession,
+} from "./services/telrSessionStore.js";
 
 const router = express.Router();
 
@@ -81,36 +89,9 @@ if (!sanitizedStoreId || !sanitizedAuthKey) {
   console.warn("[Telr] Missing TELR_STORE_ID or TELR_AUTH_KEY env vars");
 }
 
-const pendingTelrSessions = new Map();
-const pendingTelrSessionsByKey = new Map();
-
-function rememberTelrSession(orderRef, payload) {
-  if (!orderRef && !payload?.sessionKey) return;
-  const entry = {
-    ...payload,
-    createdAt: Date.now(),
-    processed: false,
-    orderRef,
-  };
-  if (orderRef) {
-    pendingTelrSessions.set(orderRef, entry);
-  }
-  if (payload?.sessionKey) {
-    pendingTelrSessionsByKey.set(payload.sessionKey, entry);
-  }
-
-  const cutoff = Date.now() - 1000 * 60 * 120; // 2 hours
-  for (const [ref, meta] of pendingTelrSessions.entries()) {
-    if ((meta?.createdAt ?? 0) < cutoff) {
-      pendingTelrSessions.delete(ref);
-    }
-  }
-  for (const [key, meta] of pendingTelrSessionsByKey.entries()) {
-    if ((meta?.createdAt ?? 0) < cutoff) {
-      pendingTelrSessionsByKey.delete(key);
-    }
-  }
-}
+// Session store lives in telrSessionStore.js (shared with payment.service.js for
+// amount-tamper validation).  These shims keep the rest of the file unchanged.
+const rememberTelrSession = storeSession;
 
 function extractOrderRef(req) {
   return (
@@ -146,6 +127,12 @@ async function telrCheck(orderRef) {
   });
 
   if (!data?.order?.ref) {
+    console.error("[Telr] check: Unexpected response – missing order.ref", {
+      orderRef,
+      raw: JSON.stringify(data, null, 2),
+      status: data?.order?.status,
+      error: data?.error,
+    });
     throw new Error("Unexpected Telr response");
   }
 
@@ -267,14 +254,15 @@ router.post("/api/telr/create", async (req, res) => {
         .json({ error: "amount, cartId and description are required" });
     }
 
-    const sessionKey =
-      `sess_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`;
+    // 24 bytes = 192 bits of randomness — safe against brute-force guessing
+    const sessionKey = `sess_${crypto.randomBytes(24).toString("hex")}`;
 
+    const mode = req.body?.mode || "pay-full";
+
+    // Keep return URL short: Telr validates return URLs and may reject long ones.
+    // We store token, tableId, kotMasterID, cartId, mode in session (by order_ref/sessionKey);
+    // when Telr redirects back we look up by order_ref (Telr adds it) or sessionKey.
     const returnParams = new URLSearchParams();
-    if (token) returnParams.set("token", token);
-    if (tableId !== null && tableId !== undefined) returnParams.set("tableId", String(tableId));
-    if (kotMasterID !== null && kotMasterID !== undefined) returnParams.set("kotMasterID", String(kotMasterID));
-    if (cartId) returnParams.set("cartId", String(cartId));
     returnParams.set("sessionKey", sessionKey);
     const returnQuery = returnParams.toString() ? `?${returnParams.toString()}` : "";
 
@@ -317,6 +305,15 @@ router.post("/api/telr/create", async (req, res) => {
     });
 
     if (!data?.order?.url || !data?.order?.ref) {
+      console.error("[Telr] create: Unexpected response – missing order.url or order.ref", {
+        cartId,
+        amount,
+        currency,
+        raw: JSON.stringify(data, null, 2),
+        orderStatus: data?.order?.status,
+        orderCode: data?.order?.code,
+        error: data?.error,
+      });
       return res.status(502).json({ error: "Unexpected Telr response", data });
     }
 
@@ -329,11 +326,16 @@ router.post("/api/telr/create", async (req, res) => {
       kotMasterID,
       token,
       sessionKey,
+      mode,
     });
 
-    return res.json({ url: data.order.url, orderRef: data.order.ref });
+    return res.json({ url: data.order.url, orderRef: data.order.ref, sessionKey });
   } catch (e) {
-    console.error("Telr create error:", e?.response?.data || e.message);
+    console.error("[Telr] create: request failed", {
+      message: e?.message,
+      status: e?.response?.status,
+      data: e?.response?.data,
+    });
     return res
       .status(500)
       .json({ error: "create failed", detail: e?.response?.data || e.message });
@@ -345,9 +347,9 @@ async function handleReturn(req, res, status) {
 
   const orderRefFromQuery = extractOrderRef(req);
   const sessionKey = req.query?.sessionKey || null;
-  let sessionMeta = orderRefFromQuery ? pendingTelrSessions.get(orderRefFromQuery) : null;
+  let sessionMeta = getSessionByOrderRef(orderRefFromQuery);
   if (!sessionMeta && sessionKey) {
-    sessionMeta = pendingTelrSessionsByKey.get(sessionKey) || null;
+    sessionMeta = getSessionByKey(sessionKey);
   }
   const effectiveOrderRef = orderRefFromQuery || sessionMeta?.orderRef || null;
   const tokenParam = req.query?.token || req.query?.tok || sessionMeta?.token || null;
@@ -355,7 +357,9 @@ async function handleReturn(req, res, status) {
   const fallbackMeta = {
     token: tokenParam,
     tableId: tableIdParam,
-    amount: sessionMeta?.amount ?? (req.query?.amount ? Number(req.query.amount) : undefined),
+    // Amount must come from the server-side session only — never from URL params
+    // (URL params are customer-controlled and can be tampered with)
+    amount: sessionMeta?.amount ?? undefined,
     cartId: sessionMeta?.cartId ?? req.query?.cartId ?? null,
     sessionKey,
   };
@@ -365,12 +369,7 @@ async function handleReturn(req, res, status) {
   let paymentResult = null;
   let finalStatus = status;
 
-  if (orderRefFromQuery) {
-    pendingTelrSessions.delete(orderRefFromQuery);
-  }
-  if (sessionKey) {
-    pendingTelrSessionsByKey.delete(sessionKey);
-  }
+  deleteSession(orderRefFromQuery, sessionKey);
 
   if (status === "AUTH" && effectiveOrderRef) {
     try {
@@ -383,32 +382,62 @@ async function handleReturn(req, res, status) {
         finalStatus = "DECLINED";
         message = "Payment could not be verified. Please try again or contact support.";
       } else {
-        const metaForSave = {
-          amount: sessionMeta?.amount ?? fallbackMeta.amount,
-          tableId: sessionMeta?.tableId ?? fallbackMeta.tableId,
-          kotMasterID:
-            sessionMeta?.kotMasterID ??
-            req.query?.kotMasterID ??
-            req.query?.kotMasterId ??
-            null,
-        };
+        // Determine payment mode — split modes are handled by the frontend after redirect
+        // Priority: URL query param → stored session meta → default pay-full
+        // If mode is missing entirely but the amount charged is less than the full bill
+        // we still can't know from the backend alone, so we rely on the stored mode.
+        const paymentMode = req.query?.mode || sessionMeta?.mode || "pay-full";
+        // Any mode that is not exactly "pay-full" is a split handled by the frontend
+        const isPayFull = !paymentMode || paymentMode === "pay-full";
 
-        if (metaForSave.amount && (metaForSave.tableId || metaForSave.kotMasterID)) {
-          try {
-            paymentResult = await savePayFullPayment({
-              billAmount: metaForSave.amount,
-              tableId: metaForSave.tableId,
-              kotMasterID: metaForSave.kotMasterID,
-            });
-            if (sessionMeta) sessionMeta.processed = true;
-          } catch (err) {
-            console.error("[Telr] Failed to persist pay full payment:", err);
-            message = "Payment authorised, but we could not update the order automatically. Please check with staff.";
+        console.log("[Telr] AUTH return - mode:", paymentMode, "| isPayFull:", isPayFull);
+
+        if (isPayFull) {
+          const metaForSave = {
+            amount: sessionMeta?.amount ?? fallbackMeta.amount,
+            tableId: sessionMeta?.tableId ?? fallbackMeta.tableId,
+            kotMasterID:
+              sessionMeta?.kotMasterID ??
+              req.query?.kotMasterID ??
+              req.query?.kotMasterId ??
+              null,
+          };
+
+          if (metaForSave.amount && (metaForSave.tableId || metaForSave.kotMasterID)) {
+            try {
+              paymentResult = await savePayFullPayment({
+                billAmount: metaForSave.amount,
+                tableId: metaForSave.tableId,
+                kotMasterID: metaForSave.kotMasterID,
+              });
+              if (sessionMeta) sessionMeta.processed = true;
+            } catch (err) {
+              console.error("[Telr] Failed to persist pay full payment:", err);
+              message = "Payment authorised, but we could not update the order automatically. Please check with staff.";
+            }
+          } else {
+            console.warn("[Telr] Missing data to persist payment after Telr AUTH", { metaForSave });
           }
         } else {
-          console.warn("[Telr] Missing data to persist payment after Telr AUTH", {
-            metaForSave,
-          });
+          // Split payment — frontend will call the correct split API after redirect.
+          // Store the Telr-verified amount so the split endpoint can validate the
+          // paidAmount the frontend claims (prevents tampered payloads).
+          const telrVerifiedAmount = Number(telrData?.order?.amount ?? telrData?.order?.total ?? 0);
+          if (sessionMeta) {
+            sessionMeta.verifiedAmount = telrVerifiedAmount;
+            sessionMeta.processed = true;
+          }
+          // Re-store with verifiedAmount so the split endpoints can look it up
+          // (the session was deleted above but we need it for post-redirect validation)
+          if (sessionKey || effectiveOrderRef) {
+            storeSession(effectiveOrderRef, {
+              ...(sessionMeta || {}),
+              sessionKey: sessionKey || sessionMeta?.sessionKey,
+              verifiedAmount: telrVerifiedAmount,
+              verifiedAt: Date.now(),
+            });
+          }
+          console.log("[Telr] Split payment mode detected. Verified amount:", telrVerifiedAmount, "| Frontend will handle:", paymentMode);
         }
       }
     } catch (err) {
@@ -427,6 +456,7 @@ async function handleReturn(req, res, status) {
     sessionMeta || {},
     {
       paymentId: paymentResult?.paymentId || paymentResult?.PaymentID,
+      mode: sessionMeta?.mode || req.query?.mode || null,
     },
     fallbackMeta,
   );
@@ -439,16 +469,146 @@ router.get("/api/telr/return/auth", (req, res) => handleReturn(req, res, "AUTH")
 router.get("/api/telr/return/cancel", (req, res) => handleReturn(req, res, "CANCEL"));
 router.get("/api/telr/return/declined", (req, res) => handleReturn(req, res, "DECLINED"));
 
-router.post("/api/telr/check", async (req, res) => {
+// Internal-only check endpoint — only accessible from the same server (localhost).
+// This is NOT meant for frontend use. Remove or protect with an API key before
+// exposing externally.
+router.post("/api/telr/check", (req, res, next) => {
+  const ip = req.ip || req.socket?.remoteAddress || "";
+  const isLocal = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  if (!isLocal && process.env.NODE_ENV === "production") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}, async (req, res) => {
   try {
     const { orderRef } = req.body ?? {};
     const data = await telrCheck(orderRef);
     return res.json({ ok: true, data });
   } catch (e) {
-    console.error("Telr check error:", e?.response?.data || e.message);
+    console.error("[Telr] check endpoint error:", {
+      message: e?.message,
+      status: e?.response?.status,
+      data: e?.response?.data,
+    });
     return res
       .status(500)
       .json({ error: "check failed", detail: e?.response?.data || e.message });
+  }
+});
+
+/**
+ * GET /api/telr/verified-amount?sessionKey=sess_xxx
+ *
+ * Returns the Telr-verified payment amount stored during the AUTH callback.
+ * Split payment endpoints use this to validate that the paidAmount in the
+ * frontend POST body has not been tampered with.
+ */
+router.get("/api/telr/verified-amount", (req, res) => {
+  const sessionKey = req.query?.sessionKey || null;
+  if (!sessionKey) {
+    return res.status(400).json({ error: "sessionKey is required" });
+  }
+  const session = getSessionByKey(sessionKey);
+  if (!session || session.verifiedAmount === undefined) {
+    return res.status(404).json({ error: "No verified amount found for this session" });
+  }
+  return res.json({
+    ok: true,
+    verifiedAmount: session.verifiedAmount,
+    mode: session.mode || null,
+    kotMasterID: session.kotMasterID || null,
+  });
+});
+
+/**
+ * POST /api/telr/webhook
+ *
+ * Telr calls this URL server-to-server after every authorised payment.
+ * This is the safety net for the "browser closes before redirect" scenario:
+ * even if the customer's phone loses internet, this endpoint still receives
+ * the notification directly from Telr's servers and settles the order.
+ *
+ * ⚠️  This only works in PRODUCTION where your backend has a public HTTPS URL.
+ *     On a local 192.168.x.x network, Telr cannot reach this endpoint.
+ *
+ * In Telr merchant portal → Store Settings → Notification URL:
+ *   https://api.yourrestaurant.ae/api/telr/webhook
+ */
+router.post("/api/telr/webhook", async (req, res) => {
+  // Always respond 200 immediately — Telr retries if it gets a non-200 response
+  res.sendStatus(200);
+
+  const orderRef = req.body?.order_ref || req.body?.orderRef || null;
+  const statusCode = req.body?.status || null; // "A" = Authorised
+
+  console.log("[Telr:Webhook] Received notification:", { orderRef, statusCode, body: req.body });
+
+  if (!orderRef) {
+    console.warn("[Telr:Webhook] No order_ref in webhook body — ignoring.");
+    return;
+  }
+
+  try {
+    // Always re-verify with Telr — never trust the webhook body alone
+    const telrData = await telrCheck(orderRef);
+    const transactionStatus = telrData?.transaction?.status?.code;
+    const orderStatusCode    = Number(telrData?.order?.status?.code);
+    const authorised = transactionStatus === "A" || orderStatusCode === 3;
+
+    if (!authorised) {
+      console.log("[Telr:Webhook] Payment not authorised, skipping. orderRef:", orderRef);
+      return;
+    }
+
+    // Look up the session stored when the payment was created
+    const session = getSessionByOrderRef(orderRef);
+
+    if (!session) {
+      console.warn("[Telr:Webhook] No session found for orderRef:", orderRef,
+        "— payment may have already been processed via redirect, or session expired.");
+      return;
+    }
+
+    if (session.webhookProcessed) {
+      console.log("[Telr:Webhook] Already processed via webhook, skipping. orderRef:", orderRef);
+      return;
+    }
+
+    if (session.processed) {
+      console.log("[Telr:Webhook] Already processed via redirect, skipping. orderRef:", orderRef);
+      return;
+    }
+
+    // Mark as processed before the async work to prevent duplicate settlement
+    session.webhookProcessed = true;
+
+    const mode = session.mode || "pay-full";
+    console.log("[Telr:Webhook] Processing payment. mode:", mode, "orderRef:", orderRef);
+
+    if (!mode || mode === "pay-full") {
+      // Pay Full — the redirect did not process it (browser closed), so we do it here
+      const metaForSave = {
+        amount:      session.amount,
+        tableId:     session.tableId,
+        kotMasterID: session.kotMasterID,
+      };
+
+      if (metaForSave.amount && (metaForSave.tableId || metaForSave.kotMasterID)) {
+        await savePayFullPayment(metaForSave);
+        console.log("[Telr:Webhook] Pay Full settled via webhook. orderRef:", orderRef);
+      } else {
+        console.warn("[Telr:Webhook] Missing amount/tableId/kotMasterID — cannot settle.", metaForSave);
+      }
+    } else {
+      // Split payment — the backend cannot complete a split without knowing which person
+      // is paying (that logic is driven by the frontend session). We log it here so staff
+      // can manually resolve if needed. In practice, the customer would retry on their
+      // phone since the Telr redirect page shows "Payment Authorised".
+      console.warn("[Telr:Webhook] Split payment received via webhook (mode:", mode, "). " +
+        "Split payments require the frontend to complete — customer should retry if the page didn't load.");
+    }
+  } catch (err) {
+    console.error("[Telr:Webhook] Error processing notification:", err.message);
   }
 });
 

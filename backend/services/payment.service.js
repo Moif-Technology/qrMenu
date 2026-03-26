@@ -1,6 +1,7 @@
 // backend/services/payment.service.js
 import mssql from "mssql";
 import { queryPaymentDb, connectToPaymentDb, connectToDb } from "../config/dbConfig.js";
+import { settleKotToSales } from "./settlement.service.js";
 
 const T_PAYMENT = "dbo.Payment";
 const q = (n) => `[${n}]`;
@@ -115,6 +116,85 @@ async function queryPaymentWithFilters(tx, filters, selectFields = "*", orderBy 
   return req.query(sql);
 }
 
+/**
+ * Update QrPaidAmount, QrBalanceAmount, and QrPaymentStatus in KOTMaster
+ * after every successful QR payment (partial or full).
+ * Runs against Moifcore using a fresh connection – outside the PaymentGateway
+ * transaction so a KOTMaster update failure never rolls back the payment.
+ */
+async function updateKotMasterQrPayment(kotMasterID, totalPaidAmount, balanceAmount, paidStatus) {
+  if (!kotMasterID || kotMasterID <= 0) return;
+  try {
+    const kotPool = await connectToDb();
+
+    // Always recalc balance from the *current* KOT amount so that
+    // if new items are added after an online payment, the remaining
+    // balance reflects the latest bill total (KOTMaster.Amount - paid).
+    let effectiveBalance = r2(Math.max(0, balanceAmount));
+    try {
+      const kmReq = kotPool.request();
+      kmReq.input("kotMasterID", mssql.BigInt, kotMasterID);
+      const kmSql = `
+        SELECT Amount
+        FROM dbo.KOTMaster
+        WHERE kotMasterID = @kotMasterID
+      `;
+      const kmResult = await kmReq.query(kmSql);
+      const currentAmount = kmResult.recordset?.[0]?.Amount;
+      if (currentAmount != null) {
+        const billTotal = r2(toNum(currentAmount, 0));
+        const fromKot   = r2(Math.max(0, billTotal - r2(toNum(totalPaidAmount, 0))));
+        effectiveBalance = fromKot;
+      }
+    } catch (kmErr) {
+      console.warn("[PAYMENT:SVC] updateKotMasterQrPayment: failed to read current KOT amount, falling back to passed balanceAmount:", kmErr.message);
+    }
+
+    const qrPaymentStatus =
+      paidStatus === "PAID"          ? "PAID"    :
+      totalPaidAmount > 0           ? "PARTIAL" : "PENDING";
+
+    const req = kotPool.request();
+    req.input("kotMasterID",      mssql.BigInt,     kotMasterID);
+    req.input("QrPaidAmount",     mssql.Money,      r2(totalPaidAmount));
+    req.input("QrBalanceAmount",  mssql.Money,      effectiveBalance);
+    req.input("QrPaymentStatus",  mssql.VarChar(20), qrPaymentStatus);
+
+    const sql = `
+      UPDATE dbo.KOTMaster
+      SET    QrPaidAmount    = @QrPaidAmount,
+             QrBalanceAmount = @QrBalanceAmount,
+             QrPaymentStatus = @QrPaymentStatus
+      WHERE  kotMasterID     = @kotMasterID
+    `;
+
+    await req.query(sql);
+    console.log("[PAYMENT:SVC] KOTMaster QR payment updated:", {
+      kotMasterID, totalPaidAmount, balanceAmount: effectiveBalance, qrPaymentStatus
+    });
+
+    // When fully paid → settle into SalesMaster / SalesChild and delete KOTMaster.
+    // Fire-and-forget: we don't block the payment response on settlement.
+    if (qrPaymentStatus === "PAID") {
+      console.log("[PAYMENT:SVC] Payment complete — triggering settlement for kotMasterID:", kotMasterID);
+      settleKotToSales(kotMasterID)
+        .then((settlement) => {
+          if (settlement?.alreadySettled) {
+            console.log("[PAYMENT:SVC] KOT already settled, skipping.");
+          } else {
+            console.log(`[PAYMENT:SVC] Settlement done: SalesID=${settlement.salesID}, BillNo=${settlement.billNo}, items=${settlement.salesChildCount}`);
+          }
+        })
+        .catch((settleErr) => {
+          // Log but never block — payment is already committed
+          console.error("[PAYMENT:SVC] Settlement error (payment still recorded):", settleErr.message);
+        });
+    }
+  } catch (err) {
+    console.error("[PAYMENT:SVC] Failed to update KOTMaster QR payment status:", err.message);
+  }
+}
+
 /* ---------------- service functions ---------------- */
 
 export async function getActivePaymentMethods() {
@@ -209,6 +289,9 @@ export async function savePayFullPayment(payload) {
         
         console.log(`[PAYMENT:SVC] Completed split payment (MethodID=${existingMethodID}) by updating existing record`);
         
+        // Update KOTMaster QR payment tracking columns in Moifcore
+        await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+
         return {
           ok: true,
           paymentId: toInt(existingSplitPayment.PaymentID),
@@ -260,6 +343,9 @@ export async function savePayFullPayment(payload) {
     await req.query(buildPaymentInsertSql(!!tableId));
     await tx.commit();
 
+    // Update KOTMaster QR payment tracking columns in Moifcore
+    await updateKotMasterQrPayment(transId, r2(billAmt), 0, "PAID");
+
     return { ok: true, ...paymentData, tableId: tableId ? toInt(tableId) : null };
   } catch (err) {
     await tx.rollback();
@@ -268,7 +354,7 @@ export async function savePayFullPayment(payload) {
 }
 
 export async function saveEqualSplitPayment(payload) {
-  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId } = payload;
+  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId, sessionKey } = payload;
   
   // Validate amounts separately for equal split (paidAmount can be less than billAmount)
   const billAmt = toNum(billAmount);
@@ -279,6 +365,21 @@ export async function saveEqualSplitPayment(payload) {
   const paidAmt = toNum(paidAmount);
   if (paidAmt <= 0 || !Number.isFinite(paidAmt)) {
     throw new Error("Paid amount must be a positive number");
+  }
+
+  // Server-side tamper check: if the frontend provided a sessionKey, compare the
+  // claimed paidAmount against the amount Telr actually charged.
+  if (sessionKey) {
+    const { getVerifiedAmount } = await import("./telrSessionStore.js");
+    const verified = getVerifiedAmount(sessionKey);
+    if (verified !== null) {
+      const diff = Math.abs(paidAmt - verified);
+      if (diff > 0.01) {
+        console.error(`[PAYMENT:SVC] Tamper detected! claimed=${paidAmt} verified=${verified} diff=${diff} sessionKey=${sessionKey}`);
+        throw new Error(`Payment amount mismatch: claimed ${paidAmt} but Telr verified ${verified}`);
+      }
+      console.log(`[PAYMENT:SVC] Amount verified OK: ${paidAmt} === ${verified}`);
+    }
   }
   
   // For equal split, paidAmount (per person) should not exceed the remaining balance
@@ -305,60 +406,54 @@ export async function saveEqualSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for equal split payment");
     }
 
-    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
-    // If a payment method has been started AND money has been paid, we MUST use that same method ID
-    // We cannot switch methods after payment has been made
-    // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
+    // Find any existing payment record for this KOT (any method)
     const checkAnyPaymentReq = new mssql.Request(tx);
     checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
-    
     const checkAnyPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
       FROM ${T_PAYMENT}
       WHERE ${q("TransID")} = @TransID
       ORDER BY ${q("PaymentID")} ASC
     `;
-    
     const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
     const anyExistingPayment = anyPaymentResult.recordset[0];
-    
-    // If there's an existing payment with a DIFFERENT method AND money has been paid, reject this payment
+
+    // Cross-method logic:
+    // - No existing payment               → create fresh Equal Split record
+    // - Existing MethodID=2 (Equal)       → continue equal split as normal
+    // - Existing MethodID=3 (Item Split)  → BLOCK: item split tracks individual items;
+    //                                        mixing with amount-based split is undefined
+    // - Existing MethodID=4 (Custom)      → ALLOW cross-method (custom→equal is fine;
+    //                                        custom is flexible, equal just settles balance)
+    // - Existing method, balance=0        → bill already fully paid, reject
+    let existingPayment = null;
+
     if (anyExistingPayment) {
-      const existingMethodID = toInt(anyExistingPayment.MethodID);
-      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
-      
-      // If a different method exists AND payment has been made (PaidAmount > 0), reject
-      if (existingMethodID !== 2 && existingPaidAmount > 0) {
-        const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
-        throw new Error(`Cannot use Equal Split (MethodID=2) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
-      }
-      
-      // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
-      if (existingMethodID !== 2 && existingPaidAmount <= 0) {
-        console.log(`[PAYMENT:SVC] Equal split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Equal Split`);
+      const existingMethodID    = toInt(anyExistingPayment.MethodID);
+      const existingPaidAmount  = toNum(anyExistingPayment.PaidAmount, 0);
+      const existingBalance     = toNum(anyExistingPayment.BalanceAmount, 0);
+      const methodNames         = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+
+      if (existingMethodID === 2) {
+        existingPayment = anyExistingPayment;
+      } else if (existingMethodID === 3 && existingPaidAmount > 0) {
+        throw new Error(
+          `Cannot use Equal Split for this bill. An Item Split is already in progress. ` +
+          `Please continue paying for individual items.`
+        );
+      } else if (existingPaidAmount <= 0) {
         const deleteReq = new mssql.Request(tx);
         deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
-        await deleteReq.query(deleteSql);
-        console.log(`[PAYMENT:SVC] Equal split - Deleted unused payment (MethodID=${existingMethodID})`);
+        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`);
+        console.log(`[PAYMENT:SVC] Equal split - deleted unused MethodID=${existingMethodID} record`);
+      } else if (existingBalance <= 0) {
+        throw new Error("This bill has already been fully paid.");
+      } else {
+        // Custom split with balance remaining → allow continuation via equal split
+        console.log(`[PAYMENT:SVC] Cross-method continuation: ${methodNames[existingMethodID] || existingMethodID} → Equal Split. Balance remaining: ${existingBalance}`);
+        existingPayment = anyExistingPayment;
       }
     }
-    
-    // Now check specifically for MethodID=2 payment (equal split)
-    const existingEqualSplitReq = new mssql.Request(tx);
-    existingEqualSplitReq.input("TransID", mssql.BigInt, transId);
-    existingEqualSplitReq.input("MethodID", mssql.BigInt, 2);
-    
-    const existingEqualSplitSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @MethodID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    
-    console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Checking for existing MethodID=2 payment: TransID=${transId}`);
-    const existingEqualSplitResult = await existingEqualSplitReq.query(existingEqualSplitSql);
-    const existingPayment = existingEqualSplitResult.recordset[0];
     
     if (existingPayment) {
       console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ✅ FOUND existing equal split payment (MethodID=2):`);
@@ -535,6 +630,9 @@ export async function saveEqualSplitPayment(payload) {
 
     await tx.commit();
 
+    // Update KOTMaster QR payment tracking columns in Moifcore
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+
     return {
       ok: true,
       paymentId,
@@ -583,59 +681,59 @@ export async function saveCustomSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for custom split payment");
     }
 
-    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
-    // If a payment method has been started AND money has been paid, we MUST use that same method ID
-    // We cannot switch methods after payment has been made
-    // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
+    // Find any existing payment record for this KOT (any method)
     const checkAnyPaymentReq = new mssql.Request(tx);
     checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
-    
     const checkAnyPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
       FROM ${T_PAYMENT}
       WHERE ${q("TransID")} = @TransID
       ORDER BY ${q("PaymentID")} ASC
     `;
-    
     const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
     const anyExistingPayment = anyPaymentResult.recordset[0];
-    
-    // If there's an existing payment with a DIFFERENT method AND money has been paid, reject this payment
+
+    // Cross-method logic:
+    // - No existing payment               → create fresh Custom Split record
+    // - Existing MethodID=4 (Custom)      → continue custom split as normal
+    // - Existing MethodID=3 (Item Split)  → BLOCK: item split tracks individual items;
+    //                                        mixing with amount-based split is undefined
+    // - Existing MethodID=2 (Equal)       → BLOCK: equal split is a group agreement;
+    //                                        switching to custom breaks the contract
+    // - Existing method, balance=0        → bill already fully paid, reject
+    let existingPayment = null;
+
     if (anyExistingPayment) {
-      const existingMethodID = toInt(anyExistingPayment.MethodID);
-      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
-      
-      // If a different method exists AND payment has been made (PaidAmount > 0), reject
-      if (existingMethodID !== 4 && existingPaidAmount > 0) {
-        const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
-        throw new Error(`Cannot use Custom Split (MethodID=4) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
-      }
-      
-      // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
-      if (existingMethodID !== 4 && existingPaidAmount <= 0) {
-        console.log(`[PAYMENT:SVC] Custom split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Custom Split`);
+      const existingMethodID    = toInt(anyExistingPayment.MethodID);
+      const existingPaidAmount  = toNum(anyExistingPayment.PaidAmount, 0);
+      const existingBalance     = toNum(anyExistingPayment.BalanceAmount, 0);
+      const methodNames         = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+
+      if (existingMethodID === 4) {
+        existingPayment = anyExistingPayment;
+      } else if (existingMethodID === 2 && existingPaidAmount > 0) {
+        // Equal split is in progress — custom cannot override an equal-split agreement
+        throw new Error(
+          `Cannot use Custom Split for this bill. An Equal Split is already in progress. ` +
+          `Please continue with the equal split to complete the payment.`
+        );
+      } else if (existingMethodID === 3 && existingPaidAmount > 0) {
+        throw new Error(
+          `Cannot use Custom Split for this bill. An Item Split is already in progress. ` +
+          `Please continue paying for individual items.`
+        );
+      } else if (existingPaidAmount <= 0) {
         const deleteReq = new mssql.Request(tx);
         deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
-        await deleteReq.query(deleteSql);
-        console.log(`[PAYMENT:SVC] Custom split - Deleted unused payment (MethodID=${existingMethodID})`);
+        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`);
+        console.log(`[PAYMENT:SVC] Custom split - deleted unused MethodID=${existingMethodID} record`);
+      } else if (existingBalance <= 0) {
+        throw new Error("This bill has already been fully paid.");
+      } else {
+        console.log(`[PAYMENT:SVC] Cross-method continuation: ${methodNames[existingMethodID] || existingMethodID} → Custom Split. Balance remaining: ${existingBalance}`);
+        existingPayment = anyExistingPayment;
       }
     }
-    
-    // Now check specifically for MethodID=4 payment (custom split)
-    const existingPaymentReq = new mssql.Request(tx);
-    existingPaymentReq.input("TransID", mssql.BigInt, transId);
-    existingPaymentReq.input("MethodID", mssql.BigInt, 4);
-    
-    const existingPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @MethodID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    
-    const existingPaymentResult = await existingPaymentReq.query(existingPaymentSql);
-    const existingPayment = existingPaymentResult.recordset[0];
     
     let paymentId;
     let originalBillAmount;
@@ -647,6 +745,31 @@ export async function saveCustomSplitPayment(payload) {
       // UPDATE existing payment record
       paymentId = toInt(existingPayment.PaymentID);
       originalBillAmount = toNum(existingPayment.BillAmount, billAmt);
+
+      // If POS added new items and KOTMaster.Amount increased after the first
+      // custom split payment, align the bill total with the *current* KOT amount
+      // so remaining balance reflects the new items as well.
+      try {
+        const kotPool = await connectToDb();
+        const kotReq = kotPool.request();
+        kotReq.input("kotMasterID", mssql.BigInt, transId);
+        const kotSql = `
+          SELECT Amount AS TotalAmount
+          FROM dbo.KOTMaster
+          WHERE kotMasterID = @kotMasterID
+        `;
+        const kotResult = await kotReq.query(kotSql);
+        const currentKotAmount = kotResult.recordset?.[0]?.TotalAmount;
+        if (currentKotAmount != null) {
+          const kotAmt = r2(toNum(currentKotAmount, 0));
+          if (kotAmt > originalBillAmount + 0.01) {
+            console.log("[PAYMENT:SVC] Custom split - detected KOT amount increase. Updating originalBillAmount from", originalBillAmount, "to", kotAmt);
+            originalBillAmount = kotAmt;
+          }
+        }
+      } catch (kotErr) {
+        console.warn("[PAYMENT:SVC] Custom split - could not refresh KOT amount:", kotErr.message);
+      }
       
       // Add new payment to existing paid amount
       const currentPaidAmount = toNum(existingPayment.PaidAmount, 0);
@@ -672,15 +795,17 @@ export async function saveCustomSplitPayment(payload) {
       // Build UPDATE query
       const updateReq = new mssql.Request(tx);
       updateReq.input("PaymentID", mssql.BigInt, paymentId);
+      updateReq.input("BillAmount", mssql.Money, originalBillAmount);
       updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
       updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       
       let updateSql = `
         UPDATE ${T_PAYMENT}
-        SET ${q("PaidAmount")} = @PaidAmount,
+        SET ${q("BillAmount")}   = @BillAmount,
+            ${q("PaidAmount")}   = @PaidAmount,
             ${q("BalanceAmount")} = @BalanceAmount,
-            ${q("PaidStatus")} = @PaidStatus
+            ${q("PaidStatus")}   = @PaidStatus
         WHERE ${q("PaymentID")} = @PaymentID
       `;
       
@@ -736,6 +861,9 @@ export async function saveCustomSplitPayment(payload) {
 
     await tx.commit();
 
+    // Update KOTMaster QR payment tracking columns in Moifcore
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+
     return {
       ok: true,
       paymentId,
@@ -788,6 +916,34 @@ export async function saveItemSplitPayment(payload) {
     }
 
     console.log("[PAYMENT:SVC] Using TransID =", transId, "(kotMasterID)");
+
+    // Reject item split if an amount-based split (equal/custom) is already in progress.
+    // Amount splits track a running balance total; they don't mark individual items.
+    // Mixing the two would make it impossible to reconcile which items are "paid".
+    const conflictCheckReq = new mssql.Request(tx);
+    conflictCheckReq.input("TransID", mssql.BigInt, transId);
+    const conflictCheckSql = `
+      SELECT TOP 1 ${q("MethodID")}, ${q("PaidAmount")}, ${q("BalanceAmount")}
+      FROM ${T_PAYMENT}
+      WHERE ${q("TransID")} = @TransID
+      ORDER BY ${q("PaymentID")} ASC
+    `;
+    const conflictResult = await conflictCheckReq.query(conflictCheckSql);
+    const conflictRecord = conflictResult.recordset[0];
+    if (conflictRecord) {
+      const conflictMethodID   = toInt(conflictRecord.MethodID);
+      const conflictPaidAmount = toNum(conflictRecord.PaidAmount, 0);
+      const conflictBalance    = toNum(conflictRecord.BalanceAmount, 0);
+      const methodNames        = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+      // If an amount-based split (Equal=2, Custom=4) has already received money → block
+      if ((conflictMethodID === 2 || conflictMethodID === 4) && conflictPaidAmount > 0 && conflictBalance > 0) {
+        throw new Error(
+          `Cannot use Item Split for this bill. A ${methodNames[conflictMethodID] || `MethodID=${conflictMethodID}`} ` +
+          `is already in progress with ${conflictBalance.toFixed(2)} AED remaining. ` +
+          `Please complete the payment using the same method.`
+        );
+      }
+    }
 
     // Get total bill amount (from KOTMaster or passed as parameter)
     // If totalBillAmount is provided, use it; otherwise we'll need to query KOTMaster
@@ -1244,6 +1400,9 @@ export async function saveItemSplitPayment(payload) {
 
     await tx.commit();
 
+    // Update KOTMaster QR payment tracking columns in Moifcore
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+
     console.log("[PAYMENT:SVC] ✅ Item split payment completed successfully:", {
       paymentId,
       MethodID: 3,
@@ -1373,6 +1532,58 @@ export async function getTableBalance(tableId, kotMasterID = null) {
         
         console.log("[PAYMENT:SVC] Found payment for kotMasterID:", numericKotMasterID, "MethodID:", methodId, "Balance:", balance, "Status:", paidStatus);
         
+        // For split payments (MethodID 2, 3, 4): POS may have added new items after the first payment.
+        // Recompute balance from CURRENT KOT amount - totalPaid and SYNC both KOTMaster and Payment tables.
+        let effectiveBalance = balance;
+        let currentKotAmount = originalBillAmount;
+        if (methodId === 2 || methodId === 3 || methodId === 4) {
+          try {
+            const kotPool = await connectToDb();
+            const kotReq = kotPool.request();
+            kotReq.input("kotMasterID", mssql.BigInt, numericKotMasterID);
+            const kotResult = await kotReq.query(`
+              SELECT Amount FROM dbo.KOTMaster WHERE kotMasterID = @kotMasterID
+            `);
+            const kotAmountVal = kotResult.recordset?.[0]?.Amount;
+            if (kotAmountVal != null) {
+              currentKotAmount = r2(toNum(kotAmountVal, 0));
+              effectiveBalance = r2(Math.max(0, currentKotAmount - totalPaid));
+              if (Math.abs(effectiveBalance - balance) > 0.01 || Math.abs(currentKotAmount - originalBillAmount) > 0.01) {
+                console.log("[PAYMENT:SVC] Split payment: KOT amount changed. Syncing: balance", balance, "->", effectiveBalance, "billAmount", originalBillAmount, "->", currentKotAmount);
+                // Update KOTMaster: QrPaidAmount, QrBalanceAmount, QrPaymentStatus
+                const qrStatus = effectiveBalance <= 0 ? "PAID" : (totalPaid > 0 ? "PARTIAL" : "PENDING");
+                const kotUpd = kotPool.request();
+                kotUpd.input("kotMasterID", mssql.BigInt, numericKotMasterID);
+                kotUpd.input("QrPaidAmount", mssql.Money, r2(totalPaid));
+                kotUpd.input("QrBalanceAmount", mssql.Money, r2(effectiveBalance));
+                kotUpd.input("QrPaymentStatus", mssql.VarChar(20), qrStatus);
+                await kotUpd.query(`
+                  UPDATE dbo.KOTMaster SET QrPaidAmount = @QrPaidAmount, QrBalanceAmount = @QrBalanceAmount, QrPaymentStatus = @QrPaymentStatus WHERE kotMasterID = @kotMasterID
+                `);
+                // Update Payment: BillAmount, BalanceAmount, PaidStatus
+                const newPaidStatus = effectiveBalance <= 0 ? "PAID" : "PENDING";
+                const paymentPool = await connectToPaymentDb();
+                const paymentId = toInt(paymentRecord?.PaymentID ?? 0);
+                if (paymentId > 0) {
+                  const payUpd = paymentPool.request();
+                  payUpd.input("PaymentID", mssql.BigInt, paymentId);
+                  payUpd.input("BillAmount", mssql.Money, r2(currentKotAmount));
+                  payUpd.input("BalanceAmount", mssql.Money, r2(effectiveBalance));
+                  payUpd.input("PaidStatus", mssql.VarChar(50), newPaidStatus);
+                  await payUpd.query(`
+                    UPDATE dbo.Payment SET ${q("BillAmount")} = @BillAmount, ${q("BalanceAmount")} = @BalanceAmount, ${q("PaidStatus")} = @PaidStatus WHERE ${q("PaymentID")} = @PaymentID
+                  `);
+                  balance = effectiveBalance;
+                  paidStatus = newPaidStatus;
+                  originalBillAmount = currentKotAmount;
+                }
+              }
+            }
+          } catch (kotErr) {
+            console.warn("[PAYMENT:SVC] Split: could not sync KOT/Payment:", kotErr.message);
+          }
+        }
+        
         // Calculate equal split info if MethodID = 2
         let equalSplitInfo = null;
         if (methodId === 2) {
@@ -1419,22 +1630,21 @@ export async function getTableBalance(tableId, kotMasterID = null) {
         }
         
         // CRITICAL: When balance = 0 and status = PAID, payment is complete
-        // Return balance = 0 (not the original bill amount)
-        // For equal split: Only show split info if balance > 0 (payment not complete)
-        // Also return originalBillAmount so frontend can use it for subsequent payments
+        // Return effectiveBalance (for item split this reflects current KOT amount - paid)
+        const finalBalance = effectiveBalance > 0 ? r2(effectiveBalance) : 0;
+        const isFullyPaidResult = finalBalance <= 0 || paidStatus === "PAID";
         return {
-          balance: balance > 0 ? r2(balance) : 0,
-          originalBillAmount: originalBillAmount > 0 ? r2(originalBillAmount) : null, // Always return actual balance (0 when paid)
-          hasPendingPayment: paidStatus === "PENDING" && balance > 0,
-          isFullyPaid: balance <= 0 || paidStatus === "PAID",
+          balance: finalBalance,
+          originalBillAmount: originalBillAmount > 0 ? r2(originalBillAmount) : null,
+          hasPendingPayment: paidStatus === "PENDING" && finalBalance > 0,
+          isFullyPaid: isFullyPaidResult,
           hasUnpaidKots: false,
           transId: numericKotMasterID,
-          billAmount: r2(originalBillAmount), // Always return original full bill amount
+          billAmount: r2(originalBillAmount),
           originalBillAmount: r2(originalBillAmount),
           totalPaid: r2(totalPaid),
-          paidStatus: paidStatus, // Include PaidStatus in response
-          // Only include equal split info if payment is NOT complete (balance > 0)
-          equalSplitInfo: (balance > 0 && paidStatus === "PENDING") ? equalSplitInfo : null
+          paidStatus: paidStatus,
+          equalSplitInfo: (finalBalance > 0 && paidStatus === "PENDING") ? equalSplitInfo : null
         };
       }
     }

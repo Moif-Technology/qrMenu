@@ -1,9 +1,10 @@
 import axios from "axios";
+import { warn } from "./logger";
 
 export const API = axios.create({
   
   baseURL: import.meta.env.VITE_API_BASE_URL || "https://api.deynoqr.com/api",
-  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://192.168.0.119:5001/api",
+  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5001/api",
   timeout: 60000 // Increased to 60 seconds to handle complex queries with image processing
 
 });
@@ -37,7 +38,7 @@ API.interceptors.response.use(
 
         // Exponential backoff: 2s, 4s
         const delay = RETRY_DELAY * Math.pow(2, retryCount - 1);
-        console.warn(
+        warn(
           `[API] Rate limited (429). Retrying in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})...`
         );
 

@@ -1,4 +1,5 @@
 // src/App.jsx
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import OrderSuccess from "./component/OrderSuccess";
@@ -12,28 +13,35 @@ function getBasename() {
 }
 export const RESTAURANT_BASE_PATH = "/opaia"; // for reference; router uses getBasename()
 
-import MenuPage from "./pages/MenuPage";
-import PackageDetailsPage from "./pages/PackageDetailsPage";
-import TableSummary from "./pages/TableSummary";
-import QRGenerator from "./pages/QRGenerator";
-import QRMenuManagement from "./pages/QRMenuManagement";
-import ReservationPage from "./pages/ReservationPage";
-import WalkInPage from "./pages/WalkInPage";
-import ReservationFormPage from "./pages/ReservationFormPage";
-import TableActionPage from "./pages/TableActionPage";
-import ReservationListPage from "./pages/ReservationListPage";
-import WaitlistPage from "./pages/WaitlistPage";
-import CustomersPage from "./pages/CustomersPage";
-import ReportsPage from "./pages/ReportsPage";
-import ReservationDetailsPage from "./pages/ReservationDetailsPage";
-import WalkInSuccessPage from "./pages/WalkInSuccessPage";
-import ReservationSuccessPage from "./pages/ReservationSuccessPage";
-import GuestReservationPage from "./pages/GuestReservationPage";
+// Lazy load pages for faster initial load
+const MenuPage = lazy(() => import("./pages/MenuPage"));
+const PackageDetailsPage = lazy(() => import("./pages/PackageDetailsPage"));
+const TableSummary = lazy(() => import("./pages/TableSummary"));
+const QRGenerator = lazy(() => import("./pages/QRGenerator"));
+const QRMenuManagement = lazy(() => import("./pages/QRMenuManagement"));
+const ReservationPage = lazy(() => import("./pages/ReservationPage"));
+const WalkInPage = lazy(() => import("./pages/WalkInPage"));
+const ReservationFormPage = lazy(() => import("./pages/ReservationFormPage"));
+const TableActionPage = lazy(() => import("./pages/TableActionPage"));
+const ReservationListPage = lazy(() => import("./pages/ReservationListPage"));
+const WaitlistPage = lazy(() => import("./pages/WaitlistPage"));
+const CustomersPage = lazy(() => import("./pages/CustomersPage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
+const ReservationDetailsPage = lazy(() => import("./pages/ReservationDetailsPage"));
+const WalkInSuccessPage = lazy(() => import("./pages/WalkInSuccessPage"));
+const ReservationSuccessPage = lazy(() => import("./pages/ReservationSuccessPage"));
+const GuestReservationPage = lazy(() => import("./pages/GuestReservationPage"));
+
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-white">
+    <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+  </div>
+);
 
 export default function App() {
   return (
     <BrowserRouter basename={getBasename()}>
-      <>
+      <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<MenuPage />} />
           <Route path="/package/:packageId" element={<PackageDetailsPage />} />
@@ -55,7 +63,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <OrderSuccess />
-      </>
+      </Suspense>
     </BrowserRouter>
   );
 }

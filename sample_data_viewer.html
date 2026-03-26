@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Sample Data Viewer – SalesMaster & SalesChild</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+    .header {
+      background: linear-gradient(135deg, #1a1a2e, #0f3460);
+      color: white; padding: 28px 40px;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; }
+    .header p { font-size: 13px; color: rgba(255,255,255,0.6); margin-top: 4px; }
+
+    .tabs {
+      display: flex; gap: 0;
+      background: #1a1a2e;
+      padding: 0 40px;
+    }
+    .tab {
+      padding: 12px 28px; cursor: pointer;
+      font-size: 13px; font-weight: 600;
+      color: rgba(255,255,255,0.5);
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab.active { color: white; border-bottom-color: #e94560; }
+    .tab:hover { color: white; }
+
+    .content { padding: 30px 40px; }
+
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      margin-bottom: 20px;
+    }
+    .legend-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: #555;
+    }
+    .legend-dot {
+      width: 12px; height: 12px; border-radius: 3px;
+    }
+
+    .table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid #dde1e9; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead th {
+      background: #1a1a2e; color: white;
+      padding: 10px 12px; text-align: left;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 0.05em; white-space: nowrap;
+      position: sticky; top: 0;
+    }
+    tbody tr:nth-child(even) td { background: #f8f9fc; }
+    tbody tr:hover td { background: #eef2ff !important; }
+    td {
+      padding: 8px 12px; border-bottom: 1px solid #eee;
+      white-space: nowrap; max-width: 180px;
+      overflow: hidden; text-overflow: ellipsis;
+      background: white;
+    }
+
+    /* Column highlight classes */
+    .col-id    { background: #fff8e1 !important; font-weight: 700; }
+    .col-key   { background: #e8f5e9 !important; font-weight: 600; color: #1b5e20; }
+    .col-amt   { background: #e3f2fd !important; color: #0d47a1; font-weight: 600; }
+    .col-status{ background: #fce4ec !important; color: #880e4f; font-weight: 600; }
+    .col-ref   { background: #f3e5f5 !important; color: #4a148c; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 10px; font-size: 10px; font-weight: 700;
+    }
+    .badge-posted  { background: #c8e6c9; color: #1b5e20; }
+    .badge-active  { background: #bbdefb; color: #0d47a1; }
+    .badge-pending { background: #fff9c4; color: #f57f17; }
+    .badge-completed { background: #c8e6c9; color: #1b5e20; }
+    .badge-s       { background: #e1bee7; color: #4a148c; }
+
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .info-banner {
+      background: #e8f4fd; border: 1px solid #90caf9;
+      border-radius: 10px; padding: 14px 18px;
+      font-size: 13px; color: #0d47a1; margin-bottom: 20px;
+    }
+    .info-banner strong { display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Sample Data Viewer — SalesMaster & SalesChild</h1>
+  <p>Moifcore database · Reference data for QR Menu settlement implementation</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('master')">SalesMaster (10 rows)</div>
+  <div class="tab" onclick="showTab('child')">SalesChild (10 rows)</div>
+  <div class="tab" onclick="showTab('mapping')">QR Menu Mapping Guide</div>
+</div>
+
+<div class="content">
+
+  <!-- SALES MASTER -->
+  <div id="master" class="section active">
+    <div class="info-banner">
+      <strong>SalesMaster — Key observations from real data:</strong>
+      PaymentMode = <b>CASH</b> or <b>CREDITCARD</b> &nbsp;|&nbsp;
+      TransactionType = <b>S</b> &nbsp;|&nbsp;
+      PostStatus = <b>POSTED</b> &nbsp;|&nbsp;
+      HoldStatus = Table prefix + number (e.g. <b>TA149</b>, <b>D8</b>) &nbsp;|&nbsp;
+      HoldNo = <b>1E+13</b> (kotMasterID) &nbsp;|&nbsp;
+      DBLocation = <b>SERVER</b> &nbsp;|&nbsp;
+      UploadStatusM = <b>PENDING</b> &nbsp;|&nbsp;
+      CrBy/ModBy = <b>ADMIN</b> &nbsp;|&nbsp;
+      RStatusM = <b>ACTIVE</b> &nbsp;|&nbsp;
+      BalancePaid = <b>0</b> &nbsp;|&nbsp;
+      PaidCurrency = <b>empty</b> &nbsp;|&nbsp;
+      ServerStatus = <b>PENDING</b>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#fff8e1"></div> ID / Key</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e8f5e9"></div> Important fields</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e3f2fd"></div> Amount fields</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#fce4ec"></div> Status fields</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f3e5f5"></div> Reference/Link fields</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>SalesID</th><th>SalesManID</th><th>CounterNo</th><th>BillNo</th>
+            <th>BillDate</th><th>BillTime</th><th>CustomerID</th><th>PaymentMode</th>
+            <th>CreditCardNO</th><th>CreditCardTypeID</th><th>Amount</th><th>CashAmount</th>
+            <th>CreditCardAmount</th><th>PostStatus</th><th>HoldStatus</th>
+            <th>PaidAmount</th><th>BalancePaid</th><th>TransactionType</th>
+            <th>StationID</th><th>DBLocation</th><th>UploadStatusM</th>
+            <th>CrBy</th><th>ModBy</th><th>WaiterID</th><th>TableID</th><th>AreaID</th>
+            <th>HoldNo</th><th>NofCustomer</th><th>ServerStatus</th><th>RStatusM</th>
+            <th>SubTotalM</th><th>Tax1AmountM</th><th>OnlineMasterID</th><th>OnlinePaymentAmount</th>
+          </tr>
+        </thead>
+        <tbody id="masterBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SALES CHILD -->
+  <div id="child" class="section">
+    <div class="info-banner">
+      <strong>SalesChild — Key observations from real data:</strong>
+      PostStatus = <b>COMPLETED</b> &nbsp;|&nbsp;
+      HasBarCode = <b>NORMAL</b> &nbsp;|&nbsp;
+      UploadStatusC = <b>PENDING</b> &nbsp;|&nbsp;
+      CrBy/ModBy = <b>ADMIN</b> &nbsp;|&nbsp;
+      RStatusC = <b>ACTIVE</b> &nbsp;|&nbsp;
+      ServerStatusC = <b>PENDING</b> &nbsp;|&nbsp;
+      UnitCost = <b>1</b> (default) &nbsp;|&nbsp;
+      PackQty = <b>1</b> &nbsp;|&nbsp;
+      ItemType = <b>empty</b> &nbsp;|&nbsp;
+      ProductCode = <b>empty</b> &nbsp;|&nbsp;
+      Tax amounts = <b>0</b> (no tax in sample)
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>SalesChildID</th><th>SalesID</th><th>ProductID</th>
+            <th>UniqueMultiProductID</th><th>ShortDescription</th><th>ArabicDescription</th>
+            <th>GroupID</th><th>Qty</th><th>UnitPrice</th><th>UnitCost</th>
+            <th>PackQty</th><th>Discount</th><th>LineTotal</th><th>SubTotalC</th>
+            <th>Tax1AmountC</th><th>PostStatus</th><th>HasBarCode</th>
+            <th>StationID</th><th>UploadStatusC</th><th>CrBy</th>
+            <th>RStatusC</th><th>ItemType</th><th>Modifier</th><th>ServerStatusC</th>
+          </tr>
+        </thead>
+        <tbody id="childBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- MAPPING GUIDE -->
+  <div id="mapping" class="section">
+    <div class="info-banner">
+      <strong>QR Menu → SalesMaster/SalesChild Field Mapping</strong>
+      Based on real sample data analysis. Use this as the implementation reference.
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Table</th><th>Column</th><th>Value / Source</th><th>Notes from sample data</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="4" style="background:#1a1a2e;color:white;font-weight:700;padding:10px 12px;">SALESMASTER</td></tr>
+          <tr><td>SalesMaster</td><td class="col-id">SalesID</td><td>IDControlManager → 'SalesMaster'</td><td>Auto-generated next ID</td></tr>
+          <tr><td>SalesMaster</td><td class="col-key">SalesManID</td><td>KOTMaster.SalesManID</td><td>From the KOT</td></tr>
+          <tr><td>SalesMaster</td><td>CounterNo</td><td>KOTMaster.CounterNo</td><td>= 1 in sample</td></tr>
+          <tr><td>SalesMaster</td><td>BillNo</td><td>MAX(BillNo)+1 from SalesMaster</td><td>Sample starts at 10000000</td></tr>
+          <tr><td>SalesMaster</td><td>BillDate</td><td>GETDATE() date part</td><td>00:00.0 format in sample</td></tr>
+          <tr><td>SalesMaster</td><td>BillTime</td><td>GETDATE() time part</td><td>Current time</td></tr>
+          <tr><td>SalesMaster</td><td>CustomerID</td><td>10001</td><td>Default walk-in customer = 10001</td></tr>
+          <tr><td>SalesMaster</td><td class="col-status">PaymentMode</td><td>'QR_MENU'</td><td>Sample has CASH / CREDITCARD</td></tr>
+          <tr><td>SalesMaster</td><td>CreditCardNO</td><td>'' (empty)</td><td>Empty in sample for CASH</td></tr>
+          <tr><td>SalesMaster</td><td>CreditCardTypeID</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">Amount</td><td>KOTMaster.Amount</td><td>Full bill amount</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">CashAmount</td><td>0</td><td>0 for card/QR payments</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">CreditCardAmount</td><td>KOTMaster.Amount</td><td>Full amount (online payment)</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">CreditAmount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">VoucherAmount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>OSBalance</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>DiscountAmount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-status">PostStatus</td><td>'POSTED'</td><td>Always POSTED in sample</td></tr>
+          <tr><td>SalesMaster</td><td class="col-status">HoldStatus</td><td>KOTMaster.KotPrefix + KotNumber</td><td>e.g. TA149, D8 in sample</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">PaidAmount</td><td>KOTMaster.Amount</td><td>Full amount (only after full payment)</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">BalancePaid</td><td>0</td><td>= 0 in sample</td></tr>
+          <tr><td>SalesMaster</td><td>TransactionType</td><td>'S'</td><td>Always 'S' in sample</td></tr>
+          <tr><td>SalesMaster</td><td>PaidCurrency</td><td>'' (empty)</td><td>Empty in sample</td></tr>
+          <tr><td>SalesMaster</td><td>StationID</td><td>KOTMaster.StationID</td><td>= 10 in sample</td></tr>
+          <tr><td>SalesMaster</td><td>DBLocation</td><td>'SERVER'</td><td>Always 'SERVER' in sample</td></tr>
+          <tr><td>SalesMaster</td><td>UploadStatusM</td><td>'PENDING'</td><td>Always PENDING in sample</td></tr>
+          <tr><td>SalesMaster</td><td>CounterCloseStatus</td><td>'PENDING'</td><td>PENDING until counter close</td></tr>
+          <tr><td>SalesMaster</td><td>CrBy</td><td>'QR MENU'</td><td>Sample uses 'ADMIN'</td></tr>
+          <tr><td>SalesMaster</td><td>CrOn</td><td>GETDATE()</td><td>Current datetime</td></tr>
+          <tr><td>SalesMaster</td><td>ModBy</td><td>'QR MENU'</td><td>Sample uses 'ADMIN'</td></tr>
+          <tr><td>SalesMaster</td><td>ModOn</td><td>GETDATE()</td><td>Current datetime</td></tr>
+          <tr><td>SalesMaster</td><td>StaffID</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>WaiterID</td><td>KOTMaster.WaiterID</td><td>= 0 in sample</td></tr>
+          <tr><td>SalesMaster</td><td class="col-ref">TableID</td><td>KOTMaster.TableID</td><td>= 0 in sample (table linked via HoldNo)</td></tr>
+          <tr><td>SalesMaster</td><td class="col-ref">AreaID</td><td>KOTMaster.AreaID</td><td>= 5 or 6 in sample</td></tr>
+          <tr><td>SalesMaster</td><td class="col-ref">HoldNo</td><td>KOTMaster.kotMasterID</td><td>= 1E+13 (bigint) in sample</td></tr>
+          <tr><td>SalesMaster</td><td>NofCustomer</td><td>KOTMaster.NofCustomer</td><td>= 1 in sample</td></tr>
+          <tr><td>SalesMaster</td><td>ComplimentAmount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-status">ServerStatus</td><td>'PENDING'</td><td>Always PENDING in sample</td></tr>
+          <tr><td>SalesMaster</td><td>SupervisorID</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-status">RStatusM</td><td>'ACTIVE'</td><td>Always ACTIVE in sample</td></tr>
+          <tr><td>SalesMaster</td><td>Prefix</td><td>' ' (space)</td><td>Single space in sample</td></tr>
+          <tr><td>SalesMaster</td><td>PrintCount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">SubTotalM</td><td>KOTMaster.SubTotalM</td><td>= Amount in sample (no tax)</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">Tax1AmountM</td><td>KOTMaster.Tax1AmountM</td><td>= 0 in sample</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">Tax2AmountM</td><td>KOTMaster.Tax2AmountM</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">Tax3AmountM</td><td>KOTMaster.Tax3AmountM</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>Tax1RateM/2/3</td><td>KOTMaster.Tax1RateM/2/3</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>TaxableAmount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td class="col-ref">OnlineMasterID</td><td>KOTMaster.kotMasterID</td><td>Link back to KOT</td></tr>
+          <tr><td>SalesMaster</td><td class="col-amt">OnlinePaymentAmount</td><td>KOTMaster.Amount</td><td>Full QR paid amount</td></tr>
+          <tr><td>SalesMaster</td><td>LoyaltyUploadStatus</td><td>' ' (space)</td><td>Single space default</td></tr>
+          <tr><td>SalesMaster</td><td>AgentTransactionID</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesMaster</td><td>All other fields</td><td>0 or '' (default)</td><td>Not used for restaurant</td></tr>
+
+          <tr><td colspan="4" style="background:#1a1a2e;color:white;font-weight:700;padding:10px 12px;">SALESCHILD</td></tr>
+          <tr><td>SalesChild</td><td class="col-id">SalesChildID</td><td>IDControlManager → 'SalesChild'</td><td>Auto-generated next ID per item</td></tr>
+          <tr><td>SalesChild</td><td class="col-ref">SalesID</td><td>New SalesID from SalesMaster insert</td><td>FK to SalesMaster</td></tr>
+          <tr><td>SalesChild</td><td class="col-key">ProductID</td><td>KOTChild.ProductID</td><td>= 1E+13 in sample (bigint)</td></tr>
+          <tr><td>SalesChild</td><td>UniqueMultiProductID</td><td>KOTChild.ProductID</td><td>Same as ProductID in sample</td></tr>
+          <tr><td>SalesChild</td><td>ShortDescription</td><td>KOTChild.ShortDescription</td><td>e.g. GREEN TEA, SPANISH LATTE</td></tr>
+          <tr><td>SalesChild</td><td>ArabicDescription</td><td>KOTChild.ShortDescriptionAr</td><td>Arabic name in sample</td></tr>
+          <tr><td>SalesChild</td><td>GroupID</td><td>KOTChild.GroupID</td><td>= 1E+13 in sample</td></tr>
+          <tr><td>SalesChild</td><td class="col-amt">Qty</td><td>KOTChild.Qty</td><td>Quantity ordered</td></tr>
+          <tr><td>SalesChild</td><td class="col-amt">UnitPrice</td><td>KOTChild.UnitPrice</td><td>Price per unit</td></tr>
+          <tr><td>SalesChild</td><td>UnitCost</td><td>1</td><td>= 1 in sample (default)</td></tr>
+          <tr><td>SalesChild</td><td>PackQty</td><td>1</td><td>= 1 in sample</td></tr>
+          <tr><td>SalesChild</td><td>Discount</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesChild</td><td class="col-amt">LineTotal</td><td>KOTChild.LineTotal</td><td>Qty × UnitPrice</td></tr>
+          <tr><td>SalesChild</td><td class="col-amt">SubTotalC</td><td>KOTChild.LineTotal</td><td>Same as LineTotal in sample</td></tr>
+          <tr><td>SalesChild</td><td class="col-status">PostStatus</td><td>'COMPLETED'</td><td>Always COMPLETED in sample</td></tr>
+          <tr><td>SalesChild</td><td>StockOnHand</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesChild</td><td>HasBarCode</td><td>'NORMAL'</td><td>Always NORMAL in sample</td></tr>
+          <tr><td>SalesChild</td><td>StationID</td><td>KOTMaster.StationID</td><td>= 10 in sample</td></tr>
+          <tr><td>SalesChild</td><td>UploadStatusC</td><td>'PENDING'</td><td>Always PENDING in sample</td></tr>
+          <tr><td>SalesChild</td><td>CrBy</td><td>'QR MENU'</td><td>Sample uses 'ADMIN'</td></tr>
+          <tr><td>SalesChild</td><td>CrOn</td><td>GETDATE()</td><td>Current datetime</td></tr>
+          <tr><td>SalesChild</td><td>ModBy</td><td>'QR MENU'</td><td>Sample uses 'ADMIN'</td></tr>
+          <tr><td>SalesChild</td><td>ModOn</td><td>GETDATE()</td><td>Current datetime</td></tr>
+          <tr><td>SalesChild</td><td>SupplierID</td><td>0</td><td>= 0</td></tr>
+          <tr><td>SalesChild</td><td>Tax1AmountC/2/3</td><td>KOTChild.Tax1AmountC</td><td>= 0 in sample</td></tr>
+          <tr><td>SalesChild</td><td>Tax1RateC/2/3</td><td>KOTChild.Tax1RateC</td><td>= 0 in sample</td></tr>
+          <tr><td>SalesChild</td><td>Modifier</td><td>KOTChild.Modifier</td><td>Empty in sample</td></tr>
+          <tr><td>SalesChild</td><td class="col-status">RStatusC</td><td>'ACTIVE'</td><td>Always ACTIVE in sample</td></tr>
+          <tr><td>SalesChild</td><td class="col-status">ServerStatusC</td><td>'PENDING'</td><td>Always PENDING in sample</td></tr>
+          <tr><td>SalesChild</td><td>ItemType</td><td>'' (empty)</td><td>Empty in sample</td></tr>
+          <tr><td>SalesChild</td><td>ProductCode</td><td>'' (empty)</td><td>Empty in sample</td></tr>
+          <tr><td>SalesChild</td><td>SerialNo</td><td>'' (empty)</td><td>Empty in sample</td></tr>
+          <tr><td>SalesChild</td><td>All other fields</td><td>0 or '' (default)</td><td>Not used for restaurant</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function showTab(tab) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(tab).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function badge(val, type) {
+  if (!val && val !== 0) return '<span style="color:#ccc">—</span>';
+  const v = String(val).trim();
+  let cls = '';
+  if (v === 'POSTED') cls = 'badge-posted';
+  else if (v === 'COMPLETED') cls = 'badge-completed';
+  else if (v === 'ACTIVE') cls = 'badge-active';
+  else if (v === 'PENDING' || v === 'PENDINGPENDING') cls = 'badge-pending';
+  else if (v === 'S') cls = 'badge-s';
+  if (cls) return `<span class="badge ${cls}">${v === 'PENDINGPENDING' ? 'PENDING' : v}</span>`;
+  return v;
+}
+
+// SalesMaster data
+const masterData = [
+  [139899,6,1,1,10000000,'00:00.0','28:03.2',10001,'CASH','',0,5,5,0,'POSTED','TA149',5,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',5,0,0,0],
+  [139900,7,1,1,10000001,'00:00.0','45:26.2',10001,'CREDITCARD','0',0,54,0,54,'POSTED','TA150',54,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',54,0,0,0],
+  [139901,8,1,1,10000002,'00:00.0','47:07.1',10001,'CASH','',0,50,50,0,'POSTED','D8',50,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,6,'1E+13',1,'PENDING','ACTIVE',50,0,0,0],
+  [139902,9,1,1,10000003,'00:00.0','26:05.6',10001,'CREDITCARD','0',0,117,0,117,'POSTED','TA151',117,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',117,0,0,0],
+  [139903,10,1,1,10000004,'00:00.0','56:03.0',10001,'CREDITCARD','0',0,18,0,18,'POSTED','TA152',18,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',18,0,0,0],
+  [139904,11,1,1,10000005,'00:00.0','58:01.8',10001,'CREDITCARD','0',0,54,0,54,'POSTED','TA153',54,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',54,0,0,0],
+  [139905,12,1,1,10000006,'00:00.0','18:01.1',10001,'CASH','',0,33.5,33.5,0,'POSTED','TA154',33.5,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',33.5,0,0,0],
+  [139906,13,1,1,10000007,'00:00.0','32:20.8',10001,'CASH','',0,15,15,0,'POSTED','TA155',15,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',15,0,0,0],
+  [139907,14,1,1,10000008,'00:00.0','38:09.9',10001,'CREDITCARD','0',0,40,0,40,'POSTED','TA156',40,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',40,0,0,0],
+  [139908,15,1,1,10000009,'00:00.0','42:01.5',10001,'CASH','',0,27.5,27.5,0,'POSTED','TA157',27.5,0,'S',10,'SERVER','PENDING','ADMIN','ADMIN',0,0,5,'1E+13',1,'PENDING','ACTIVE',27.5,0,0,0],
+];
+
+const masterBody = document.getElementById('masterBody');
+masterData.forEach((row, i) => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="col-id">${i+1}</td>
+    <td class="col-id">${row[0]}</td>
+    <td class="col-key">${row[1]}</td>
+    <td>${row[2]}</td>
+    <td class="col-ref">${row[4]}</td>
+    <td>${row[5]}</td>
+    <td>${row[6]}</td>
+    <td>${row[7]}</td>
+    <td class="col-status">${row[8]}</td>
+    <td>${row[9]||'—'}</td>
+    <td>${row[10]}</td>
+    <td class="col-amt">${row[11]}</td>
+    <td class="col-amt">${row[12]}</td>
+    <td class="col-amt">${row[13]}</td>
+    <td class="col-status">${badge(row[14])}</td>
+    <td class="col-status">${row[15]}</td>
+    <td class="col-amt">${row[16]}</td>
+    <td class="col-amt">${row[17]}</td>
+    <td>${badge(row[18])}</td>
+    <td>${row[19]}</td>
+    <td>${row[20]}</td>
+    <td>${badge(row[21])}</td>
+    <td>${row[22]}</td>
+    <td>${row[23]}</td>
+    <td>${row[24]}</td>
+    <td>${row[25]}</td>
+    <td>${row[26]}</td>
+    <td class="col-ref">${row[27]}</td>
+    <td>${row[28]}</td>
+    <td>${badge(row[29])}</td>
+    <td>${badge(row[30])}</td>
+    <td class="col-amt">${row[31]}</td>
+    <td class="col-amt">${row[32]}</td>
+    <td class="col-ref">${row[33]}</td>
+    <td class="col-amt">${row[34]}</td>
+  `;
+  masterBody.appendChild(tr);
+});
+
+// SalesChild data
+const childData = [
+  [346909,7,6,'1E+13',1,'GREEN TEA','شاي أخضر','1E+13',1,5,1,1,0,5,5,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346910,8,7,'1E+13',35,'SPANISH LATTE','لاتيه إسباني','1E+13',3,18,1,1,0,54,54,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346911,9,8,'1E+13',59,'OLD MATES BEEF BURGER','برجر اللحم البقري المميز','1E+13',2,25,1,1,0,50,50,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346912,10,9,'1E+13',60,'ZINGER CHICKEN','برجر دايت بالدجاج','1E+13',2,16,1,1,0,32,32,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346913,11,9,'1E+13',54,'GRILLED CHICKEN BURGER','داينامايت شرمب','1E+13',1,17,1,1,0,17,17,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346914,12,9,'1E+13',76,'CRINKLE FRIES','بطاطس مقلية متموجة','1E+13',1,14,1,1,0,14,14,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346915,13,9,'1E+13',26,'OLD MATES SIGNATURE LATTE','لاتيه توقيع أولد ميتس','1E+13',1,20,1,1,0,20,20,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346916,14,9,'1E+13',18,'ICE SPANISH LATTE','لاتيه إسباني بارد','1E+13',1,18,1,1,0,18,18,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346917,15,10,'1E+13',15,'CAPPUCCINO','كابوتشينو','1E+13',2,14,1,1,0,28,28,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+  [346918,16,10,'1E+13',29,'AMERICANO','أمريكانو','1E+13',1,12,1,1,0,12,12,0,'COMPLETED','NORMAL',10,'PENDING','ADMIN','ACTIVE','','','PENDING'],
+];
+
+const childBody = document.getElementById('childBody');
+childData.forEach((row, i) => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="col-id">${i+1}</td>
+    <td class="col-id">${row[0]}</td>
+    <td class="col-ref">${row[1]}</td>
+    <td class="col-ref">${row[2]}</td>
+    <td class="col-key">${row[3]}</td>
+    <td>${row[4]}</td>
+    <td class="col-key">${row[5]}</td>
+    <td style="direction:rtl">${row[6]}</td>
+    <td>${row[7]}</td>
+    <td class="col-amt">${row[8]}</td>
+    <td class="col-amt">${row[9]}</td>
+    <td>${row[10]}</td>
+    <td>${row[11]}</td>
+    <td>${row[12]}</td>
+    <td class="col-amt">${row[13]}</td>
+    <td class="col-amt">${row[14]}</td>
+    <td class="col-amt">${row[15]}</td>
+    <td class="col-status">${badge(row[16])}</td>
+    <td>${row[17]}</td>
+    <td>${row[18]}</td>
+    <td>${badge(row[19])}</td>
+    <td>${row[20]}</td>
+    <td>${badge(row[21])}</td>
+    <td>${row[22]||'—'}</td>
+    <td>${row[23]||'—'}</td>
+    <td>${badge(row[24])}</td>
+  `;
+  childBody.appendChild(tr);
+});
+</script>
+</body>
+</html>

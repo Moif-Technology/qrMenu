@@ -1,5 +1,6 @@
 // frontend/src/services/payment.service.js
 import { API } from "../lib/api";
+import { error as logError } from "../lib/logger";
 
 /**
  * Get all active payment methods
@@ -13,7 +14,7 @@ export async function getPaymentMethods() {
     }
     throw new Error(data.msg || "Failed to fetch payment methods");
   } catch (err) {
-    console.error("Error fetching payment methods:", err);
+    logError("Error fetching payment methods:", err);
     throw err;
   }
 }
@@ -32,7 +33,7 @@ export async function processPayFull(paymentData) {
     }
     throw new Error(data.error || "Payment processing failed");
   } catch (err) {
-    console.error("Error processing Pay Full payment:", err);
+    logError("Error processing Pay Full payment:", err);
     throw err;
   }
 }
@@ -42,7 +43,7 @@ export async function createTelrSession(sessionData) {
     const { data } = await API.post("/telr/create", sessionData);
     return data;
   } catch (err) {
-    console.error("Error creating Telr session:", err);
+    logError("Error creating Telr session:", err);
     throw err;
   }
 }
@@ -56,7 +57,7 @@ export async function checkTelrStatus(orderRef) {
     }
     throw new Error(data?.error || "Failed to check Telr payment status");
   } catch (err) {
-    console.error("Error checking Telr payment status:", err);
+    logError("Error checking Telr payment status:", err);
     throw err;
   }
 }
@@ -75,7 +76,7 @@ export async function processEqualSplit(paymentData) {
     }
     throw new Error(data.error || "Equal split payment processing failed");
   } catch (err) {
-    console.error("Error processing Equal Split payment:", err);
+    logError("Error processing Equal Split payment:", err);
     throw err;
   }
 }
@@ -88,7 +89,7 @@ export async function processCustomSplit(paymentData) {
     }
     throw new Error(data.error || "Payment processing failed");
   } catch (err) {
-    console.error("Error processing Custom Split payment:", err);
+    logError("Error processing Custom Split payment:", err);
     throw err;
   }
 }
@@ -106,7 +107,7 @@ export async function processItemSplit(paymentData) {
     }
     throw new Error(data.error || "Item split payment processing failed");
   } catch (err) {
-    console.error("Error processing Item Split payment:", err);
+    logError("Error processing Item Split payment:", err);
     throw err;
   }
 }
@@ -124,7 +125,7 @@ export async function getPaidItems(kotMasterID) {
     }
     return [];
   } catch (err) {
-    console.error("Error fetching paid items:", err);
+    logError("Error fetching paid items:", err);
     return [];
   }
 }
@@ -147,7 +148,7 @@ export async function getBalance(tableId, kotMasterID = null) {
     }
     throw new Error(data.error || "Failed to get balance");
   } catch (err) {
-    console.error("Error fetching balance:", err);
+    logError("Error fetching balance:", err);
     throw err;
   }
 }
@@ -177,7 +178,7 @@ export async function checkTableOrders(token) {
       area: data.area,
     };
   } catch (err) {
-    console.error("Error checking table orders:", err);
+    logError("Error checking table orders:", err);
     return { hasOrders: false, tableId: null, lines: [], area: null };
   }
 }
