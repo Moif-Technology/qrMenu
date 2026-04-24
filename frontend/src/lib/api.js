@@ -11,8 +11,8 @@ export const API = axios.create({
 
 
 // Retry logic for rate limiting (429 errors)
-const MAX_RETRIES = 2;
-const BASE_RETRY_DELAY = 3000;
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY = 2000;
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
