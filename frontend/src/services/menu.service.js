@@ -122,17 +122,15 @@ export async function getQrMenuItems(params = {}) {
     sort = "new"
   } = params;
 
-  // Add cache-busting timestamp to ensure fresh data after updates
   const { data } = await API.get("/qr-menu/menu-items", {
-    params: { 
-      page, 
-      pageSize, 
-      search, 
+    params: {
+      page,
+      pageSize,
+      search,
       qrMainGroupId,
-      qrGroupId, 
-      qrSubgroupId, 
-      sort,
-      _t: Date.now() // Cache-busting timestamp
+      qrGroupId,
+      qrSubgroupId,
+      sort
     }
   });
 

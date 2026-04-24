@@ -42,7 +42,7 @@ const noOpLimiter = (req, res, next) => next();
 // Production rate limiters
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.RATE_LIMIT_MAX ? Number(process.env.RATE_LIMIT_MAX) : 100,
+  max: process.env.RATE_LIMIT_MAX ? Number(process.env.RATE_LIMIT_MAX) : 500,
   message: { ok: false, error: "Too many requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
