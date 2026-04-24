@@ -20,6 +20,25 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 const isDevelopment = process.env.NODE_ENV !== "production";
 
+if (!isDevelopment) {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS || 1));
+}
+
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const publicReadPaths = new Set([
+  "/menu/images/mapping",
+  "/qr-menu/categories",
+  "/qr-menu/menu-items",
+]);
+
+const isPublicMenuRead = (req) => {
+  return req.method === "GET" && publicReadPaths.has(req.path);
+};
+
 // In production, only the actual frontend domain is allowed.
 // In development, all origins are allowed so local testing works.
 const CORS_ORIGIN = process.env.CORS_ORIGIN
@@ -42,18 +61,29 @@ const noOpLimiter = (req, res, next) => next();
 // Production rate limiters
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.RATE_LIMIT_MAX ? Number(process.env.RATE_LIMIT_MAX) : 500,
+  max: Math.max(parsePositiveInt(process.env.RATE_LIMIT_MAX, 1000), 1000),
   message: { ok: false, error: "Too many requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => {
-    return req.path === '/api/health' || req.path === '/api/health/db';
+    return req.path === "/health"
+      || req.path === "/health/db"
+      || req.path.startsWith("/payment")
+      || isPublicMenuRead(req);
   }
+});
+
+const publicMenuReadLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_MENU_MAX, 1200),
+  message: { ok: false, error: "Menu is busy. Please try again in a moment." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 const paymentLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: process.env.RATE_LIMIT_PAYMENT_MAX ? Number(process.env.RATE_LIMIT_PAYMENT_MAX) : 100,
+  max: Math.max(parsePositiveInt(process.env.RATE_LIMIT_PAYMENT_MAX, 100), 100),
   message: { ok: false, error: "Too many payment requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -71,12 +101,18 @@ const paymentLimiter = rateLimit({
 // unset / empty) defaults to ENABLED so production servers are always protected.
 if (process.env.NODE_ENV === "development") {
   console.log("[RATE LIMIT] DISABLED — NODE_ENV=development");
-  app.use("/api", noOpLimiter);
+  app.use("/api/menu/images/mapping", noOpLimiter);
+  app.use("/api/qr-menu/categories", noOpLimiter);
+  app.use("/api/qr-menu/menu-items", noOpLimiter);
   app.use("/api/payment", noOpLimiter);
+  app.use("/api", noOpLimiter);
 } else {
   console.log("[RATE LIMIT] ENABLED — NODE_ENV:", process.env.NODE_ENV || "(not set, defaulting to production rules)");
-  app.use("/api", apiLimiter);
+  app.use("/api/menu/images/mapping", publicMenuReadLimiter);
+  app.use("/api/qr-menu/categories", publicMenuReadLimiter);
+  app.use("/api/qr-menu/menu-items", publicMenuReadLimiter);
   app.use("/api/payment", paymentLimiter);
+  app.use("/api", apiLimiter);
 }
 
 

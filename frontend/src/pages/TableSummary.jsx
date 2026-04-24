@@ -1196,13 +1196,14 @@ export default function TableSummaryPremium() {
     loadOrderData();
   }, [loadOrderData]);
 
-  // Auto-refresh when order is not accepted (poll every 5 seconds, only when tab visible)
+  // Auto-refresh only while the order is waiting to become payable.
+  // Once payment is enabled, repeated polling can exhaust the backend rate limit.
   useEffect(() => {
-    if (!canPay || lines.length === 0 || loading) return;
+    if (canPay || lines.length === 0 || loading) return;
     const tick = () => {
       if (document.visibilityState === "visible") loadOrderData();
     };
-    const interval = setInterval(tick, 5000);
+    const interval = setInterval(tick, 15000);
     return () => clearInterval(interval);
   }, [canPay, lines.length, loading, loadOrderData]);
 
