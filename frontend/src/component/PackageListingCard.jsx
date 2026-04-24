@@ -6,9 +6,9 @@ import { useState } from "react";
 
 // 3 hardcoded placeholder images (in order) - replace with your links when ready
 const PLACEHOLDER_IMAGES = [
-  "https://res.cloudinary.com/dayxivond/image/upload/v1772664579/WhatsApp_Image_2026-03-05_at_2.35.42_AM_1_g63zk8.jpg",
-  "https://res.cloudinary.com/dayxivond/image/upload/v1772664578/WhatsApp_Image_2026-03-05_at_2.35.43_AM_eapnsd.jpg",
-  "https://res.cloudinary.com/dayxivond/image/upload/v1772664580/WhatsApp_Image_2026-03-05_at_2.35.42_AM_mwi2m0.jpg",
+  "https://res.cloudinary.com/dayxivond/image/upload/v1776362197/English_breakfast_eohocd.jpg",
+  "https://res.cloudinary.com/dayxivond/image/upload/v1776362484/Opaia_healthy_breakfast_rxfets.jpg",
+  "https://res.cloudinary.com/dayxivond/image/upload/v1776362522/laventine_jjskgp.jpg",
 ];
 
 export default function PackageListingCard({ packageData, onClick, placeholderIndex = 0 }) {
