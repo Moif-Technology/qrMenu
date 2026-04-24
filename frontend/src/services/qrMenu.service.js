@@ -22,6 +22,27 @@ export async function getAllProductsFromMaster(filters = {}) {
   return data.data;
 }
 
+// Main Groups
+export async function getQrMainGroups() {
+  const { data } = await API.get("/qr-menu/main-groups");
+  return data.data;
+}
+
+export async function createQrMainGroup(mainGroupData) {
+  const { data } = await API.post("/qr-menu/main-groups", mainGroupData);
+  return data.data;
+}
+
+export async function updateQrMainGroup(qrMainGroupId, updateData) {
+  const { data } = await API.put(`/qr-menu/main-groups/${qrMainGroupId}`, updateData);
+  return data.data;
+}
+
+export async function deleteQrMainGroup(qrMainGroupId) {
+  const { data } = await API.delete(`/qr-menu/main-groups/${qrMainGroupId}`);
+  return data.data;
+}
+
 // Groups
 export async function getQrGroups() {
   const { data } = await API.get("/qr-menu/groups");

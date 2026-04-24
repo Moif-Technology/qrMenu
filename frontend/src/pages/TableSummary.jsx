@@ -3,21 +3,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { List } from "react-window";
 
+import applePayIcon from "../assets/payment/apple-pay.png";
+import cardIcon from "../assets/payment/card.png";
+import googlePayIcon from "../assets/payment/google-pay.png";
+import samsungPayIcon from "../assets/payment/samsung-pay.png";
+import ConfirmModal from "../component/ConfirmModal";
+import PaymentSuccess from "../component/PaymentSuccess";
 import SplitCustomAmountSheet from "../component/SplitCustomAmountSheet";
 import SplitEqualSheet from "../component/SplitEqualSheet";
 import SplitOptionsSheet from "../component/SplitOptionSheet";
 import SplitPickItemsSheet from "../component/SplitPickItemsSheet";
-import PaymentSuccess from "../component/PaymentSuccess";
-import ConfirmModal from "../component/ConfirmModal";
 import Toast from "../component/Toast";
 import { API } from "../lib/api";
 import { log, error as logError } from "../lib/logger";
+import { checkTelrStatus, createTelrSession, getBalance, getPaidItems, getPaymentMethods, processCustomSplit, processEqualSplit, processItemSplit } from "../services/payment.service";
 import { useCart } from "../store/cartStore";
-import { getPaymentMethods, processEqualSplit, processCustomSplit, processItemSplit, getPaidItems, getBalance, createTelrSession, checkTelrStatus } from "../services/payment.service";
-import cardIcon from "../assets/payment/card.png";
-import applePayIcon from "../assets/payment/apple-pay.png";
-import samsungPayIcon from "../assets/payment/samsung-pay.png";
-import googlePayIcon from "../assets/payment/google-pay.png";
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
@@ -385,6 +385,7 @@ export default function TableSummaryPremium() {
   const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const loadOrderDataRef = useRef(null);
+  const navigatingAwayRef = useRef(false); // Prevents Invalid Access flash when redirecting to menu
   const [billClosed, setBillClosed] = useState(false); // True when this QR bill is already settled / no active KOT
 
   const handlePaymentComplete = useCallback((data) => {
@@ -1030,15 +1031,14 @@ export default function TableSummaryPremium() {
         }
       }
       if (resolvedLines.length === 0 && !isProcessingTelrReturnCheck) {
-        const isOnPaymentRoute = typeof window !== "undefined" && window.location.pathname.includes("/r/");
-        if (isOnPaymentRoute) {
-          setBillClosed(true);
-          setLines([]);
-          setRemainingBalance(null);
-          setPaidKotChildIds([]);
-          setEqualSplitInfo(null);
-          return;
+        // No active order — set table context and redirect to menu so customer can order
+        if (tableId) {
+          setTableId(tableId, areaName, areaId, data.tableNo ?? null, data.tableName ?? null);
         }
+        if (token) {
+          setToken(token);
+        }
+        navigatingAwayRef.current = true;
         navigate("/");
         return;
       }
@@ -1281,7 +1281,7 @@ export default function TableSummaryPremium() {
     );
   }
 
-  if (!meta.ok) {
+  if (!meta.ok && !navigatingAwayRef.current) {
     return (
       <div className="min-h-screen bg-white grid place-items-center p-6">
         <div className="text-center max-w-sm w-full">
@@ -1448,7 +1448,7 @@ export default function TableSummaryPremium() {
             </div>
 
           {/* Payment Status Banner - Show when order is not yet accepted */}
-          {!canPay && lines.length > 0 && (
+          {/* {!canPay && lines.length > 0 && (
             <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-xl">
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center">
@@ -1475,7 +1475,7 @@ export default function TableSummaryPremium() {
                 </button>
               </div>
             </div>
-          )}
+          )} */}
 
           {/* Actions - Payment buttons hidden
           <div className="mt-4 flex gap-3">

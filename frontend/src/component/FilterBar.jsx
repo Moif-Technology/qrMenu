@@ -15,6 +15,11 @@ export default function FilterBar({ sort, onSort }) {
   const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
   const triggerRef = useRef(null);
   const containerRef = useRef(null);
+  const serviceParts = t("menu.service_standard")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const [primaryService, secondaryService] = serviceParts;
 
   const updatePosition = () => {
     if (triggerRef.current) {
@@ -50,13 +55,13 @@ export default function FilterBar({ sort, onSort }) {
     <ul
       ref={containerRef}
       role="listbox"
-      className="fixed py-1.5 rounded-xl bg-white shadow-xl border overflow-hidden"
+      className="fixed overflow-hidden rounded-xl border bg-[#fbfaf7] p-1.5 shadow-[0_22px_50px_-30px_rgba(48,36,28,0.82)]"
       style={{
-        top: position.top,
+        top: position.top + 4,
         left: position.left,
         width: position.width,
         zIndex: 99999,
-        borderColor: "rgba(139,111,71,0.2)",
+        borderColor: "rgba(92,74,61,0.18)",
       }}
     >
       {OPTIONS.map((opt) => {
@@ -69,13 +74,12 @@ export default function FilterBar({ sort, onSort }) {
                 onSort(opt.value);
                 setOpen(false);
               }}
-              className={`w-full px-4 py-3 text-left text-sm font-medium transition-colors
-                ${isSelected ? "text-white" : "text-gray-800 hover:bg-gray-50"}`}
+              className={`w-full rounded-lg px-4 py-3 text-left text-sm font-semibold transition duration-200
+                ${isSelected ? "text-white" : "text-gray-800 hover:bg-[rgba(92,74,61,0.07)]"}`}
               style={
                 isSelected
                   ? {
-                      background:
-                        "linear-gradient(120deg, var(--grad-start), var(--grad-end))",
+                      background: "#342825",
                     }
                   : {}
               }
@@ -90,45 +94,41 @@ export default function FilterBar({ sort, onSort }) {
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6">
-      <div className="flex flex-col gap-3 rounded-[20px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_12px_28px_rgba(58,46,46,0.08)] backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <div
-          className="text-xs font-semibold uppercase tracking-[0.28em]"
-          style={{ letterSpacing: "0.28em", color: "var(--text-secondary)" }}
-        >
-          {t("menu.service_standard")}
+      <div className="flex items-center justify-between gap-3 border-b border-[rgba(92,74,61,0.12)] pb-3">
+        <div className="min-w-0 text-[12px] font-black uppercase tracking-[0.14em]" style={{ color: "var(--text-primary)" }}>
+          <span>{primaryService || t("menu.service_standard")}</span>
+          {secondaryService && (
+            <>
+              <span className="mx-2 text-[rgba(92,74,61,0.42)]" aria-hidden="true">|</span>
+              <span>{secondaryService}</span>
+            </>
+          )}
         </div>
-        <div className="flex items-center gap-3">
-          <span
-            className="text-xs font-semibold uppercase tracking-wide"
-            style={{ color: "var(--text-secondary)" }}
+
+        <div className="relative shrink-0">
+          <button
+            ref={triggerRef}
+            type="button"
+            onClick={() => setOpen(!open)}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label={t("menu.sort_by")}
+            className="flex min-h-[34px] items-center gap-2 rounded-lg border border-[rgba(92,74,61,0.16)]
+              bg-white/75 px-3 text-sm font-semibold text-gray-800 transition-colors hover:bg-white
+              focus:outline-none focus:ring-2 focus:ring-[var(--grad-end)]/30 cursor-pointer"
           >
-            {t("menu.sort_by")}
-          </span>
-          <div className="relative">
-            <button
-              ref={triggerRef}
-              type="button"
-              onClick={() => setOpen(!open)}
-              aria-haspopup="listbox"
-              aria-expanded={open}
-              aria-label={t("menu.sort_by")}
-              className="flex items-center justify-between w-full min-w-[180px] min-h-[42px] pl-4 pr-10 py-2.5 rounded-xl
-                border bg-white text-sm font-medium text-gray-800
-                shadow-sm hover:shadow transition-shadow
-                focus:outline-none focus:ring-2 focus:ring-[var(--grad-end)]/40 focus:border-[var(--grad-end)]
-                cursor-pointer text-left"
-              style={{ borderColor: "rgba(139,111,71,0.35)" }}
-            >
-              <span>{t(selected.labelKey)}</span>
-              <ChevronDown
-                className={`absolute right-3 w-4 h-4 text-[var(--grad-end)] transition-transform ${
-                  open ? "rotate-180" : ""
-                }`}
-                strokeWidth={2.5}
-                aria-hidden
-              />
-            </button>
-          </div>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>
+              {t("menu.sort_by")}
+            </span>
+            <span>{t(selected.labelKey)}</span>
+            <ChevronDown
+              className={`w-4 h-4 text-[var(--grad-end)] transition-transform duration-200 ${
+                open ? "rotate-180" : ""
+              }`}
+              strokeWidth={2.5}
+              aria-hidden
+            />
+          </button>
         </div>
       </div>
       {createPortal(dropdownEl, document.body)}

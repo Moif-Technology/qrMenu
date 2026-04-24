@@ -2,14 +2,18 @@
 import NodeCache from "node-cache";
 import {
   getAllProductsFromMaster,
+  createQrMainGroup,
   createQrGroup,
   createQrSubgroup,
   addProductToQrMenu,
+  listQrMainGroups,
   listQrGroups,
   listQrSubgroups,
   listQrProducts,
+  updateQrMainGroup,
   updateQrGroup,
   updateQrSubgroup,
+  deleteQrMainGroup,
   deleteQrGroup,
   deleteQrSubgroup,
   removeProductFromQrMenu,
@@ -41,6 +45,64 @@ export async function getAllProducts(req, res, next) {
     
     const products = await getAllProductsFromMaster(filters);
     res.json({ ok: true, data: products });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/qr-menu/main-groups
+ * Create a new QR Main Group
+ */
+export async function createMainGroup(req, res, next) {
+  try {
+    const mainGroupData = req.body;
+    const result = await createQrMainGroup(mainGroupData);
+    clearQrMenuCache();
+    res.json({ ok: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/qr-menu/main-groups
+ * List all QR Main Groups
+ */
+export async function getMainGroups(req, res, next) {
+  try {
+    const mainGroups = await listQrMainGroups();
+    res.json({ ok: true, data: mainGroups });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PUT /api/qr-menu/main-groups/:qrMainGroupId
+ * Update a QR Main Group
+ */
+export async function updateMainGroup(req, res, next) {
+  try {
+    const { qrMainGroupId } = req.params;
+    const result = await updateQrMainGroup(Number(qrMainGroupId), req.body);
+    clearQrMenuCache();
+    res.json({ ok: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/qr-menu/main-groups/:qrMainGroupId
+ * Delete a QR Main Group
+ */
+export async function deleteMainGroup(req, res, next) {
+  try {
+    const { qrMainGroupId } = req.params;
+    const result = await deleteQrMainGroup(Number(qrMainGroupId));
+    clearQrMenuCache();
+    res.json({ ok: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -276,7 +338,7 @@ export async function getQrCategories(req, res, next) {
  */
 export async function getQrMenuItemsController(req, res, next) {
   try {
-    const { page = 1, pageSize = 24, search = "", qrGroupId, qrSubgroupId, sort = "new", _t } = req.query;
+    const { page = 1, pageSize = 24, search = "", qrMainGroupId, qrGroupId, qrSubgroupId, sort = "new", _t } = req.query;
     
     // If cache-busting timestamp is provided, skip cache
     const skipCache = _t !== undefined;
@@ -285,7 +347,7 @@ export async function getQrMenuItemsController(req, res, next) {
     const hasSearch = search && search.trim().length > 0;
     const cacheKey = (hasSearch || skipCache)
       ? null // Don't cache search results or when cache-busting
-      : `qr-menu-items:${qrGroupId || 'all'}:${qrSubgroupId || 'all'}:${page}:${pageSize}:${sort}`;
+      : `qr-menu-items:${qrMainGroupId || 'all'}:${qrGroupId || 'all'}:${qrSubgroupId || 'all'}:${page}:${pageSize}:${sort}`;
     
     // Check cache first (only if not skipping cache)
     let result = (!skipCache && cacheKey) ? qrMenuCache.get(cacheKey) : null;
@@ -302,6 +364,7 @@ export async function getQrMenuItemsController(req, res, next) {
         page: Number(page),
         pageSize: Number(pageSize),
         search: search.trim(),
+        qrMainGroupId: qrMainGroupId ? Number(qrMainGroupId) : null,
         qrGroupId: qrGroupId ? Number(qrGroupId) : null,
         qrSubgroupId: qrSubgroupId ? Number(qrSubgroupId) : null,
         sort
@@ -328,4 +391,3 @@ export function clearQrMenuCache() {
   qrMenuCache.flushAll();
   console.log("[QR-MENU][CACHE] Cache cleared");
 }
-

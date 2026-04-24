@@ -77,7 +77,12 @@
     "orders_in_progress_one": "{{count}} item in order",
     "orders_in_progress_other": "{{count}} items in order"
   },
-
+  "sidebar": {
+    "explore": "Explore",
+    "menu": "Our Menu",
+    "home": "Home",
+    "footer": "Experience Excellence"
+  },
   "reservation": {
     "page_title": "Table Reservation",
     "page_subtitle": "Choose date, time and party size, then add your contact details",

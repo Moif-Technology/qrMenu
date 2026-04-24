@@ -2,6 +2,10 @@
 import { Router } from "express";
 import {
   getAllProducts,
+  createMainGroup,
+  getMainGroups,
+  updateMainGroup,
+  deleteMainGroup,
   createGroup,
   getGroups,
   updateGroup,
@@ -29,6 +33,12 @@ router.use((req, res, next) => {
 // Products from ProductMaster
 router.get("/products/all", getAllProducts);
 
+// QR Main Groups
+router.post("/main-groups", createMainGroup);
+router.get("/main-groups", getMainGroups);
+router.put("/main-groups/:qrMainGroupId", updateMainGroup);
+router.delete("/main-groups/:qrMainGroupId", deleteMainGroup);
+
 // QR Groups
 router.post("/groups", createGroup);
 router.get("/groups", getGroups);
@@ -52,4 +62,3 @@ router.get("/categories", getQrCategories);
 router.get("/menu-items", getQrMenuItemsController);
 
 export default router;
-

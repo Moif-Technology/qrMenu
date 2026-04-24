@@ -16,6 +16,10 @@ import {
 import AllergyTagInput from "../component/AllergyTagInput";
 import {
   getAllProductsFromMaster,
+  getQrMainGroups,
+  createQrMainGroup,
+  updateQrMainGroup,
+  deleteQrMainGroup,
   getQrGroups,
   createQrGroup,
   updateQrGroup,
@@ -40,6 +44,7 @@ import {
 
 const TABS = {
   PRODUCTS: "products",
+  MAIN_GROUPS: "mainGroups",
   GROUPS: "groups",
   SUBGROUPS: "subgroups",
   PACKAGES: "packages",
@@ -57,10 +62,13 @@ export default function QRMenuManagement() {
   const [qrProductsRefreshKey, setQrProductsRefreshKey] = useState(0); // Key to force re-render when QR products refresh
 
   // Groups and Subgroups state
+  const [mainGroups, setMainGroups] = useState([]);
   const [groups, setGroups] = useState([]);
   const [subgroups, setSubgroups] = useState([]);
+  const [showMainGroupModal, setShowMainGroupModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showSubgroupModal, setShowSubgroupModal] = useState(false);
+  const [editingMainGroup, setEditingMainGroup] = useState(null);
   const [editingGroup, setEditingGroup] = useState(null);
   const [editingSubgroup, setEditingSubgroup] = useState(null);
   const [selectedGroupForSubgroup, setSelectedGroupForSubgroup] = useState(null);
@@ -72,6 +80,7 @@ export default function QRMenuManagement() {
   // Load data on mount
   useEffect(() => {
     loadAllProducts({});
+    loadMainGroups();
     loadGroups();
     loadSubgroups();
     loadQrProducts();
@@ -106,6 +115,15 @@ export default function QRMenuManagement() {
       setError(err?.response?.data?.error || err.message || "Failed to load products");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMainGroups = async () => {
+    try {
+      const data = await getQrMainGroups();
+      setMainGroups(data || []);
+    } catch (err) {
+      console.error("Failed to load main groups:", err);
     }
   };
 
@@ -205,6 +223,7 @@ export default function QRMenuManagement() {
       await Promise.all([
         loadQrProducts(), // Refresh QR products map (includes Allergies, FullDescription)
         loadAllProducts({}), // Refresh main products list
+        loadMainGroups(), // Refresh main groups in case they changed
         loadGroups(), // Refresh groups in case they changed
         loadSubgroups(), // Refresh subgroups in case they changed
       ]);
@@ -214,6 +233,53 @@ export default function QRMenuManagement() {
     } catch (err) {
       setError(err?.response?.data?.error || err.message || "Failed to update product");
       throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Main group handlers
+  const handleCreateMainGroup = () => {
+    setEditingMainGroup(null);
+    setShowMainGroupModal(true);
+  };
+
+  const handleEditMainGroup = (mainGroup) => {
+    setEditingMainGroup(mainGroup);
+    setShowMainGroupModal(true);
+  };
+
+  const handleSaveMainGroup = async (mainGroupData) => {
+    try {
+      setLoading(true);
+      setError("");
+      if (editingMainGroup) {
+        await updateQrMainGroup(editingMainGroup.QrMainGroupID, mainGroupData);
+      } else {
+        await createQrMainGroup(mainGroupData);
+      }
+      setShowMainGroupModal(false);
+      setEditingMainGroup(null);
+      await loadMainGroups();
+    } catch (err) {
+      setError(err?.response?.data?.error || err.message || "Failed to save main group");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteMainGroup = async (qrMainGroupId) => {
+    if (!window.confirm("Delete this main group? QR groups must be reassigned first.")) {
+      return;
+    }
+    try {
+      setLoading(true);
+      setError("");
+      await deleteQrMainGroup(qrMainGroupId);
+      await loadMainGroups();
+      await loadGroups();
+    } catch (err) {
+      setError(err?.response?.data?.error || err.message || "Failed to delete main group");
     } finally {
       setLoading(false);
     }
@@ -337,6 +403,7 @@ export default function QRMenuManagement() {
           <div className="flex space-x-8">
             {[
               { id: TABS.PRODUCTS, label: "Products", icon: Package },
+              { id: TABS.MAIN_GROUPS, label: "Main Groups", icon: FolderTree },
               { id: TABS.GROUPS, label: "Groups", icon: Folder },
               { id: TABS.SUBGROUPS, label: "Subgroups", icon: FolderTree },
               { id: TABS.PACKAGES, label: "📦 Packages", icon: Package },
@@ -372,6 +439,16 @@ export default function QRMenuManagement() {
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === TABS.MAIN_GROUPS && (
+          <MainGroupsTab
+            mainGroups={mainGroups}
+            loading={loading}
+            onCreate={handleCreateMainGroup}
+            onEdit={handleEditMainGroup}
+            onDelete={handleDeleteMainGroup}
+          />
+        )}
+
         {activeTab === TABS.PRODUCTS && (
           <ProductsTab
             key={`products-${qrProductsRefreshKey}`}
@@ -391,6 +468,7 @@ export default function QRMenuManagement() {
         {activeTab === TABS.GROUPS && (
           <GroupsTab
             groups={groups}
+            mainGroups={mainGroups}
             loading={loading}
             onCreate={handleCreateGroup}
             onEdit={handleEditGroup}
@@ -423,6 +501,18 @@ export default function QRMenuManagement() {
         )}
       </div>
 
+      {/* Main Group Modal */}
+      {showMainGroupModal && (
+        <MainGroupModal
+          onClose={() => {
+            setShowMainGroupModal(false);
+            setEditingMainGroup(null);
+          }}
+          onSave={handleSaveMainGroup}
+          editingMainGroup={editingMainGroup}
+        />
+      )}
+
       {/* Group Modal */}
       {showGroupModal && (
         <GroupModal
@@ -433,6 +523,7 @@ export default function QRMenuManagement() {
           onSave={handleSaveGroup}
           editingGroup={editingGroup}
           normalGroups={normalGroups}
+          mainGroups={mainGroups}
         />
       )}
 
@@ -1046,17 +1137,142 @@ function ProductsTab({
   );
 }
 
+// Main Groups Tab Component
+function sortMainGroups(groups) {
+  // Items with explicit SortOrder (> 0) come first, sorted by SortOrder ASC then name ASC for ties.
+  // Items with SortOrder = 0 or null/undefined (no order set) come last, sorted by name ASC.
+  const ordered = [];
+  const unordered = [];
+  for (const g of groups) {
+    const s = g.SortOrder;
+    if (s != null && s > 0) {
+      ordered.push(g);
+    } else {
+      unordered.push(g);
+    }
+  }
+  ordered.sort((a, b) => {
+    if (a.SortOrder !== b.SortOrder) return a.SortOrder - b.SortOrder;
+    return (a.MainGroupDescription || "").localeCompare(b.MainGroupDescription || "");
+  });
+  unordered.sort((a, b) =>
+    (a.MainGroupDescription || "").localeCompare(b.MainGroupDescription || "")
+  );
+  return [...ordered, ...unordered];
+}
+
+function MainGroupsTab({ mainGroups, loading, onCreate, onEdit, onDelete }) {
+  const sortedGroups = sortMainGroups(mainGroups || []);
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-semibold text-gray-900">QR Main Groups</h2>
+        <button onClick={onCreate} className="btn">
+          <Plus className="w-5 h-5 mr-2" />
+          Add Main Group
+        </button>
+      </div>
+
+      {loading && mainGroups.length === 0 ? (
+        <div className="text-center py-12 text-gray-500">Loading...</div>
+      ) : mainGroups.length === 0 ? (
+        <div className="text-center py-12 text-gray-500">
+          No main groups found. Create one to group related QR groups together.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {sortedGroups.map((mainGroup) => (
+            <div key={mainGroup.QrMainGroupID} className="card p-4">
+              <div className="flex justify-between items-start mb-2">
+                <div className="flex-1">
+                  <h3 className="font-semibold text-lg">
+                    {mainGroup.MainGroupDescription || "Untitled"}
+                  </h3>
+                  {mainGroup.MainGroupDescriptionArabic && mainGroup.MainGroupDescriptionArabic !== "0" && (
+                    <p className="text-sm text-gray-600 mt-1">
+                      {mainGroup.MainGroupDescriptionArabic}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {mainGroup.MainGroupCode && (
+                      <span className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded">
+                        {mainGroup.MainGroupCode}
+                      </span>
+                    )}
+                    {mainGroup.SortOrder > 0 && (
+                      <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
+                        #{mainGroup.SortOrder}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onEdit(mainGroup)}
+                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                    title="Edit"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => onDelete(mainGroup.QrMainGroupID)}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                {mainGroup.IsActive ? (
+                  <span className="flex items-center gap-1 text-xs text-green-600">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Active
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs text-gray-400">
+                    <XCircle className="w-3 h-3" />
+                    Inactive
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Groups Tab Component
-function GroupsTab({ groups, loading, onCreate, onEdit, onDelete }) {
+function GroupsTab({ groups, mainGroups, loading, onCreate, onEdit, onDelete }) {
+  const mainGroupNameById = new Map(
+    (mainGroups || []).map((mainGroup) => [
+      mainGroup.QrMainGroupID,
+      mainGroup.MainGroupDescription || mainGroup.MainGroupCode || `Main Group ${mainGroup.QrMainGroupID}`,
+    ])
+  );
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-semibold text-gray-900">QR Groups</h2>
-        <button onClick={onCreate} className="btn">
+        <button
+          onClick={onCreate}
+          className="btn disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!mainGroups || mainGroups.length === 0}
+          title={!mainGroups || mainGroups.length === 0 ? "Create a main group first" : "Add Group"}
+        >
           <Plus className="w-5 h-5 mr-2" />
           Add Group
         </button>
       </div>
+      {(!mainGroups || mainGroups.length === 0) && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Create at least one QR Main Group before adding QR Groups.
+        </div>
+      )}
 
       {loading && groups.length === 0 ? (
         <div className="text-center py-12 text-gray-500">Loading...</div>
@@ -1078,6 +1294,11 @@ function GroupsTab({ groups, loading, onCreate, onEdit, onDelete }) {
                     <span className="inline-block mt-2 text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded">
                       {group.GroupCode}
                     </span>
+                  )}
+                  {group.QrMainGroupID && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Main Group: {mainGroupNameById.get(group.QrMainGroupID) || group.QrMainGroupDescription || group.QrMainGroupID}
+                    </p>
                   )}
                 </div>
                 <div className="flex gap-2">
@@ -1229,10 +1450,160 @@ function SubgroupsTab({
   );
 }
 
-// Group Modal Component
-function GroupModal({ onClose, onSave, editingGroup, normalGroups = [] }) {
+// Main Group Modal Component
+function MainGroupModal({ onClose, onSave, editingMainGroup }) {
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
+    MainGroupID: null,
+    MainGroupDescription: "",
+    MainGroupDescriptionArabic: "",
+    MainGroupCode: "",
+    SortOrder: 0,
+    IsActive: true,
+  });
+
+  useEffect(() => {
+    if (editingMainGroup) {
+      setFormData({
+        MainGroupID: editingMainGroup.MainGroupID || null,
+        MainGroupDescription: editingMainGroup.MainGroupDescription || "",
+        MainGroupDescriptionArabic: editingMainGroup.MainGroupDescriptionArabic === "0" ? "" : editingMainGroup.MainGroupDescriptionArabic || "",
+        MainGroupCode: editingMainGroup.MainGroupCode || "",
+        SortOrder: editingMainGroup.SortOrder || 0,
+        IsActive: editingMainGroup.IsActive !== undefined ? editingMainGroup.IsActive : true,
+      });
+    } else {
+      setFormData({
+        MainGroupID: null,
+        MainGroupDescription: "",
+        MainGroupDescriptionArabic: "",
+        MainGroupCode: "",
+        SortOrder: 0,
+        IsActive: true,
+      });
+    }
+  }, [editingMainGroup]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.MainGroupDescription.trim()) {
+      alert("Please enter a main group description");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await onSave(formData);
+    } catch (err) {
+      console.error("Error saving main group:", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden">
+          <div className="p-6 border-b-2 border-gray-200 flex justify-between items-center bg-gradient-to-r from-blue-50 to-indigo-50">
+            <h2 className="text-2xl font-bold text-gray-900">
+              {editingMainGroup ? "Edit QR Main Group" : "Create New QR Main Group"}
+            </h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Main Group Description (English) *
+              </label>
+              <input
+                type="text"
+                value={formData.MainGroupDescription}
+                onChange={(e) => setFormData({ ...formData, MainGroupDescription: e.target.value })}
+                className="input"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Main Group Description (Arabic)
+              </label>
+              <input
+                type="text"
+                value={formData.MainGroupDescriptionArabic}
+                onChange={(e) => setFormData({ ...formData, MainGroupDescriptionArabic: e.target.value })}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Main Group Code</label>
+              <input
+                type="text"
+                value={formData.MainGroupCode}
+                onChange={(e) => setFormData({ ...formData, MainGroupCode: e.target.value })}
+                className="input"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Sort Order</label>
+                <input
+                  type="number"
+                  value={formData.SortOrder}
+                  onChange={(e) => setFormData({ ...formData, SortOrder: parseInt(e.target.value) || 0 })}
+                  className="input"
+                />
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={formData.IsActive}
+                    onChange={(e) => setFormData({ ...formData, IsActive: e.target.checked })}
+                    className="rounded"
+                  />
+                  <span className="text-sm font-medium text-gray-700">Active</span>
+                </label>
+              </div>
+            </div>
+            <div className="bg-gray-50 px-6 py-4 border-t-2 border-gray-200">
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-all"
+                  disabled={isSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 px-8 py-3 rounded-lg font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isSaving}
+                >
+                  {isSaving ? "Saving..." : (
+                    <>
+                      <Save className="w-5 h-5" />
+                      <span>{editingMainGroup ? "UPDATE MAIN GROUP" : "SAVE MAIN GROUP"}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Group Modal Component
+function GroupModal({ onClose, onSave, editingGroup, normalGroups = [], mainGroups = [] }) {
+  const [isSaving, setIsSaving] = useState(false);
+  const [formData, setFormData] = useState({
+    QrMainGroupID: null,
     GroupID: null, // Optional reference to normal GroupMaster
     GroupDescription: "",
     GroupDescriptionArabic: "",
@@ -1245,6 +1616,7 @@ function GroupModal({ onClose, onSave, editingGroup, normalGroups = [] }) {
   useEffect(() => {
     if (editingGroup) {
       setFormData({
+        QrMainGroupID: editingGroup.QrMainGroupID || null,
         GroupID: editingGroup.GroupID || null,
         GroupDescription: editingGroup.GroupDescription || "",
         GroupDescriptionArabic: editingGroup.GroupDescriptionArabic || "",
@@ -1256,6 +1628,7 @@ function GroupModal({ onClose, onSave, editingGroup, normalGroups = [] }) {
     } else {
       // Reset form when creating new group
       setFormData({
+        QrMainGroupID: null,
         GroupID: null,
         GroupDescription: "",
         GroupDescriptionArabic: "",
@@ -1269,6 +1642,10 @@ function GroupModal({ onClose, onSave, editingGroup, normalGroups = [] }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.QrMainGroupID) {
+      alert("Please choose a parent main group before saving this group");
+      return;
+    }
     if (!formData.GroupDescription.trim()) {
       alert("Please enter a group description");
       return;
@@ -1297,6 +1674,29 @@ function GroupModal({ onClose, onSave, editingGroup, normalGroups = [] }) {
             </button>
           </div>
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Parent Main Group *
+              </label>
+              <select
+                value={formData.QrMainGroupID || ""}
+                onChange={(e) =>
+                  setFormData({ ...formData, QrMainGroupID: e.target.value ? Number(e.target.value) : null })
+                }
+                className="input"
+                required
+              >
+                <option value="">Choose a main group</option>
+                {mainGroups.map((mainGroup) => (
+                  <option key={mainGroup.QrMainGroupID} value={mainGroup.QrMainGroupID}>
+                    {mainGroup.MainGroupDescription || mainGroup.MainGroupCode || `Main Group ${mainGroup.QrMainGroupID}`}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Required for the QR menu flow: customers first choose a main group, then a group, then subgroups or items.
+              </p>
+            </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Link to Normal Group (Optional)

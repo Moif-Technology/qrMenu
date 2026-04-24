@@ -233,7 +233,9 @@ body.enhanced-texture{
   transform: scale(.6);
 }
 .btn-pill:active .btn-ripple,
-.btn-pill-outline:active .btn-ripple{ opacity:1; transform: scale(1); transition:none; }
+.btn-pill-outline:active .btn-ripple,
+.item-card-add-cta:active .btn-ripple,
+.item-card-qty-btn:active .btn-ripple{ opacity:1; transform: scale(1); transition:none; }
 
 /* Optional legacy shortcut */
 .btn1{
@@ -322,6 +324,10 @@ body.enhanced-texture{
   @apply absolute right-0 top-0 h-full w-[92%] sm:w-[420px] shadow-2xl transition-transform;
   background-color: var(--bg-card);
   border-left: 1px solid rgba(139, 111, 71, .15);
+}
+.drawer__panel--left{ 
+  @apply left-0 right-auto border-l-0 border-r;
+  border-right: 1px solid rgba(139, 111, 71, .15);
 }
 
 .sheet{ @apply fixed inset-x-0 bottom-0 z-50; }

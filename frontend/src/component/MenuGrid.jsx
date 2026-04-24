@@ -3,7 +3,7 @@ import { useCart } from "../store/cartStore";
 import ItemCard from "./ItemCard";
 import PackageCard from "./PackageCard";
 
-export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPackageView = false }) {
+export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPackageView = false, sections = null }) {
   const add = useCart((s) => s.add);
 
   const handleQuickAdd = onQuickAdd ?? ((prod, selectedMods) => add(prod, selectedMods));
@@ -48,39 +48,72 @@ export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPac
           </div>
         )}
 
-        <div className={`grid gap-3 sm:gap-4 md:gap-6 ${
-          showingPackages 
-            ? '[grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] md:[grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]' 
-            : '[grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--card-min,170px)),1fr))] [--card-min:170px] sm:[--card-min:200px] md:[--card-min:220px] lg:[--card-min:240px]'
-        }`}>
-        {items.map((p) => {
-          const productId = String(
-            p._raw?.product_id || 
-            p._raw?.["pm.ProductID"] || 
-            p._raw?.["pm_ProductID"] ||
-            p.product_id ||
-            p.id
-          );
-          // Include categoryKey in key to force React to remount ItemCard when category changes
-          // This ensures images reset properly on mobile browsers
-          const uniqueKey = `${categoryKey || 'default'}_${p.id || p.name || productId}`;
-          
-          // Use PackageCard for packages (IsPackageHeader = 1), ItemCard for regular items
-          const isPackageItem = p._raw?.["pm.IsPackageHeader"] === 1 || p._raw?.IsPackageHeader === 1 || p._raw?.["pm.IsPackageHeader"] === true || p._raw?.IsPackageHeader === true;
-          const CardComponent = isPackageItem ? PackageCard : ItemCard;
-          
-          return (
-            <div key={uniqueKey} data-product-id={productId}>
-              <CardComponent
-                item={p}
-                onQuickAdd={handleQuickAdd}
-                onOpen={onOpen}
-              />
-            </div>
-          );
-        })}
-      </div>
+        {sections && sections.length > 0 ? (
+          <div className="space-y-16 sm:space-y-20">
+            {sections.map((section) => (
+              <section key={section.id} aria-labelledby={`menu-section-title-${section.id}`}>
+                <header className="mb-6">
+                  <div className="flex items-center gap-4 border-b border-[rgba(92,74,61,0.16)] pb-5">
+                    <span className="h-9 w-1.5 rounded-sm bg-[rgba(92,74,61,0.56)]" aria-hidden="true" />
+                    <h2 id={`menu-section-title-${section.id}`} className="min-w-0 text-2xl font-semibold tracking-normal sm:text-3xl" style={{ color: "var(--text-primary)" }}>
+                      {section.title}
+                    </h2>
+                  </div>
+                </header>
+
+                <ProductGrid
+                  items={section.items}
+                  categoryKey={`${categoryKey || "default"}_${section.id}`}
+                  showingPackages={showingPackages}
+                  handleQuickAdd={handleQuickAdd}
+                  onOpen={onOpen}
+                />
+              </section>
+            ))}
+          </div>
+        ) : (
+          <ProductGrid
+            items={items}
+            categoryKey={categoryKey}
+            showingPackages={showingPackages}
+            handleQuickAdd={handleQuickAdd}
+            onOpen={onOpen}
+          />
+        )}
     </div>
     </section>
+  );
+}
+
+function ProductGrid({ items, categoryKey, showingPackages, handleQuickAdd, onOpen }) {
+  return (
+    <div className={`grid gap-3 sm:gap-4 md:gap-6 ${
+      showingPackages
+        ? '[grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] md:[grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]'
+        : '[grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--card-min,170px)),1fr))] [--card-min:170px] sm:[--card-min:200px] md:[--card-min:220px] lg:[--card-min:240px]'
+    }`}>
+      {items.map((p) => {
+        const productId = String(
+          p._raw?.product_id ||
+          p._raw?.["pm.ProductID"] ||
+          p._raw?.["pm_ProductID"] ||
+          p.product_id ||
+          p.id
+        );
+        const uniqueKey = `${categoryKey || 'default'}_${p.id || p.name || productId}`;
+        const isPackageItem = p._raw?.["pm.IsPackageHeader"] === 1 || p._raw?.IsPackageHeader === 1 || p._raw?.["pm.IsPackageHeader"] === true || p._raw?.IsPackageHeader === true;
+        const CardComponent = isPackageItem ? PackageCard : ItemCard;
+
+        return (
+          <div key={uniqueKey} data-product-id={productId}>
+            <CardComponent
+              item={p}
+              onQuickAdd={handleQuickAdd}
+              onOpen={onOpen}
+            />
+          </div>
+        );
+      })}
+    </div>
   );
 }

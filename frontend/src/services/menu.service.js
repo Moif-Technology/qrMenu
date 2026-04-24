@@ -106,6 +106,7 @@ export async function getQrCategories() {
  * @param {number} params.page
  * @param {number} params.pageSize
  * @param {string} params.search
+ * @param {number} params.qrMainGroupId
  * @param {number} params.qrGroupId
  * @param {number} params.qrSubgroupId
  * @param {"new"|"name"|"id_desc"|"id_asc"} params.sort
@@ -115,6 +116,7 @@ export async function getQrMenuItems(params = {}) {
     page = 1,
     pageSize = 24,
     search = "",
+    qrMainGroupId,
     qrGroupId,
     qrSubgroupId,
     sort = "new"
@@ -126,6 +128,7 @@ export async function getQrMenuItems(params = {}) {
       page, 
       pageSize, 
       search, 
+      qrMainGroupId,
       qrGroupId, 
       qrSubgroupId, 
       sort,

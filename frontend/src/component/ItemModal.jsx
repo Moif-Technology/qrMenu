@@ -382,17 +382,39 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
           </div>
         </div>
 
-        {/* Sticky Footer */}
-        <div className="p-4 border-t border-neutral-100 bg-white/80 backdrop-blur-sm flex-shrink-0">
+        {/* Sticky Footer — large tap targets + safe area for notched phones */}
+        <div
+          className="flex flex-shrink-0 flex-col gap-2 border-t border-neutral-100 bg-white/90 p-4 backdrop-blur-sm sm:flex-row sm:gap-3 sm:p-5"
+          style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 0px))" }}
+        >
+          {onAdd && (
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(12);
+                onAdd([]);
+                handleClose();
+              }}
+              className="btn-pill relative flex min-h-[52px] w-full touch-manipulation items-center justify-center gap-3 rounded-2xl px-5 text-base font-semibold shadow-[0_10px_28px_rgba(58,46,46,0.22)] transition-[transform,box-shadow] active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--grad-start)] focus-visible:ring-offset-2 sm:order-first sm:min-h-[48px] sm:flex-1 sm:rounded-2xl"
+            >
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20 sm:h-9 sm:w-9" aria-hidden>
+                <Icon name="plus" className="h-6 w-6 sm:h-5 sm:w-5" />
+              </span>
+              <span>{t("menu.add_to_cart") || "Add to cart"}</span>
+              <span className="btn-ripple" aria-hidden />
+            </button>
+          )}
           <button
+            type="button"
             onClick={handleClose}
-            className="w-full py-3.5 px-6 rounded-2xl text-white font-semibold text-base hover:opacity-90 active:scale-[0.98] transition-all shadow-lg"
-            style={{
-              background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
-              boxShadow: "0 10px 25px rgba(139, 111, 71, 0.2)"
-            }}
+            className={`min-h-[48px] w-full touch-manipulation rounded-2xl px-6 text-base font-semibold transition-all active:scale-[0.98] sm:flex-1 ${
+              onAdd
+                ? "border-2 border-neutral-200 text-neutral-700 hover:bg-neutral-50"
+                : "btn-pill relative overflow-hidden text-white"
+            }`}
           >
             {t("buttons.close") || "Close"}
+            {!onAdd && <span className="btn-ripple" aria-hidden />}
           </button>
         </div>
       </div>

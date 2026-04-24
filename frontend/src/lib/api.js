@@ -4,40 +4,9 @@ import { warn } from "./logger";
 export const API = axios.create({
   
   baseURL: import.meta.env.VITE_API_BASE_URL || "https://api.deynoqr.com/api",
-  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5001/api",
+  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://192.168.0.195:5001/api",
   timeout: 60000 // Increased to 60 seconds to handle complex queries with image processing
 
-});
-
-
-// Force fresh reads for time-sensitive QR/payment endpoints.
-API.interceptors.request.use((config) => {
-  const method = String(config.method || "get").toLowerCase();
-  const url = String(config.url || "");
-  const isSensitiveGet =
-    method === "get" && (
-      url.includes("/payment/balance/") ||
-      url.includes("/payment/paid-items/") ||
-      url.includes("/telr/check")
-    );
-  const isResolvePost = method === "post" && url.includes("/r/resolve");
-
-  if (isSensitiveGet || isResolvePost) {
-    config.headers = {
-      ...(config.headers || {}),
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
-    };
-  }
-
-  if (isSensitiveGet) {
-    const nextParams = { ...(config.params || {}) };
-    if (nextParams._t == null) nextParams._t = Date.now();
-    config.params = nextParams;
-  }
-
-  return config;
 });
 
 

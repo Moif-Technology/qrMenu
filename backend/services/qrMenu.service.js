@@ -6,6 +6,7 @@ import { applyCloudinaryTransformations, generateBlurUpThumbnail } from "./cloud
 
 const T_PRODUCT_MASTER = "dbo.ProductMaster";
 const T_PRODUCT_CHILD = "dbo.ProductChild";
+const T_QR_MAIN_GROUP = "dbo.QrMainGroupMaster";
 const T_QR_GROUP = "dbo.QrGroupMaster";
 const T_QR_SUBGROUP = "dbo.QrSubgroup";
 const T_QR_PRODUCT_MASTER = "dbo.QrProductMaster";
@@ -16,8 +17,22 @@ const q = (n) => `[${n}]`;
 
 /**
  * Get next ID for QR tables within transaction (to avoid race conditions)
- * QR Groups start from 1000, QR Subgroups start from 2000
+ * QR Groups start from 1000, QR Subgroups start from 2000, QR Main Groups start from 3000
  */
+async function getNextQrMainGroupId(tx) {
+  const req = new mssql.Request(tx);
+  const result = await req.query(`
+    SELECT 
+      CASE 
+        WHEN MAX(${q("QrMainGroupID")}) IS NULL THEN 3000
+        WHEN MAX(${q("QrMainGroupID")}) < 3000 THEN 3000
+        ELSE MAX(${q("QrMainGroupID")}) + 1
+      END AS nextId
+    FROM ${T_QR_MAIN_GROUP} WITH (UPDLOCK, HOLDLOCK)
+  `);
+  return Number(result.recordset[0]?.nextId || 3000);
+}
+
 async function getNextQrGroupId(tx) {
   const req = new mssql.Request(tx);
   const result = await req.query(`
@@ -48,6 +63,151 @@ async function getNextQrSubgroupId(tx) {
 
 const T_GROUP_MASTER = "dbo.GroupMaster";
 const T_SUBGROUP_MASTER = "dbo.SubGroupMaster";
+
+/**
+ * List all QR Main Groups
+ */
+export async function listQrMainGroups() {
+  const pool = await connectToDb();
+  const request = pool.request();
+  const sql = `
+    SELECT
+      ${q("ID")},
+      ${q("QrMainGroupID")},
+      ${q("MainGroupID")},
+      ${q("MainGroupCode")},
+      ${q("MainGroupDescription")},
+      ${q("MainGroupDescriptionArabic")},
+      ${q("SortOrder")},
+      ${q("IsActive")},
+      ${q("CrOn")},
+      ${q("ModOn")},
+      ${q("CrBy")},
+      ${q("ModBy")}
+    FROM ${T_QR_MAIN_GROUP}
+    ORDER BY ${q("SortOrder")} ASC, ${q("MainGroupDescription")} ASC
+  `;
+  const result = await request.query(sql);
+  return result.recordset;
+}
+
+/**
+ * Create a QR Main Group
+ */
+export async function createQrMainGroup(mainGroupData) {
+  const pool = await connectToDb();
+  const tx = new mssql.Transaction(pool);
+
+  try {
+    await tx.begin();
+
+    const qrMainGroupId = await getNextQrMainGroupId(tx);
+    const req = new mssql.Request(tx);
+    req.input("QrMainGroupID", mssql.BigInt, qrMainGroupId);
+    req.input("MainGroupID", mssql.BigInt, mainGroupData.MainGroupID || null);
+    req.input("MainGroupCode", mssql.VarChar, mainGroupData.MainGroupCode || "0");
+    req.input("MainGroupDescription", mssql.VarChar, mainGroupData.MainGroupDescription || null);
+    req.input("MainGroupDescriptionArabic", mssql.NVarChar, mainGroupData.MainGroupDescriptionArabic || "0");
+    req.input("SortOrder", mssql.Int, mainGroupData.SortOrder || 0);
+    req.input("IsActive", mssql.Bit, mainGroupData.IsActive !== undefined ? mainGroupData.IsActive : 1);
+    req.input("CrBy", mssql.VarChar, mainGroupData.CrBy || "ADMIN");
+    req.input("ModBy", mssql.VarChar, mainGroupData.ModBy || "ADMIN");
+
+    const result = await req.query(`
+      INSERT INTO ${T_QR_MAIN_GROUP} (
+        ${q("QrMainGroupID")},
+        ${q("MainGroupID")},
+        ${q("MainGroupCode")},
+        ${q("MainGroupDescription")},
+        ${q("MainGroupDescriptionArabic")},
+        ${q("SortOrder")},
+        ${q("IsActive")},
+        ${q("CrBy")},
+        ${q("CrOn")},
+        ${q("ModBy")},
+        ${q("ModOn")}
+      ) VALUES (
+        @QrMainGroupID,
+        @MainGroupID,
+        @MainGroupCode,
+        @MainGroupDescription,
+        @MainGroupDescriptionArabic,
+        @SortOrder,
+        @IsActive,
+        @CrBy,
+        GETDATE(),
+        @ModBy,
+        GETDATE()
+      );
+      SELECT SCOPE_IDENTITY() AS ID, @QrMainGroupID AS QrMainGroupID;
+    `);
+
+    await tx.commit();
+    return {
+      ID: result.recordset[0].ID,
+      QrMainGroupID: result.recordset[0].QrMainGroupID,
+      ...mainGroupData
+    };
+  } catch (error) {
+    await tx.rollback();
+    throw error;
+  }
+}
+
+/**
+ * Update a QR Main Group
+ */
+export async function updateQrMainGroup(qrMainGroupId, updateData) {
+  const pool = await connectToDb();
+  const request = pool.request();
+
+  request.input("QrMainGroupID", mssql.BigInt, qrMainGroupId);
+  request.input("MainGroupID", mssql.BigInt, updateData.MainGroupID !== undefined ? updateData.MainGroupID : null);
+  request.input("MainGroupCode", mssql.VarChar, updateData.MainGroupCode || "0");
+  request.input("MainGroupDescription", mssql.VarChar, updateData.MainGroupDescription);
+  request.input("MainGroupDescriptionArabic", mssql.NVarChar, updateData.MainGroupDescriptionArabic || "0");
+  request.input("SortOrder", mssql.Int, updateData.SortOrder || 0);
+  request.input("IsActive", mssql.Bit, updateData.IsActive !== undefined ? updateData.IsActive : 1);
+  request.input("ModBy", mssql.VarChar, updateData.ModBy || "ADMIN");
+
+  await request.query(`
+    UPDATE ${T_QR_MAIN_GROUP}
+    SET
+      ${q("MainGroupID")} = @MainGroupID,
+      ${q("MainGroupCode")} = @MainGroupCode,
+      ${q("MainGroupDescription")} = @MainGroupDescription,
+      ${q("MainGroupDescriptionArabic")} = @MainGroupDescriptionArabic,
+      ${q("SortOrder")} = @SortOrder,
+      ${q("IsActive")} = @IsActive,
+      ${q("ModBy")} = @ModBy,
+      ${q("ModOn")} = GETDATE()
+    WHERE ${q("QrMainGroupID")} = @QrMainGroupID
+  `);
+
+  return { success: true, QrMainGroupID: qrMainGroupId };
+}
+
+/**
+ * Delete a QR Main Group
+ */
+export async function deleteQrMainGroup(qrMainGroupId) {
+  const pool = await connectToDb();
+  const request = pool.request();
+
+  const checkGroups = await request
+    .input("QrMainGroupID", mssql.BigInt, qrMainGroupId)
+    .query(`SELECT COUNT(*) AS count FROM ${T_QR_GROUP} WHERE ${q("QrMainGroupID")} = @QrMainGroupID`);
+
+  if (checkGroups.recordset[0]?.count > 0) {
+    throw new Error("Cannot delete main group: QR groups are assigned to this main group. Please reassign groups first.");
+  }
+
+  await request
+    .input("QrMainGroupID", mssql.BigInt, qrMainGroupId)
+    .query(`DELETE FROM ${T_QR_MAIN_GROUP} WHERE ${q("QrMainGroupID")} = @QrMainGroupID`);
+
+  return { success: true, QrMainGroupID: qrMainGroupId };
+}
 
 /**
  * Fetch all products from ProductMaster with normal group and subgroup information
@@ -145,21 +305,24 @@ export async function listQrGroups() {
   const request = pool.request();
   const sql = `
     SELECT
-      ${q("ID")},
-      ${q("QrGroupID")},
-      ${q("GroupID")},
-      ${q("GroupDescription")},
-      ${q("GroupDescriptionArabic")},
-      ${q("GroupCode")},
-      ${q("keyshift")},
-      ${q("SortOrder")},
-      ${q("IsActive")},
-      ${q("CrOn")},
-      ${q("ModOn")},
-      ${q("CrBy")},
-      ${q("ModBy")}
-    FROM ${T_QR_GROUP}
-    ORDER BY ${q("SortOrder")} ASC, ${q("GroupDescription")} ASC
+      qg.${q("ID")},
+      qg.${q("QrGroupID")},
+      qg.${q("QrMainGroupID")},
+      qg.${q("GroupID")},
+      qg.${q("GroupDescription")},
+      qg.${q("GroupDescriptionArabic")},
+      qg.${q("GroupCode")},
+      qg.${q("keyshift")},
+      qg.${q("SortOrder")},
+      qg.${q("IsActive")},
+      qg.${q("CrOn")},
+      qg.${q("ModOn")},
+      qg.${q("CrBy")},
+      qg.${q("ModBy")},
+      qmg.${q("MainGroupDescription")} AS QrMainGroupDescription
+    FROM ${T_QR_GROUP} qg
+    LEFT JOIN ${T_QR_MAIN_GROUP} qmg ON qmg.${q("QrMainGroupID")} = qg.${q("QrMainGroupID")}
+    ORDER BY qg.${q("SortOrder")} ASC, qg.${q("GroupDescription")} ASC
   `;
   const result = await request.query(sql);
   return result.recordset;
@@ -180,6 +343,7 @@ export async function createQrGroup(groupData) {
     const sql = `
       INSERT INTO ${T_QR_GROUP} (
         ${q("QrGroupID")},
+        ${q("QrMainGroupID")},
         ${q("GroupID")},
         ${q("GroupDescription")},
         ${q("GroupDescriptionArabic")},
@@ -193,6 +357,7 @@ export async function createQrGroup(groupData) {
         ${q("ModBy")}
       ) VALUES (
         @QrGroupID,
+        @QrMainGroupID,
         @GroupID,
         @GroupDescription,
         @GroupDescriptionArabic,
@@ -210,6 +375,7 @@ export async function createQrGroup(groupData) {
     
     const req = new mssql.Request(tx);
     req.input("QrGroupID", mssql.BigInt, qrGroupId);
+    req.input("QrMainGroupID", mssql.BigInt, groupData.QrMainGroupID || null);
     req.input("GroupID", mssql.BigInt, groupData.GroupID || null);
     req.input("GroupDescription", mssql.NVarChar, groupData.GroupDescription || null);
     req.input("GroupDescriptionArabic", mssql.NVarChar, groupData.GroupDescriptionArabic || null);
@@ -245,6 +411,7 @@ export async function updateQrGroup(qrGroupId, updateData) {
     UPDATE ${T_QR_GROUP}
     SET
       ${q("GroupID")} = @GroupID,
+      ${q("QrMainGroupID")} = @QrMainGroupID,
       ${q("GroupDescription")} = @GroupDescription,
       ${q("GroupDescriptionArabic")} = @GroupDescriptionArabic,
       ${q("GroupCode")} = @GroupCode,
@@ -257,6 +424,7 @@ export async function updateQrGroup(qrGroupId, updateData) {
   `;
   
   request.input("QrGroupID", mssql.BigInt, qrGroupId);
+  request.input("QrMainGroupID", mssql.BigInt, updateData.QrMainGroupID !== undefined ? updateData.QrMainGroupID : null);
   request.input("GroupID", mssql.BigInt, updateData.GroupID !== undefined ? updateData.GroupID : null);
   request.input("GroupDescription", mssql.NVarChar, updateData.GroupDescription);
   request.input("GroupDescriptionArabic", mssql.NVarChar, updateData.GroupDescriptionArabic || null);
@@ -1085,11 +1253,28 @@ export async function removeProductFromQrMenu(productId) {
 export async function getQrMenuCategories() {
   const pool = await connectToDb();
   const request = pool.request();
+
+  const mainGroupsSql = `
+    SELECT
+      ${q("QrMainGroupID")} AS mainGroupId,
+      ${q("MainGroupID")} AS sourceMainGroupId,
+      ${q("MainGroupDescription")} AS name,
+      ${q("MainGroupCode")} AS code,
+      ${q("MainGroupDescriptionArabic")} AS name_ar,
+      ${q("SortOrder")} AS sortOrder
+    FROM ${T_QR_MAIN_GROUP}
+    WHERE ${q("IsActive")} = 1
+    ORDER BY ${q("SortOrder")} ASC, ${q("MainGroupDescription")} ASC
+  `;
+
+  const mainGroupsResult = await request.query(mainGroupsSql);
+  const mainGroups = mainGroupsResult.recordset;
   
   // Get all active QR Groups
   const groupsSql = `
     SELECT
       ${q("QrGroupID")} AS groupId,
+      ${q("QrMainGroupID")} AS mainGroupId,
       ${q("GroupDescription")} AS name,
       ${q("GroupCode")} AS code,
       ${q("GroupDescriptionArabic")} AS name_ar,
@@ -1100,7 +1285,13 @@ export async function getQrMenuCategories() {
   `;
   
   const groupsResult = await request.query(groupsSql);
-  const groups = groupsResult.recordset;
+  const groups = groupsResult.recordset.map(group => ({
+    ...group,
+    groupId: typeof group.groupId === "number" ? group.groupId : parseInt(group.groupId) || group.groupId,
+    mainGroupId: group.mainGroupId
+      ? (typeof group.mainGroupId === "number" ? group.mainGroupId : parseInt(group.mainGroupId) || group.mainGroupId)
+      : null
+  }));
   
   // Get all active QR Subgroups
   const subgroupsSql = `
@@ -1137,24 +1328,44 @@ export async function getQrMenuCategories() {
   console.log("[QR-MENU] Subgroups found:", subgroups.length);
   console.log("[QR-MENU] Subgroups by group:", Object.keys(subgroupsByGroup).length, "groups have subgroups");
   
-  // Combine groups with their subgroups (normalize groupId for matching)
-  const result = groups.map(group => {
-    const normalizedGroupId = typeof group.groupId === 'number' 
-      ? group.groupId 
-      : parseInt(group.groupId) || group.groupId;
-    
-    const groupSubgroups = subgroupsByGroup[normalizedGroupId] || [];
-    
-    console.log(`[QR-MENU] Group ${group.name} (ID: ${normalizedGroupId}) has ${groupSubgroups.length} subgroups`);
-    
-    return {
-      ...group,
-      groupId: normalizedGroupId, // Ensure consistent type
-      subgroups: groupSubgroups
-    };
+  const groupsWithSubgroups = groups.map(group => {
+    const groupSubgroups = subgroupsByGroup[group.groupId] || [];
+    console.log(`[QR-MENU] Group ${group.name} (ID: ${group.groupId}) has ${groupSubgroups.length} subgroups`);
+    return { ...group, subgroups: groupSubgroups };
   });
+
+  const groupsByMainGroup = {};
+  groupsWithSubgroups.forEach(group => {
+    if (!group.mainGroupId) return;
+    if (!groupsByMainGroup[group.mainGroupId]) {
+      groupsByMainGroup[group.mainGroupId] = [];
+    }
+    groupsByMainGroup[group.mainGroupId].push(group);
+  });
+
+  const result = [
+    ...mainGroups.map(mainGroup => {
+      const normalizedMainGroupId = typeof mainGroup.mainGroupId === "number"
+        ? mainGroup.mainGroupId
+        : parseInt(mainGroup.mainGroupId) || mainGroup.mainGroupId;
+
+      return {
+        ...mainGroup,
+        mainGroupId: normalizedMainGroupId,
+        type: "mainGroup",
+        groups: groupsByMainGroup[normalizedMainGroupId] || []
+      };
+    }),
+    ...groupsWithSubgroups
+      .filter(group => !group.mainGroupId)
+      .map(group => ({ ...group, type: "group" }))
+  ];
   
-  console.log("[QR-MENU] Final result:", result.map(g => ({ name: g.name, subgroupCount: g.subgroups.length })));
+  console.log("[QR-MENU] Final result:", result.map(category => ({
+    name: category.name,
+    groupCount: category.groups?.length || 0,
+    subgroupCount: category.subgroups?.length || 0
+  })));
   
   return result;
 }
@@ -1167,6 +1378,7 @@ export async function getQrMenuItems({
   page = 1,
   pageSize = 24,
   search = "",
+  qrMainGroupId = null,
   qrGroupId = null,
   qrSubgroupId = null,
   sort = "new",
@@ -1196,6 +1408,11 @@ export async function getQrMenuItems({
     whereClause += ` AND qpm.${q("QrGroupID")} = @qrGroupId`;
     request.input("qrGroupId", mssql.BigInt, qrGroupId);
   }
+
+  if (qrMainGroupId) {
+    whereClause += ` AND qg.${q("QrMainGroupID")} = @qrMainGroupId`;
+    request.input("qrMainGroupId", mssql.BigInt, qrMainGroupId);
+  }
   
   if (qrSubgroupId) {
     whereClause += ` AND qpm.${q("QrSubgroupID")} = @qrSubgroupId`;
@@ -1204,7 +1421,9 @@ export async function getQrMenuItems({
   
   // Determine ORDER BY
   let orderBy = `qpm.${q("ModOn")} DESC, qpm.${q("CrOn")} DESC`;
-  if (sort === "name") {
+  if (qrMainGroupId && sort === "new") {
+    orderBy = `qg.${q("SortOrder")} ASC, qg.${q("GroupDescription")} ASC, qsg.${q("SortOrder")} ASC, qpm.${q("ModOn")} DESC, qpm.${q("CrOn")} DESC`;
+  } else if (sort === "name") {
     orderBy = `qpm.${q("Description")} ASC`;
   } else if (sort === "id_desc") {
     orderBy = `qpm.${q("ProductID")} DESC`;
@@ -1234,6 +1453,13 @@ export async function getQrMenuItems({
       qpm.${q("SubGroupID")} AS [pm.SubGroupID], -- Normal SubGroupID from ProductMaster (used by KOT)
       qpm.${q("QrGroupID")} AS [pm.QrGroupID], -- QR GroupID (for display/filtering)
       qpm.${q("QrSubgroupID")} AS [pm.QrSubgroupID], -- QR SubGroupID (for display/filtering)
+      qg.${q("QrMainGroupID")} AS [pm.QrMainGroupID],
+      qg.${q("GroupDescription")} AS [pm.QrGroupDescription],
+      qg.${q("GroupDescriptionArabic")} AS [pm.QrGroupDescriptionArabic],
+      qg.${q("SortOrder")} AS [pm.QrGroupSortOrder],
+      qsg.${q("SubgroupDescription")} AS [pm.QrSubgroupDescription],
+      qsg.${q("SubgroupDescriptionArabic")} AS [pm.QrSubgroupDescriptionArabic],
+      qsg.${q("SortOrder")} AS [pm.QrSubgroupSortOrder],
       qpm.${q("ProductType")} AS [pm.ProductType], -- ProductType (for filtering RAW MATERIAL products)
       qpm.${q("IsPackageHeader")} AS [pm.IsPackageHeader], -- IsPackageHeader (for filtering packages from regular items)
       qpm.${q("ModOn")} AS [pm.ModOn],
@@ -1253,6 +1479,8 @@ export async function getQrMenuItems({
       -- Get Cloudinary URL from ImageMaster (latest) using OUTER APPLY (FAST)
       imap.${q("CloudinaryUrl")} AS cloudinaryUrl` : ''}
     FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
+    LEFT JOIN ${T_QR_GROUP} qg WITH (NOLOCK) ON qg.${q("QrGroupID")} = qpm.${q("QrGroupID")}
+    LEFT JOIN ${T_QR_SUBGROUP} qsg WITH (NOLOCK) ON qsg.${q("QrSubgroupID")} = qpm.${q("QrSubgroupID")}
     -- Get latest QrProductChild row using OUTER APPLY (FAST - only queries QR table)
     -- This is the ONLY lookup needed for pricing - everything else comes from QR tables
     OUTER APPLY (
@@ -1352,12 +1580,17 @@ export async function getQrMenuItems({
       console.error(`[QR-MENU] Diagnostic query failed:`, diagError.message);
     }
   }
-  
+
   // Get total count - only count products with ProductType = 'Normal' (or NULL for backwards compatibility)
   // This filters out RAW MATERIAL and other non-Normal product types
   // Include packages (IsPackageHeader = 1) - they will be displayed using PackageCard in the frontend
   const countRequest = pool.request();
   let countWhereClause = `WHERE qpm.${q("IsActive")} = 1 AND (qpm.${q("ProductType")} IS NULL OR UPPER(LTRIM(RTRIM(qpm.${q("ProductType")}))) = 'NORMAL')`;
+
+  if (qrMainGroupId) {
+    countWhereClause += ` AND qg.${q("QrMainGroupID")} = @qrMainGroupId`;
+    countRequest.input("qrMainGroupId", mssql.BigInt, qrMainGroupId);
+  }
   
   if (search) {
     countWhereClause += ` AND (
@@ -1381,6 +1614,7 @@ export async function getQrMenuItems({
   const countSql = `
     SELECT COUNT(*) AS total
     FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)
+    LEFT JOIN ${T_QR_GROUP} qg WITH (NOLOCK) ON qg.${q("QrGroupID")} = qpm.${q("QrGroupID")}
     ${countWhereClause}
     OPTION (RECOMPILE) -- Force fresh query plan to avoid stale data after schema changes
   `;

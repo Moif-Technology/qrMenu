@@ -1,23 +1,23 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-// import CartDrawer from "../component/CartDrawer";
+import CartDrawer from "../component/CartDrawer";
 import CategoryTabs from "../component/CategoryTabs";
 import FilterBar from "../component/FilterBar";
-// import FloatingCartButton from "../component/FloatingCartButton";
 import ItemModal from "../component/ItemModal";
 import MenuGrid from "../component/MenuGrid";
+import MenuGroupList from "../component/MenuGroupList";
 import PackageListingCard from "../component/PackageListingCard";
 // import SearchBar from "../component/SearchBar";
+import { useTranslation } from "react-i18next";
+import Icon from "../component/Icon";
 import ScrollTopButton from "../component/ScrollTopButton";
 import TopBar from "../component/TopBar";
 import { useCart } from "../store/cartStore";
-import { useTranslation } from "react-i18next";
 import { useUI } from "../store/uiStore";
-import Icon from "../component/Icon";
 
 // 🔌 LIVE API
 import { log, error as logError } from "../lib/logger";
-import { getCategories, getItems, getSingleProductImage, getSingleProductImageBinary, getImageMapping, getQrCategories, getQrMenuItems } from "../services/menu.service";
+import { getImageMapping, getQrCategories, getQrMenuItems, getSingleProductImageBinary } from "../services/menu.service";
 import { getPackageHeaders } from "../services/package.service";
 import { checkTableOrders } from "../services/payment.service";
 
@@ -26,6 +26,8 @@ import { checkTableOrders } from "../services/payment.service";
 const COMMON_IMAGE =
   import.meta?.env?.VITE_MENU_IMG ||
   "https://res.cloudinary.com/danoolbdz/image/upload/v1766755726/no-image-icon-23500_j6y6gn.jpg";
+const MENU_CATEGORY_LAYOUT = import.meta?.env?.VITE_MENU_CATEGORY_LAYOUT || "drilldown";
+const USE_VERTICAL_CATEGORY_NAV = MENU_CATEGORY_LAYOUT !== "legacy";
 
 // ————————————————————————————————————————————————
 // Helpers to normalize API → UI
@@ -171,8 +173,98 @@ function toApiSort(uiSort) {
 }
 // ————————————————————————————————————————————————
 
+function categoryName(entity, lang, fallback) {
+  if (lang === "ar" && entity?.name_ar && entity.name_ar.trim()) {
+    return entity.name_ar.trim();
+  }
+  return (
+    entity?.name ||
+    entity?.GroupDescription ||
+    entity?.MainGroupDescription ||
+    entity?.SubgroupDescription ||
+    fallback
+  );
+}
+
+// Sort by explicit SortOrder first (> 0), then unordered (= 0/null) alphabetically.
+// This ensures SortOrder=1 beats SortOrder=0 (which means "unset"), with name as tiebreaker.
+function sortByOrder(items, nameKey) {
+  const ordered = items.filter((i) => i.sortOrder > 0);
+  const unordered = items.filter((i) => !(i.sortOrder > 0));
+  ordered.sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return String(a[nameKey] || "").localeCompare(String(b[nameKey] || ""));
+  });
+  unordered.sort((a, b) =>
+    String(a[nameKey] || "").localeCompare(String(b[nameKey] || ""))
+  );
+  return [...ordered, ...unordered];
+}
+
+function buildTopLevelCategories(groups, lang) {
+  const mainGroups = groups.filter((category) => {
+    return category.type === "mainGroup" || category.mainGroupId;
+  });
+  const categoriesToShow = mainGroups.length > 0 ? mainGroups : groups;
+  const sorted = sortByOrder(categoriesToShow, "name");
+
+  return sorted.map((category) => {
+    const isMainGroup = category.type === "mainGroup" || (category.mainGroupId && Array.isArray(category.groups));
+    return {
+      id: isMainGroup ? `main_group_${category.mainGroupId}` : `group_${category.groupId}`,
+      name: categoryName(category, lang, `Group ${category.groupId || category.mainGroupId}`),
+      type: isMainGroup ? "mainGroup" : "group",
+      mainGroupId: category.mainGroupId,
+      groupId: category.groupId,
+      sortOrder: category.sortOrder,
+      hasGroups: isMainGroup && category.groups && Array.isArray(category.groups) && category.groups.length > 0,
+      hasSubgroups: category.subgroups && Array.isArray(category.subgroups) && category.subgroups.length > 0
+    };
+  });
+}
+
+function buildGroupCategories(groups, mainGroupId, lang) {
+  const mainGroup = groups.find((category) => String(category.mainGroupId) === String(mainGroupId));
+  if (!mainGroup?.groups || !Array.isArray(mainGroup.groups)) return [];
+  const sorted = sortByOrder(mainGroup.groups, "name");
+  return sorted.map((group) => ({
+    id: `group_${group.groupId}`,
+    name: categoryName(group, lang, `Group ${group.groupId}`),
+    type: "group",
+    mainGroupId,
+    groupId: group.groupId,
+    sortOrder: group.sortOrder,
+    hasSubgroups: group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0
+  }));
+}
+
+function buildSubgroupCategories(group, lang) {
+  if (!group?.subgroups || !Array.isArray(group.subgroups)) return [];
+  const sorted = sortByOrder(group.subgroups, "name");
+  return sorted.map((subgroup) => {
+    const subgroupName = categoryName(subgroup, lang, `Subgroup ${subgroup.subgroupId}`);
+    return {
+      id: `subgroup_${subgroup.subgroupId}`,
+      name: subgroupName,
+      type: "subgroup",
+      subgroupId: subgroup.subgroupId,
+      groupId: group.groupId,
+      sortOrder: subgroup.sortOrder,
+      isPackage: subgroupName.toLowerCase().includes("package")
+    };
+  });
+}
+
+function findGroupById(groups, groupId) {
+  const allGroups = groups.flatMap((category) =>
+    category.groups && Array.isArray(category.groups) ? category.groups : [category]
+  );
+  return allGroups.find((group) => String(group.groupId) === String(groupId));
+}
+
 export default function MenuPage() {
   const add = useCart((s) => s.add);
+  const syncExistingOrderLines = useCart((s) => s.syncExistingOrderLines);
   const tableId = useCart((s) => s.tableId);
   const tableArea = useCart((s) => s.tableArea);
   const tableNo = useCart((s) => s.tableNo);
@@ -205,10 +297,11 @@ export default function MenuPage() {
   }, [lang]);
 
   // UI state
-  // const [drawer, setDrawer] = useState(false);
+  const [drawer, setDrawer] = useState(false);
   const [search, setSearch] = useState("");
   const [activeCat, setActiveCat] = useState(""); // will set after categories load
   const [sort, setSort] = useState("pop");
+  const [selectedMainGroupId, setSelectedMainGroupId] = useState(null); // Track selected main group in drill-down view
   const [selectedGroupId, setSelectedGroupId] = useState(null); // Track selected group for showing subgroups
   const [qrGroups, setQrGroups] = useState([]); // Store full QR groups structure with subgroups
   const [isPackageSubgroup, setIsPackageSubgroup] = useState(false); // Track if viewing packages subgroup
@@ -228,14 +321,18 @@ export default function MenuPage() {
   
   // Payment/Order state
   const [hasOngoingOrders, setHasOngoingOrders] = useState(false);
+  const [ongoingOrderStats, setOngoingOrderStats] = useState({ lines: 0, qty: 0 });
   const [checkingOrders, setCheckingOrders] = useState(false);
   const checkingOrdersRef = useRef(false); // Prevent duplicate simultaneous calls
   const loadingCategoriesRef = useRef(false); // Prevent duplicate getCategories calls
+
+  const topLevelCats = useMemo(() => buildTopLevelCategories(qrGroups, lang), [qrGroups, lang]);
 
   // Check for ongoing orders when token/tableId is available
   const checkOrders = useCallback(async () => {
     if (!token) {
       setHasOngoingOrders(false);
+      setOngoingOrderStats({ lines: 0, qty: 0 });
       return;
     }
     
@@ -249,14 +346,20 @@ export default function MenuPage() {
       setCheckingOrders(true);
       const result = await checkTableOrders(token);
       setHasOngoingOrders(result.hasOrders);
+      const lines = result.lines || [];
+      const totalQty = lines.reduce((sum, line) => sum + Number(line?.Qty || 0), 0);
+      setOngoingOrderStats({ lines: lines.length, qty: totalQty });
+      syncExistingOrderLines(lines);
     } catch (e) {
       logError("Error checking table orders:", e);
       setHasOngoingOrders(false);
+      setOngoingOrderStats({ lines: 0, qty: 0 });
+      syncExistingOrderLines([]);
     } finally {
       setCheckingOrders(false);
       checkingOrdersRef.current = false;
     }
-  }, [token]);
+  }, [token, syncExistingOrderLines]);
 
   useEffect(() => {
     // Add small delay to prevent race conditions with other effects
@@ -310,17 +413,9 @@ export default function MenuPage() {
         // Store full structure
         setQrGroups(raw);
         
-        // Initially show only groups (top level)
+        // Initially show main groups and standalone groups (top level)
         // Use Arabic name if language is Arabic and name_ar is available
-        const groupsOnly = raw.map((group) => ({
-          id: `group_${group.groupId}`,
-          name: (lang === "ar" && group.name_ar && group.name_ar.trim())
-            ? group.name_ar.trim()
-            : (group.name || group.GroupDescription || `Group ${group.groupId}`),
-          type: 'group',
-          groupId: group.groupId,
-          hasSubgroups: group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0
-        }));
+        const groupsOnly = buildTopLevelCategories(raw, lang);
         
         // Optimized: Removed debug logging
         setCats(groupsOnly);
@@ -335,7 +430,10 @@ export default function MenuPage() {
           sessionStorage.removeItem('returnToPackages');
           
           // Find the group that contains this subgroup
-          const groupWithSubgroup = raw.find(g => 
+          const allGroupsForReturn = raw.flatMap((category) =>
+            category.groups && Array.isArray(category.groups) ? category.groups : [category]
+          );
+          const groupWithSubgroup = allGroupsForReturn.find(g =>
             g.subgroups && g.subgroups.some(sg => String(sg.subgroupId) === String(returnToSubgroup))
           );
           
@@ -348,13 +446,14 @@ export default function MenuPage() {
             
             // Show subgroups for this group
             // Use Arabic name if language is Arabic and name_ar is available
-            const subgroupTabs = groupWithSubgroup.subgroups.map(sg => ({
+            const subgroupTabs = sortByOrder(groupWithSubgroup.subgroups, "name").map(sg => ({
               id: `subgroup_${sg.subgroupId}`,
               name: (lang === "ar" && sg.name_ar && sg.name_ar.trim())
                 ? sg.name_ar.trim()
                 : (sg.name || sg.SubgroupDescription || `Subgroup ${sg.subgroupId}`),
               type: 'subgroup',
               subgroupId: sg.subgroupId,
+              sortOrder: sg.sortOrder,
               isPackage: sg.name?.toLowerCase().includes('package') || sg.SubgroupDescription?.toLowerCase().includes('package')
             }));
             setCats(subgroupTabs);
@@ -369,15 +468,17 @@ export default function MenuPage() {
             // Fallback to first group
             if (groupsOnly.length > 0) {
               const firstGroupId = groupsOnly[0].id;
-              setActiveCat(firstGroupId);
+              setActiveCat(USE_VERTICAL_CATEGORY_NAV ? "" : firstGroupId);
               // Don't set selectedGroupId on initial load - only set it when user clicks
               // This prevents auto-expanding to subgroups on initial load
+              setSelectedMainGroupId(null);
               setSelectedGroupId(null);
             }
           }
         } else if (groupsOnly.length > 0) {
           const firstGroupId = groupsOnly[0].id;
-          setActiveCat(firstGroupId);
+          setActiveCat(USE_VERTICAL_CATEGORY_NAV ? "" : firstGroupId);
+          setSelectedMainGroupId(null);
           setSelectedGroupId(null);
         }
       } catch (e) {
@@ -403,59 +504,122 @@ export default function MenuPage() {
   useEffect(() => {
     if (qrGroups.length === 0) return;
     
-    // Update categories based on current language
-    // If selectedGroupId is null, we're showing groups; otherwise, we're showing subgroups
-    if (selectedGroupId === null) {
-      // Currently showing groups
-      const groupsOnly = qrGroups.map((group) => ({
-        id: `group_${group.groupId}`,
-        name: (lang === "ar" && group.name_ar && group.name_ar.trim())
-          ? group.name_ar.trim()
-          : (group.name || group.GroupDescription || `Group ${group.groupId}`),
-        type: 'group',
-        groupId: group.groupId,
-        hasSubgroups: group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0
-      }));
-      setCats(groupsOnly);
-    } else if (selectedGroupId !== null) {
-      // Currently showing subgroups
-      const group = qrGroups.find(g => {
-        const gId = typeof g.groupId === 'number' ? g.groupId : parseInt(g.groupId);
-        return gId === selectedGroupId;
-      });
-      
-      if (group && group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0) {
-        const subgroups = group.subgroups.map((subgroup) => ({
-          id: `subgroup_${subgroup.subgroupId}`,
-          name: (lang === "ar" && subgroup.name_ar && subgroup.name_ar.trim())
-            ? subgroup.name_ar.trim()
-            : (subgroup.name || subgroup.SubgroupDescription || `Subgroup ${subgroup.subgroupId}`),
-          type: 'subgroup',
-          subgroupId: subgroup.subgroupId,
-          groupId: selectedGroupId,
-          isPackage: (subgroup.name || subgroup.SubgroupDescription || '').toLowerCase().includes('package')
-        }));
+    if (USE_VERTICAL_CATEGORY_NAV && selectedGroupId !== null) {
+      const group = findGroupById(qrGroups, selectedGroupId);
+      setCats(buildSubgroupCategories(group, lang));
+      return;
+    }
+
+    if (USE_VERTICAL_CATEGORY_NAV && selectedMainGroupId !== null) {
+      setCats(buildGroupCategories(qrGroups, selectedMainGroupId, lang));
+      return;
+    }
+
+    if (selectedGroupId !== null) {
+      const group = findGroupById(qrGroups, selectedGroupId);
+      const subgroups = buildSubgroupCategories(group, lang);
+      if (subgroups.length > 0) {
         setCats(subgroups);
       }
+      return;
     }
-  }, [lang, qrGroups, selectedGroupId]);
+
+    setCats(buildTopLevelCategories(qrGroups, lang));
+  }, [lang, qrGroups, selectedMainGroupId, selectedGroupId]);
 
   // Handle category selection - show subgroups if group has them, otherwise show products
   const handleCategoryChange = useCallback((categoryId) => {
-    if (categoryId.startsWith('group_')) {
+    if (!categoryId) {
+      setSelectedMainGroupId(null);
+      setSelectedGroupId(null);
+      setActiveCat("");
+      setCats(buildTopLevelCategories(qrGroups, lang));
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+
+    if (USE_VERTICAL_CATEGORY_NAV) {
+      if (activeCat !== categoryId) {
+        setItems([]);
+      }
+      setIsPackageSubgroup(false);
+      setPackageHeaders([]);
+
+      if (categoryId.startsWith('main_group_')) {
+        const mainGroupId = categoryId.replace('main_group_', '');
+        const childGroups = buildGroupCategories(qrGroups, mainGroupId, lang);
+
+        if (childGroups.length > 0) {
+          setSelectedMainGroupId(mainGroupId);
+          setSelectedGroupId(null);
+          setCats(childGroups);
+          setActiveCat("");
+          setLoading(false);
+          return;
+        }
+
+        setSelectedMainGroupId(null);
+        setSelectedGroupId(null);
+        setActiveCat(categoryId);
+        setLoading(true);
+        return;
+      }
+
+      if (categoryId.startsWith('group_')) {
+        const groupId = categoryId.replace('group_', '');
+        const group = findGroupById(qrGroups, groupId);
+        const subgroups = buildSubgroupCategories(group, lang);
+
+        if (subgroups.length > 0) {
+          setSelectedGroupId(group?.groupId ?? parseInt(groupId));
+          setCats(subgroups);
+          setActiveCat("");
+          setLoading(false);
+          return;
+        }
+
+        setSelectedGroupId(null);
+        setActiveCat(categoryId);
+        setLoading(true);
+        return;
+      }
+
+      if (categoryId.startsWith('subgroup_')) {
+        setActiveCat(categoryId);
+        setLoading(true);
+        return;
+      }
+    }
+
+    if (categoryId.startsWith('main_group_')) {
+      if (activeCat !== categoryId) {
+        setItems([]);
+        setLoading(true);
+      }
+      setSelectedMainGroupId(null);
+      setSelectedGroupId(null);
+      setIsPackageSubgroup(false);
+      setPackageHeaders([]);
+      setActiveCat(categoryId);
+    } else if (categoryId.startsWith('group_')) {
       const groupIdStr = categoryId.replace('group_', '');
       const groupId = parseInt(groupIdStr);
-      const group = qrGroups.find(g => {
+      const allGroups = qrGroups.flatMap((category) =>
+        category.groups && Array.isArray(category.groups) ? category.groups : [category]
+      );
+      const group = allGroups.find(g => {
         const gId = typeof g.groupId === 'number' ? g.groupId : parseInt(g.groupId);
         return gId === groupId;
       });
       const isCurrentlyShowingSubgroups = selectedGroupId === groupId && cats.some(c => c.type === 'subgroup');
       if (group && group.subgroups && Array.isArray(group.subgroups) && group.subgroups.length > 0) {
         if (isCurrentlyShowingSubgroups) return;
+        setSelectedMainGroupId(null);
         setSelectedGroupId(groupId);
         
         // Use Arabic name if language is Arabic and name_ar is available
-        const subgroups = group.subgroups.map((subgroup) => ({
+        const subgroups = sortByOrder(group.subgroups, "name").map((subgroup) => ({
           id: `subgroup_${subgroup.subgroupId}`,
           name: (lang === "ar" && subgroup.name_ar && subgroup.name_ar.trim())
             ? subgroup.name_ar.trim()
@@ -480,6 +644,7 @@ export default function MenuPage() {
         }
       } else {
         // Group has no subgroups, show products directly
+        setSelectedMainGroupId(null);
         setSelectedGroupId(null);
         // Clear items immediately when switching groups
         if (activeCat !== categoryId) {
@@ -497,24 +662,40 @@ export default function MenuPage() {
       }
       setActiveCat(categoryId);
     }
-  }, [qrGroups, lang, selectedGroupId, cats]);
+  }, [activeCat, qrGroups, lang, selectedGroupId, cats]);
 
   // Handle back navigation - go back to groups
   const handleBackToGroups = useCallback(() => {
+    if (USE_VERTICAL_CATEGORY_NAV && selectedMainGroupId !== null && (selectedGroupId !== null || activeCat)) {
+      setCats(buildGroupCategories(qrGroups, selectedMainGroupId, lang));
+      setSelectedGroupId(null);
+      setActiveCat("");
+      setItems([]);
+      setIsPackageSubgroup(false);
+      setPackageHeaders([]);
+      setLoading(false);
+      return;
+    }
+
+    if (USE_VERTICAL_CATEGORY_NAV) {
+      setCats(buildTopLevelCategories(qrGroups, lang));
+      setSelectedMainGroupId(null);
+      setSelectedGroupId(null);
+      setActiveCat("");
+      setItems([]);
+      setIsPackageSubgroup(false);
+      setPackageHeaders([]);
+      setLoading(false);
+      return;
+    }
+
     // Use Arabic name if language is Arabic and name_ar is available
-    const groupsOnly = qrGroups.map((group) => ({
-      id: `group_${group.groupId}`,
-      name: (lang === "ar" && group.name_ar && group.name_ar.trim())
-        ? group.name_ar.trim()
-        : (group.name || group.GroupDescription || `Group ${group.groupId}`),
-      type: 'group',
-      groupId: group.groupId,
-      hasSubgroups: group.subgroups && group.subgroups.length > 0
-    }));
+    const groupsOnly = buildTopLevelCategories(qrGroups, lang);
     setCats(groupsOnly);
+    setSelectedMainGroupId(null);
     setSelectedGroupId(null);
     setActiveCat(groupsOnly.length > 0 ? groupsOnly[0].id : "");
-  }, [qrGroups, lang]);
+  }, [activeCat, qrGroups, lang, selectedMainGroupId, selectedGroupId]);
 
   // 2) Fetch QR menu items with filters
   async function loadItems(page = 1) {
@@ -546,12 +727,17 @@ export default function MenuPage() {
       const searching = trimmedSearch.length > 0;
       
       // Parse activeCat to determine if it's a group or subgroup
+      let qrMainGroupId = null;
       let qrGroupId = null;
       let qrSubgroupId = null;
       
       if (!searching && activeCat) {
-        // Check if activeCat is a subgroup
-        if (activeCat.startsWith('subgroup_')) {
+        // Check if activeCat is a main group, subgroup, or group
+        if (activeCat.startsWith('main_group_')) {
+          qrMainGroupId = parseInt(activeCat.replace('main_group_', ''));
+          setIsPackageSubgroup(false);
+          setPackageHeaders([]);
+        } else if (activeCat.startsWith('subgroup_')) {
           qrSubgroupId = parseInt(activeCat.replace('subgroup_', ''));
           
           // Check if this is a PACKAGES subgroup
@@ -599,6 +785,7 @@ export default function MenuPage() {
         page,
         pageSize: paging.pageSize,
         search: trimmedSearch || undefined,
+        qrMainGroupId: qrMainGroupId || undefined,
         qrGroupId: qrGroupId || undefined,
         qrSubgroupId: qrSubgroupId || undefined,
         sort: toApiSort(sort)
@@ -1545,11 +1732,66 @@ export default function MenuPage() {
     [paging]
   );
 
+  const groupedSections = useMemo(() => {
+    if (!activeCat?.startsWith("main_group_") || items.length === 0) {
+      return null;
+    }
+
+    const sectionMap = new Map();
+    items.forEach((item) => {
+      const raw = item._raw || {};
+      const groupId = raw["pm.QrGroupID"] || raw["pm_QrGroupID"] || raw.QrGroupID || "ungrouped";
+      const groupName = (lang === "ar" && raw["pm.QrGroupDescriptionArabic"])
+        ? raw["pm.QrGroupDescriptionArabic"]
+        : (raw["pm.QrGroupDescription"] || raw.QrGroupDescription || "Other");
+      const sortOrder = Number(raw["pm.QrGroupSortOrder"] ?? raw.QrGroupSortOrder ?? 0);
+
+      if (!sectionMap.has(groupId)) {
+        sectionMap.set(groupId, {
+          id: groupId,
+          title: groupName,
+          sortOrder,
+          items: [],
+        });
+      }
+      sectionMap.get(groupId).items.push(item);
+    });
+
+    return Array.from(sectionMap.values()).sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return String(a.title).localeCompare(String(b.title));
+    });
+  }, [activeCat, items, lang]);
+
   const handleGoToPayment = () => {
     if (token) {
       navigate(`/r/${token}`);
     }
   };
+
+  const showVerticalCategoryList =
+    USE_VERTICAL_CATEGORY_NAV &&
+    search.trim().length === 0 &&
+    cats.length > 0 &&
+    !activeCat;
+  const showVerticalBackButton =
+    USE_VERTICAL_CATEGORY_NAV &&
+    search.trim().length === 0 &&
+    Boolean(activeCat);
+  const verticalCategoryTitle =
+    selectedGroupId !== null
+      ? "Choose Subcategory"
+      : selectedMainGroupId !== null
+      ? "Select Category"
+      : "Explore Our Menu";
+  const verticalCategorySubtitle =
+    selectedMainGroupId !== null || selectedGroupId !== null
+      ? "Refine your selection"
+      : "Delicious varieties";
+  const tableDisplayLabel =
+    tableNo !== null && tableNo !== undefined && String(tableNo).trim() !== ""
+      ? t("common.table_label", { id: tableNo })
+      : tableName || "";
 
   return (
     <div
@@ -1560,43 +1802,31 @@ export default function MenuPage() {
         backgroundColor: "transparent",
       }}
     >
-      <TopBar onCart={() => {}} />
+      <TopBar 
+        onCart={() => setDrawer(true)} 
+        onHome={() => handleCategoryChange(null)}
+        isHome={!selectedMainGroupId && !selectedGroupId && !activeCat && search.trim() === ""}
+        tableLabel={tableDisplayLabel}
+      />
       
       {/* Payment/Billing Banner - Show when table has ongoing orders */}
       {hasOngoingOrders && token && (
         <div className="sticky top-[73px] z-30 mx-auto max-w-6xl px-4 sm:px-6 pt-4">
-          <div
-            className="rounded-2xl border p-4 shadow-lg backdrop-blur-xl"
-            style={{
-              background: "linear-gradient(135deg, rgba(139,111,71,0.1), rgba(58,46,46,0.05))",
-              borderColor: "var(--grad-end-soft)",
-            }}
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-10 h-10 rounded-full grid place-items-center"
-                  style={{
-                    background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
-                  }}
-                >
-                  <Icon name="receipt" className="h-5 w-5 text-white" />
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    {tableId ? `Table ${tableNo}` : "Your table"} has an ongoing order
-                  </div>
-                  <div className="text-xs text-gray-600">
-                    View your bill and make payment
-                  </div>
-                </div>
+          <div className="rounded-xl border border-[rgba(139,111,71,0.25)] bg-[var(--grad-start-soft)] px-3 py-3 sm:px-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-[var(--text-primary)]">
+                  {tableDisplayLabel || "Your table"} already has a running order
+                </p>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  {ongoingOrderStats.qty > 0
+                    ? `${ongoingOrderStats.qty} items already in order`
+                    : `${ongoingOrderStats.lines} lines already in order`}
+                </p>
               </div>
               <button
                 onClick={handleGoToPayment}
-                className="btn-pill h-10 px-6 text-sm font-semibold whitespace-nowrap"
-                style={{
-                  background: "linear-gradient(135deg, var(--grad-start), var(--grad-end))",
-                }}
+                className="h-9 shrink-0 rounded-lg bg-[var(--text-primary)] px-4 text-xs font-semibold text-white transition hover:opacity-90 sm:h-10 sm:px-5 sm:text-sm"
               >
                 View Bill
               </button>
@@ -1671,7 +1901,7 @@ export default function MenuPage() {
           )}
           
           {/* Show categories when available */}
-          {search.trim().length === 0 && cats.length > 0 && (
+          {!USE_VERTICAL_CATEGORY_NAV && search.trim().length === 0 && cats.length > 0 && (
             <>
               {/* Back button when showing subgroups */}
               {selectedGroupId && cats.some(c => c.type === 'subgroup') && (
@@ -1694,6 +1924,39 @@ export default function MenuPage() {
               />
             </>
           )}
+
+          {showVerticalCategoryList && (
+            <MenuGroupList
+              categories={cats}
+              activeId={activeCat}
+              onSelect={handleCategoryChange}
+              onBack={handleBackToGroups}
+              showBack={selectedMainGroupId !== null || selectedGroupId !== null}
+              title={verticalCategoryTitle}
+              subtitle={verticalCategorySubtitle}
+              backLabel={selectedGroupId !== null ? "Back to Groups" : "Back to Main Groups"}
+              tableLabel={tableDisplayLabel}
+            />
+          )}
+
+          {showVerticalBackButton && (
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-4">
+              <button
+                type="button"
+                onClick={handleBackToGroups}
+                className="group flex items-center gap-3 text-xs font-bold uppercase tracking-[0.2em] text-gray-400 transition-colors hover:text-gray-900"
+              >
+                <Icon name="arrow-left" className="h-3 w-3 transition-transform group-hover:-translate-x-1" />
+                {selectedGroupId !== null || selectedMainGroupId !== null ? "Back to Groups" : "Back to Main Groups"}
+              </button>
+              {tableDisplayLabel ? (
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(184,134,11,0.25)] bg-[rgba(184,134,11,0.06)] px-3 py-1">
+                  <Icon name="map-pin" className="h-3 w-3 text-[#B8860B]" />
+                  <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-[#7A4E05]">{tableDisplayLabel}</span>
+                </div>
+              ) : null}
+            </div>
+          )}
           
           {/* Show message if no categories found */}
           {!loading && cats.length === 0 && search.trim().length === 0 && !error && (
@@ -1702,7 +1965,9 @@ export default function MenuPage() {
             </div>
           )}
 
-      <FilterBar sort={sort} onSort={setSort} />
+      {(!USE_VERTICAL_CATEGORY_NAV || Boolean(activeCat) || search.trim().length > 0) && (
+        <FilterBar sort={sort} onSort={setSort} />
+      )}
         </div>
 
       {error && (
@@ -1712,7 +1977,7 @@ export default function MenuPage() {
       )}
 
       {/* Show package listing if viewing packages subgroup */}
-      {isPackageSubgroup && packageHeaders.length > 0 ? (
+      {showVerticalCategoryList ? null : isPackageSubgroup && packageHeaders.length > 0 ? (
         <section className="relative">
           <div
             className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-[radial-gradient(140%_80%_at_50%_0%,rgba(201,26,77,0.12),transparent_55%)]"
@@ -1747,6 +2012,7 @@ export default function MenuPage() {
           onOpen={openModal} 
           categoryKey={activeCat}
           isPackageView={false}
+          sections={groupedSections}
         />
       ) : loading ? (
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12">
@@ -1799,17 +2065,21 @@ export default function MenuPage() {
         open={modalOpen}
         item={modalItem}
         onClose={() => setModalOpen(false)}
-        onAdd={undefined}
-        // onAdd={(mods) => add(modalItem, mods)}
+        onAdd={(mods) => {
+          if (modalItem) add(modalItem, mods);
+        }}
       />
 
-      {/* Cart components hidden */}
-      {/* <CartDrawer open={drawer} onClose={() => setDrawer(false)} /> */}
+      <CartDrawer open={drawer} onClose={() => setDrawer(false)} />
 
-      {/* <FloatingCartButton
+      {/* OLD FLOATING CART BUTTON - full restore block.
+          To bring back the floating view-cart button, uncomment this block.
+
+      <FloatingCartButton
         isOpen={drawer || modalOpen}
         onClick={() => setDrawer(true)}
-      /> */}
+      />
+      */}
 
       <ScrollTopButton />
     </div>

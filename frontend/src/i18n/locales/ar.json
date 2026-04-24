@@ -77,8 +77,12 @@
     "orders_in_progress_one": "{{count}} عنصر قيد التجهيز",
     "orders_in_progress_other": "{{count}} عناصر قيد التجهيز"
   },
-
-
+  "sidebar": {
+    "explore": "استكشاف",
+    "menu": "قائمتنا",
+    "home": "الرئيسية",
+    "footer": "تجربة التميز"
+  },
   "reservation": {
     "page_title": "حجز طاولة",
     "page_subtitle": "اختر التاريخ والوقت وعدد الأشخاص ثم أكمل بياناتك",

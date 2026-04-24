@@ -2,7 +2,9 @@
 import mssql from "mssql";
 import { connectToDb } from "../config/dbConfig.js";
 
-const T_MODS = "Inventory.dbo.ModifierTable";
+// Must match the database used by connectToDb() (see dbConfig.js — e.g. Moifcore).
+// A three-part name like Inventory.dbo.ModifierTable fails when the pool is not connected to [Inventory].
+const T_MODS = "dbo.ModifierTable";
 const q = (n) => `[${n}]`;
 
 /**

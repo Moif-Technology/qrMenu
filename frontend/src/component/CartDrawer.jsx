@@ -15,7 +15,8 @@ export default function CartDrawer({ open, onClose }) {
   const { t } = useTranslation();
 
   const orderPayload = useMemo(() => {
-    const lines = items.map((x) => {
+    const sendableItems = items.filter((x) => !x.isExistingOrder);
+    const lines = sendableItems.map((x) => {
       const full = x.product || x.raw || x.meta || x.item || x;
       return {
         key: x._k,
@@ -38,14 +39,15 @@ export default function CartDrawer({ open, onClose }) {
         note: note || "",
         subtotal: Number(total.toFixed(2)),
         currency: "AED",
-        itemsCount: items.length,
+        itemsCount: sendableItems.length,
       },
       items: lines,
     };
   }, [items, note, total, tableId, tableAreaId]);
+  const hasSendableItems = orderPayload.items.length > 0;
 
   async function handleSend() {
-    if (!items.length || sending) return;
+    if (!hasSendableItems || sending) return;
     if (!tableId) {
       alert("Table ID is missing. Please scan the QR code on your table to continue.");
       return;
@@ -196,38 +198,45 @@ export default function CartDrawer({ open, onClose }) {
                     <div className="flex items-center justify-between pt-2 border-t border-gray-50">
                       <div className="text-xs text-gray-600">
                         {t("cart.qty", { qty: x.qty })}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          className="p-1.5 rounded-lg hover:bg-gray-100 active:scale-95 transition-all text-gray-500 hover:text-red-500"
-                          onClick={() => remove(x._k)}
-                          disabled={sending}
-                        >
-                          <Icon name="trash" className="h-3.5 w-3.5" />
-                        </button>
-                        
-                        <div className="flex items-center gap-1 bg-gray-100 rounded-lg">
-                          <button
-                            className="p-1.5 rounded-lg hover:bg-white active:scale-95 transition-all disabled:opacity-30"
-                            onClick={() => dec(x._k)}
-                            disabled={sending || x.qty <= 1}
-                          >
-                            <Icon name="minus" className="h-3.5 w-3.5" />
-                          </button>
-                          
-                          <span className="px-1 text-sm font-medium text-gray-900 min-w-[20px] text-center">
-                            {x.qty}
+                        {x.isExistingOrder && (
+                          <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                            Already ordered
                           </span>
-                          
+                        )}
+                      </div>
+                      {!x.isExistingOrder && (
+                        <div className="flex items-center gap-1">
                           <button
-                            className="p-1.5 rounded-lg hover:bg-white active:scale-95 transition-all disabled:opacity-30"
-                            onClick={() => inc(x._k)}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 active:scale-95 transition-all text-gray-500 hover:text-red-500"
+                            onClick={() => remove(x._k)}
                             disabled={sending}
                           >
-                            <Icon name="plus" className="h-3.5 w-3.5" />
+                            <Icon name="trash" className="h-3.5 w-3.5" />
                           </button>
+                          
+                          <div className="flex items-center gap-1 bg-gray-100 rounded-lg">
+                            <button
+                              className="p-1.5 rounded-lg hover:bg-white active:scale-95 transition-all disabled:opacity-30"
+                              onClick={() => dec(x._k)}
+                              disabled={sending || x.qty <= 1}
+                            >
+                              <Icon name="minus" className="h-3.5 w-3.5" />
+                            </button>
+                            
+                            <span className="px-1 text-sm font-medium text-gray-900 min-w-[20px] text-center">
+                              {x.qty}
+                            </span>
+                            
+                            <button
+                              className="p-1.5 rounded-lg hover:bg-white active:scale-95 transition-all disabled:opacity-30"
+                              onClick={() => inc(x._k)}
+                              disabled={sending}
+                            >
+                              <Icon name="plus" className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -276,7 +285,7 @@ export default function CartDrawer({ open, onClose }) {
             <button
               className="btn w-full py-3 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handleSend}
-              disabled={!items.length || sending}
+              disabled={!hasSendableItems || sending}
             >
               {sending ? (
                 <>
@@ -302,8 +311,8 @@ export default function CartDrawer({ open, onClose }) {
               </button>
               <button 
                 className="btn-ghost flex-1 py-2 text-sm text-gray-600 hover:text-red-600 border border-gray-200 rounded-xl flex items-center justify-center gap-1"
-                onClick={clear} 
-                disabled={sending || items.length === 0}
+                onClick={clear}
+                disabled={sending || !hasSendableItems}
               >
                 <Icon name="trash-2" className="h-4 w-4" />
                 {t("cart.clear")}

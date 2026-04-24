@@ -177,7 +177,34 @@ export const useCart = create((set, get) => {
   remove: (k) =>
     set((state) => ({ items: state.items.filter((x) => x._k !== k) })),
 
-  clear: () => set({ items: [], note: "" }),
+  clear: () =>
+    set((state) => ({
+      // Keep existing running-order lines visible in cart.
+      items: state.items.filter((x) => x.isExistingOrder),
+      note: "",
+    })),
+  syncExistingOrderLines: (lines = []) =>
+    set((state) => {
+      const keepNew = state.items.filter((x) => !x.isExistingOrder);
+      const existing = (Array.isArray(lines) ? lines : []).map((line, idx) => {
+        const qty = Number(line?.Qty || 0);
+        const unit = Number(line?.UnitPrice || 0);
+        const productId = line?.ProductID ?? line?.productId ?? `unknown-${idx}`;
+        const kotChildId = line?.KotChildID ?? line?.kotChildID ?? line?.kotChildId ?? idx;
+        return {
+          _k: `existing::${kotChildId}`,
+          id: productId,
+          name: line?.ShortDescription || `Item #${productId}`,
+          basePrice: unit,
+          mods: [],
+          price: unit,
+          qty: Number.isFinite(qty) ? qty : 0,
+          product: line,
+          isExistingOrder: true,
+        };
+      });
+      return { items: [...existing, ...keepNew] };
+    }),
   setNote: (note) => set({ note }),
     setTableId: (tableId, tableArea = null, tableAreaId = null, tableNo = null, tableName = null) =>
       set((state) => {
@@ -205,6 +232,8 @@ export const useCart = create((set, get) => {
     set({ token });
   },
   subtotal: () =>
-    get().items.reduce((s, x) => s + Number(x.price) * Number(x.qty), 0),
+    get()
+      .items.filter((x) => !x.isExistingOrder)
+      .reduce((s, x) => s + Number(x.price) * Number(x.qty), 0),
   };
 });

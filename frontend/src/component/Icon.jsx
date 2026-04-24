@@ -42,11 +42,30 @@ const MAP = {
   users: Lu.Users,
   "chevron-up": Lu.ChevronUp,
   "chevron-down": Lu.ChevronDown,
+  "chevron-right": Lu.ChevronRight,
+  "chevron-left": Lu.ChevronLeft,
+  menu: Lu.Menu,
+  home: Lu.Home,
   phone: Lu.Phone,
   mail: Lu.Mail,
   edit: Lu.Edit,
   "alert-circle": Lu.AlertCircle,
   user: Lu.User,
+  // Food & Beverage
+  utensils: Lu.Utensils,
+  pizza: Lu.Pizza,
+  burger: Lu.CircleDot, // Lucide doesn't have Burger in all versions, using CircleDot as fallback or generic
+  coffee: Lu.Coffee,
+  beer: Lu.Beer,
+  wine: Lu.Wine,
+  cake: Lu.Cake,
+  soup: Lu.Soup,
+  salad: Lu.Salad,
+  fish: Lu.Fish,
+  icecream: Lu.IceCream,
+  flame: Lu.Flame,
+  heart: Lu.Heart,
+  star: Lu.Star,
 };
 
 export default function Icon({

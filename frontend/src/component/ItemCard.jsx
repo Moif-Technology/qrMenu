@@ -1,8 +1,8 @@
 // src/components/ItemCard.jsx
-import { useEffect, useMemo, useState, memo } from "react";
-// import { useCart } from "../store/cartStore";
+import { useEffect, useMemo, useState, memo, useRef } from "react";
+import { useCart } from "../store/cartStore";
 import Icon from "./Icon";
-// import ModifierModal from "./ModifierModal";
+import ModifierModal from "./ModifierModal";
 import { useTranslation } from "react-i18next";
 
 /** 🔧 COMMON IMAGE */
@@ -29,20 +29,14 @@ function ItemCard({
   onModifiers,
   qtyInCart,
 }) {
-  // const items = useCart((s) => s.items);
-  // const inc = useCart((s) => s.inc);
-  // const dec = useCart((s) => s.dec);
-  // const remove = useCart((s) => s.remove);
-  // const tableArea = useCart((s) => s.tableArea);
+  const items = useCart((s) => s.items);
+  const inc = useCart((s) => s.inc);
+  const dec = useCart((s) => s.dec);
+  const remove = useCart((s) => s.remove);
   const { t } = useTranslation();
 
-  // const [selectedMods, setSelectedMods] = useState([]);
-  // const selectedIds = useMemo(
-  //   () => [...selectedMods.map((m) => m.id ?? m.ModifierID ?? m.name)].sort(),
-  //   [selectedMods]
-  // );
-
-  // const [showMods, setShowMods] = useState(false);
+  const [selectedMods, setSelectedMods] = useState([]);
+  const [showMods, setShowMods] = useState(false);
 
   const itemId = useMemo(
     () =>
@@ -102,6 +96,16 @@ function ItemCard({
     setImageLoaded(false);
   }, [imageList, itemName]);
 
+  useEffect(() => {
+    setSelectedMods([]);
+    setShowMods(false);
+  }, [itemId]);
+
+  const selectedIds = useMemo(
+    () => [...selectedMods.map((m) => m.id ?? m.ModifierID ?? m.name)].sort(),
+    [selectedMods]
+  );
+
   const activeImage = imageList[Math.min(imageIndex, imageList.length - 1)] || COMMON_IMAGE;
   
   // Check if we have a real image (not the default fallback)
@@ -149,15 +153,27 @@ function ItemCard({
     [item, itemId, itemName, totalPrice]
   );
 
-  // const lineKey = useMemo(
-  //   () => JSON.stringify({ id: itemId, mods: selectedIds }),
-  //   [itemId, selectedIds]
-  // );
+  const lineKey = useMemo(
+    () => JSON.stringify({ id: itemId, mods: selectedIds }),
+    [itemId, selectedIds]
+  );
 
-  // const qtyFromStore = useMemo(() => {
-  //   const line = items.find((x) => x._k === lineKey);
-  //   return line?.qty ?? 0;
-  // }, [items, lineKey]);
+  const qtyFromStore = useMemo(() => {
+    const line = items.find((x) => x._k === lineKey);
+    return line?.qty ?? 0;
+  }, [items, lineKey]);
+  const totalQtyInCart = useMemo(() => {
+    if (itemId == null) return 0;
+    const id = String(itemId);
+    return items.reduce((sum, line) => {
+      if (String(line?.id) !== id) return sum;
+      return sum + Number(line?.qty || 0);
+    }, 0);
+  }, [items, itemId]);
+  const visibleQtyInCart = useMemo(
+    () => Math.max(totalQtyInCart, Number(qtyInCart || 0)),
+    [totalQtyInCart, qtyInCart]
+  );
 
   const vibrate = (ms = 8) => {
     if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
@@ -168,10 +184,10 @@ function ItemCard({
     e.currentTarget.style.setProperty("--y", `${e.clientY - r.top}px`);
   };
 
-  // const liveRef = useRef(null);
-  // useEffect(() => {
-  //   if (liveRef.current) liveRef.current.textContent = `Quantity ${qtyFromStore}`;
-  // }, [qtyFromStore]);
+  const liveRef = useRef(null);
+  useEffect(() => {
+    if (liveRef.current) liveRef.current.textContent = `Quantity ${qtyFromStore}`;
+  }, [qtyFromStore]);
 
   const groupDesc =
     getVal(item, "gm.GroupDescription") ?? getVal(item, "gm_GroupDescription");
@@ -338,86 +354,93 @@ function ItemCard({
           )}
         </div>
 
-        <div className="mt-auto space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
-                {t("menu.price")}
-              </div>
-              <div className="text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                AED {unitPriceVal.toFixed(2)}
-              </div>
-        </div>
+        <div className="mt-auto flex flex-col gap-3">
+          {/* OLD ORDERING FOOTER VERSION - full restore block.
+              To bring back add-to-cart, in-cart label, quantity controls, and customize:
+              replace the CURRENT READ-ONLY FOOTER VERSION below with this block.
 
-        {/* Add to cart button removed */}
-        {/* {qtyFromStore <= 0 ? (
-          <button
-            onClick={(e) => {
+          <div className="flex min-h-14 w-full shrink-0 items-center justify-between gap-2 sm:gap-3">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center pr-1">
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                  {t("menu.price")}
+                </div>
+                {visibleQtyInCart > 0 && (
+                  <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-semibold leading-none text-amber-700">
+                    In cart: {visibleQtyInCart}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
+                AED {totalPrice.toFixed(2)}
+              </div>
+            </div>
+
+            {qtyFromStore <= 0 ? (
+              <button
+                type="button"
+                onClick={(e) => {
                   setRipple(e);
-                  vibrate(10);
+                  vibrate(12);
                   onQuickAdd?.(itemForCart, selectedMods);
-            }}
-            onPointerDown={setRipple}
-                className="relative inline-flex h-10 min-w-[112px] items-center justify-center gap-2 rounded-full px-4 text-xs font-semibold text-white shadow-lg transition active:scale-95 sm:h-11 sm:min-w-[120px] sm:px-5 sm:text-sm"
-                style={{
-                  background: "linear-gradient(120deg, var(--grad-start), var(--grad-end))",
                 }}
-            aria-label={`Add ${itemName} to cart`}
-            title="Add to cart"
-          >
-                <Icon name="plus" className="h-4 w-4" />
-                <span className="sm:hidden">{t("menu.add")}</span>
-                <span className="hidden sm:inline">{t("menu.add_to_cart")}</span>
-            <span className="btn-ripple" aria-hidden />
-          </button>
-        ) : (
-          <div
-                className="flex items-center gap-2 rounded-full border border-[rgba(139,111,71,0.25)] bg-[rgba(139,111,71,0.08)] px-1.5 py-1 sm:px-2"
-            role="group"
-            aria-label={`Quantity controls for ${itemName}`}
-          >
-            <button
-              onClick={(e) => {
+                onPointerDown={setRipple}
+                className="item-card-add-cta relative grid h-10 w-10 shrink-0 touch-manipulation place-items-center overflow-hidden rounded-xl border border-stone-800/10 bg-[var(--text-primary)] text-[var(--bg-card)] shadow-sm transition hover:bg-stone-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2 sm:h-11 sm:w-11"
+                aria-label={`${t("menu.add_to_cart")}: ${itemName}`}
+                title={t("menu.add_to_cart")}
+              >
+                <Icon name="plus" className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
+                <span className="btn-ripple" aria-hidden />
+              </button>
+            ) : (
+              <div
+                className="flex h-10 shrink-0 items-stretch overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm sm:h-11"
+                role="group"
+                aria-label={`Quantity controls for ${itemName}`}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
                     setRipple(e);
-                    vibrate(6);
+                    vibrate(8);
                     if (qtyFromStore <= 1) {
                       remove(lineKey);
                     } else {
                       dec(lineKey);
                     }
-              }}
-              onPointerDown={setRipple}
-                  className="relative grid h-8 w-8 place-items-center rounded-full text-[var(--grad-start)] transition hover:bg-white active:scale-95 sm:h-9 sm:w-9"
-              aria-label={qtyFromStore <= 1 ? "Remove from cart" : "Decrease quantity"}
-              title={qtyFromStore <= 1 ? "Remove" : "Decrease"}
-            >
-                  <Icon name={qtyFromStore <= 1 ? "trash" : "minus"} className="h-4 w-4" />
-              <span className="btn-ripple" aria-hidden />
-            </button>
-                <span className="min-w-[32px] text-center text-xs font-semibold text-[var(--grad-start)] sm:min-w-[36px] sm:text-sm">
+                  }}
+                  onPointerDown={setRipple}
+                  className="item-card-qty-btn relative grid min-h-10 min-w-10 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100 sm:min-h-11 sm:min-w-11"
+                  aria-label={qtyFromStore <= 1 ? "Remove from cart" : "Decrease quantity"}
+                  title={qtyFromStore <= 1 ? "Remove" : "Decrease"}
+                >
+                  <Icon name={qtyFromStore <= 1 ? "trash" : "minus"} className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
+                  <span className="btn-ripple" aria-hidden />
+                </button>
+                <span className="flex min-w-[2rem] items-center justify-center border-x border-stone-200 px-1 text-sm font-semibold tabular-nums leading-none text-stone-900 sm:min-w-[2.25rem] sm:px-1.5">
                   {qtyFromStore}
                 </span>
-            <button
+                <button
+                  type="button"
                   onClick={(e) => {
                     setRipple(e);
-                    vibrate(6);
+                    vibrate(8);
                     inc(lineKey);
                   }}
-              onPointerDown={setRipple}
-                  className="relative grid h-8 w-8 place-items-center rounded-full text-[var(--grad-start)] transition hover:bg-white active:scale-95 sm:h-9 sm:w-9"
-              aria-label="Increase quantity"
-              title="Increase"
-            >
-                  <Icon name="plus" className="h-4 w-4" />
-              <span className="btn-ripple" aria-hidden />
-            </button>
+                  onPointerDown={setRipple}
+                  className="item-card-qty-btn relative grid min-h-10 min-w-10 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100 sm:min-h-11 sm:min-w-11"
+                  aria-label="Increase quantity"
+                  title="Increase"
+                >
+                  <Icon name="plus" className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
+                  <span className="btn-ripple" aria-hidden />
+                </button>
+              </div>
+            )}
           </div>
-        )} */}
-      </div>
 
-          <div className="flex items-center justify-center text-[11px] font-medium sm:text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            {/* Customize button hidden */}
-            {/* <button
+          <div className="flex items-center justify-between text-[11px] font-medium text-gray-500 sm:text-xs">
+            <button
               type="button"
               onClick={(e) => {
                 setRipple(e);
@@ -425,25 +448,51 @@ function ItemCard({
                 setShowMods(true);
               }}
               onPointerDown={setRipple}
-              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(139,111,71,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
+              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
               title="Customize"
             >
               <Icon name="sliders" className="h-3.5 w-3.5" />
               {t("menu.customize")}
               <span className="btn-ripple" aria-hidden />
-            </button> */}
+            </button>
 
-            <span className="rounded-full bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]" style={{ letterSpacing: "0.2em" }}>
-              {t("menu.vat_service_note") || "VAT inclusive service charge not included"}
+            <span
+              className="rounded-full border border-[rgba(139,111,71,0.08)] bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]"
+              style={{ letterSpacing: "0.2em" }}
+              role="note"
+            >
+              {t("menu.vat_service_note") || "Prices are subject to VAT & service charge"}
+            </span>
+          </div>
+          */}
+
+          {/* CURRENT READ-ONLY FOOTER VERSION - active code. */}
+          <div className="flex min-h-14 w-full shrink-0 items-center justify-between gap-2 sm:gap-3">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center pr-1">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                {t("menu.price")}
+              </div>
+              <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
+                AED {totalPrice.toFixed(2)}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end text-[11px] font-medium text-gray-500 sm:text-xs">
+            <span
+              className="rounded-full border border-[rgba(139,111,71,0.08)] bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]"
+              style={{ letterSpacing: "0.2em" }}
+              role="note"
+            >
+              {t("menu.vat_service_note") || "Prices are subject to VAT & service charge"}
             </span>
           </div>
         </div>
       </div>
 
-      {/* <span ref={liveRef} className="sr-only" aria-live="polite" /> */}
+      <span ref={liveRef} className="sr-only" aria-live="polite" />
 
-      {/* ModifierModal hidden */}
-      {/* <ModifierModal
+      <ModifierModal
         open={showMods}
         item={itemForCart}
         initialSelectedIds={selectedIds}
@@ -454,7 +503,7 @@ function ItemCard({
           setSelectedMods(pickedMods || []);
           setShowMods(false);
         }}
-      /> */}
+      />
     </article>
   );
 }
