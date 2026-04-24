@@ -11,8 +11,8 @@ export const API = axios.create({
 
 
 // Retry logic for rate limiting (429 errors)
-const MAX_RETRIES = 2;      // Reduced from 3 to 2
-const RETRY_DELAY = 2000;   // Increased to 2 seconds
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY = 2000;
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,18 +28,17 @@ API.interceptors.response.use(
     const isPaymentCall =
       config.url?.includes("/payment/") || config.url?.includes("/telr/");
 
-    if (error.response?.status === 429 && !config._retry && !isPaymentCall) {
-      config._retry = true;
-
-      let retryCount = config._retryCount || 0;
+    if (error.response?.status === 429 && !isPaymentCall) {
+      const retryCount = config._retryCount || 0;
       if (retryCount < MAX_RETRIES) {
-        retryCount++;
-        config._retryCount = retryCount;
+        config._retryCount = retryCount + 1;
 
-        // Exponential backoff: 2s, 4s
-        const delay = RETRY_DELAY * Math.pow(2, retryCount - 1);
+        // Exponential backoff with jitter: 2s, 4s, 8s (±20% jitter)
+        const base = BASE_RETRY_DELAY * Math.pow(2, retryCount);
+        const jitter = base * 0.2 * (Math.random() - 0.5);
+        const delay = Math.round(base + jitter);
         warn(
-          `[API] Rate limited (429). Retrying in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})...`
+          `[API] Rate limited (429). Retrying in ${delay}ms (attempt ${config._retryCount}/${MAX_RETRIES})...`
         );
 
         await sleep(delay);

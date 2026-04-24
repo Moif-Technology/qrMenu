@@ -79,15 +79,11 @@ export default function QRMenuManagement() {
 
   // Load data on mount
   useEffect(() => {
-    loadAllProducts({});
+    loadAllProductsData({});
     loadMainGroups();
     loadGroups();
     loadSubgroups();
     loadQrProducts();
-    // Load total count (without filters)
-    loadTotalProductsCount();
-    // Load normal groups and subgroups for linking
-    loadNormalGroupsAndSubgroups();
   }, []);
 
   useEffect(() => {
@@ -96,27 +92,57 @@ export default function QRMenuManagement() {
     }
   }, [activeTab]);
 
-  const loadTotalProductsCount = async () => {
-    try {
-      const data = await getAllProductsFromMaster({});
-      setTotalProductsCount(data?.length || 0);
-    } catch (err) {
-      console.error("Failed to load total products count:", err);
-    }
-  };
-
-  const loadAllProducts = async (filters = {}) => {
+  // Single fetch that populates allProducts, totalProductsCount, normalGroups, normalSubgroups
+  const loadAllProductsData = async (filters = {}) => {
     try {
       setLoading(true);
       setError("");
       const data = await getAllProductsFromMaster(filters);
-      setAllProducts(data || []);
+      const list = data || [];
+      setAllProducts(list);
+      setTotalProductsCount(list.length);
+
+      const uniqueGroups = Array.from(
+        new Map(
+          list
+            .filter((p) => p.GroupID)
+            .map((p) => [
+              p.GroupID,
+              {
+                GroupID: p.GroupID,
+                GroupDescription: p.NormalGroupDescription || p.NormalGroupCode || `Group ${p.GroupID}`,
+                GroupCode: p.NormalGroupCode,
+              },
+            ])
+        ).values()
+      ).sort((a, b) => (a.GroupDescription || "").localeCompare(b.GroupDescription || ""));
+
+      const uniqueSubgroups = Array.from(
+        new Map(
+          list
+            .filter((p) => p.SubGroupID)
+            .map((p) => [
+              p.SubGroupID,
+              {
+                SubGroupID: p.SubGroupID,
+                SubgroupDescription: p.NormalSubgroupDescription || p.NormalSubgroupCode || `Subgroup ${p.SubGroupID}`,
+                SubgroupCode: p.NormalSubgroupCode,
+                GroupID: p.GroupID,
+              },
+            ])
+        ).values()
+      ).sort((a, b) => (a.SubgroupDescription || "").localeCompare(b.SubgroupDescription || ""));
+
+      setNormalGroups(uniqueGroups);
+      setNormalSubgroups(uniqueSubgroups);
     } catch (err) {
       setError(err?.response?.data?.error || err.message || "Failed to load products");
     } finally {
       setLoading(false);
     }
   };
+
+  const loadAllProducts = (filters = {}) => loadAllProductsData(filters);
 
   const loadMainGroups = async () => {
     try {
@@ -161,50 +187,6 @@ export default function QRMenuManagement() {
     }
   };
 
-  // Load normal groups and subgroups for optional linking
-  const loadNormalGroupsAndSubgroups = async () => {
-    try {
-      const allProductsData = await getAllProductsFromMaster({});
-      // Extract unique groups
-      const groups = Array.from(
-        new Map(
-          allProductsData
-            .filter((p) => p.GroupID)
-            .map((p) => [
-              p.GroupID,
-              {
-                GroupID: p.GroupID,
-                GroupDescription: p.NormalGroupDescription || p.NormalGroupCode || `Group ${p.GroupID}`,
-                GroupCode: p.NormalGroupCode,
-              },
-            ])
-        ).values()
-      ).sort((a, b) => (a.GroupDescription || "").localeCompare(b.GroupDescription || ""));
-      
-      // Extract unique subgroups
-      const subgroups = Array.from(
-        new Map(
-          allProductsData
-            .filter((p) => p.SubGroupID)
-            .map((p) => [
-              p.SubGroupID,
-              {
-                SubGroupID: p.SubGroupID,
-                SubgroupDescription: p.NormalSubgroupDescription || p.NormalSubgroupCode || `Subgroup ${p.SubGroupID}`,
-                SubgroupCode: p.NormalSubgroupCode,
-                GroupID: p.GroupID,
-              },
-            ])
-        ).values()
-      ).sort((a, b) => (a.SubgroupDescription || "").localeCompare(b.SubgroupDescription || ""));
-      
-      setNormalGroups(groups);
-      setNormalSubgroups(subgroups);
-    } catch (err) {
-      console.error("Failed to load normal groups and subgroups:", err);
-    }
-  };
-
   // Get QR product info for a product
   const getQrProductInfo = (productId) => {
     return qrProductsMap.get(productId) || null;
@@ -218,18 +200,7 @@ export default function QRMenuManagement() {
       // Save the update
       await updateQrProductAssignment(productId, updateData);
       
-      // Force refresh all data to ensure UI shows latest changes
-      // Use Promise.all to refresh in parallel for faster updates
-      await Promise.all([
-        loadQrProducts(), // Refresh QR products map (includes Allergies, FullDescription)
-        loadAllProducts({}), // Refresh main products list
-        loadMainGroups(), // Refresh main groups in case they changed
-        loadGroups(), // Refresh groups in case they changed
-        loadSubgroups(), // Refresh subgroups in case they changed
-      ]);
-      
-      // Small delay to ensure state updates propagate
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await loadQrProducts();
     } catch (err) {
       setError(err?.response?.data?.error || err.message || "Failed to update product");
       throw err;
