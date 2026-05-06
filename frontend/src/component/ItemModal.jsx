@@ -387,7 +387,7 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
           className="flex flex-shrink-0 flex-col gap-2 border-t border-neutral-100 bg-white/90 p-4 backdrop-blur-sm sm:flex-row sm:gap-3 sm:p-5"
           style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 0px))" }}
         >
-          {onAdd && (
+          /* {onAdd && (
             <button
               type="button"
               onClick={() => {
@@ -403,7 +403,7 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
               <span>{t("menu.add_to_cart") || "Add to cart"}</span>
               <span className="btn-ripple" aria-hidden />
             </button>
-          )}
+          )} */
           <button
             type="button"
             onClick={handleClose}
