@@ -486,7 +486,7 @@ function ItemCard({
               style={{ letterSpacing: "0.2em" }}
               role="note"
             >
-              {t("menu.vat_service_note") || "Prices are subject to VAT & service charge"}
+              {t("menu.vat_service_note") || "All prices are inclusive of 5% VAT."}
             </span>
           </div>
         </div>
