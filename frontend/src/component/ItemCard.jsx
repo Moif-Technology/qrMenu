@@ -473,8 +473,8 @@ function ItemCard({
                 {t("menu.price")}
               </div>
               <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                {AED {totalPrice.toFixed(2)}
-                {/* AED {unitPriceVal.toFixed(2)} */}
+                   AED {totalPrice.toFixed(2)}
+                 {/* AED {unitPriceVal.toFixed(2)} */}
 
               </div>
             </div>
