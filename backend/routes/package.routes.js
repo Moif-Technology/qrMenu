@@ -9,6 +9,7 @@ import {
   removeProductFromPackageController,
   updatePackageItemOrderController,
   createPackageController,
+  uploadPackageImageController,
 } from "../controllers/package.controller.js";
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.get("/:packageProductId/details", getPackageDetailsController);
 
 // POST routes (admin - for management)
 router.post("/create", createPackageController);
+router.post("/:packageProductId/image", uploadPackageImageController);
 router.post("/mark-header", markAsPackageHeaderController);
 router.post("/add-product", addProductToPackageController);
 router.post("/remove-product", removeProductFromPackageController);

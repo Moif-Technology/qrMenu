@@ -48,6 +48,13 @@ export async function createNewPackage(packageData) {
   return data;
 }
 
+export async function uploadPackageImage(packageProductId, imageBase64) {
+  const { data } = await API.post(`/packages/${packageProductId}/image`, {
+    imageBase64,
+  });
+  return data;
+}
+
 /**
  * Get package details
  * @param {number} packageProductId - Package Product ID

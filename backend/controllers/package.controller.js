@@ -9,6 +9,7 @@ import {
   removeProductFromPackage,
   updatePackageItemOrder,
   createPackage,
+  uploadPackageImage,
 } from "../services/package.service.js";
 
 // Cache for package data (5 minutes)
@@ -273,3 +274,28 @@ export async function createPackageController(req, res, next) {
   }
 }
 
+export async function uploadPackageImageController(req, res, next) {
+  try {
+    const { packageProductId } = req.params;
+    const { imageBase64 } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({
+        success: false,
+        error: "Image is required",
+      });
+    }
+
+    const result = await uploadPackageImage(parseInt(packageProductId), imageBase64);
+
+    packageCache.flushAll();
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[PACKAGE][UPLOAD-IMAGE] Error:", error);
+    next(error);
+  }
+}

@@ -1,46 +1,44 @@
-import { useState, useEffect } from "react";
 import {
-  Plus,
-  Edit2,
-  Trash2,
-  X,
-  Save,
-  Search,
   CheckCircle2,
-  XCircle,
-  Package,
+  Edit2,
   Folder,
   FolderTree,
   Loader2,
+  Package,
+  Plus,
+  Save,
+  Search,
+  Trash2,
+  X,
+  XCircle
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import AllergyTagInput from "../component/AllergyTagInput";
 import {
-  getAllProductsFromMaster,
-  getQrMainGroups,
-  createQrMainGroup,
-  updateQrMainGroup,
-  deleteQrMainGroup,
-  getQrGroups,
-  createQrGroup,
-  updateQrGroup,
-  deleteQrGroup,
-  getQrSubgroups,
-  createQrSubgroup,
-  updateQrSubgroup,
-  deleteQrSubgroup,
-  getQrProducts,
-  addProductToQrMenu,
-  updateQrProductAssignment,
-  removeProductFromQrMenu,
-} from "../services/qrMenu.service";
-import {
+  addProductToPackage,
+  createNewPackage,
   getPackageHeaders,
   getPackageItems,
-  markAsPackageHeader,
-  addProductToPackage,
   removeProductFromPackage,
-  createNewPackage,
+  uploadPackageImage
 } from "../services/package.service";
+import {
+  createQrGroup,
+  createQrMainGroup,
+  createQrSubgroup,
+  deleteQrGroup,
+  deleteQrMainGroup,
+  deleteQrSubgroup,
+  getAllProductsFromMaster,
+  getQrGroups,
+  getQrMainGroups,
+  getQrProducts,
+  getQrSubgroups,
+  updateQrGroup,
+  updateQrMainGroup,
+  updateQrProductAssignment,
+  updateQrSubgroup
+} from "../services/qrMenu.service";
 
 const TABS = {
   PRODUCTS: "products",
@@ -2032,6 +2030,9 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     description: "",
     price: "",
   });
+  const [newPackageImage, setNewPackageImage] = useState(null);
+  const [newPackageImagePreview, setNewPackageImagePreview] = useState("");
+  const [uploadingPackageImageId, setUploadingPackageImageId] = useState(null);
 
   // Filter subgroups to only show "PACKAGES" subgroups
   const packageSubgroups = subgroups.filter(sg => 
@@ -2143,6 +2144,49 @@ function PackageManagementTab({ groups, subgroups, loading }) {
     }
   };
 
+  const fileToBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const handleNewPackageImageChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please choose an image file");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image must be below 5MB");
+      return;
+    }
+
+    setNewPackageImage(file);
+    setNewPackageImagePreview(URL.createObjectURL(file));
+  };
+
+  const handleExistingPackageImageUpload = async (pkg, file) => {
+    if (!file) return;
+
+    try {
+      setUploadingPackageImageId(pkg.ProductID);
+      const imageBase64 = await fileToBase64(file);
+      await uploadPackageImage(pkg.ProductID, imageBase64);
+      await loadPackageHeaders();
+      alert("Package image uploaded successfully!");
+    } catch (err) {
+      console.error("[PACKAGE-IMAGE] Upload error:", err);
+      alert("Error uploading image: " + (err.response?.data?.error || err.message));
+    } finally {
+      setUploadingPackageImageId(null);
+    }
+  };
+
   const handleCreateNewPackage = async (e) => {
     e.preventDefault();
     
@@ -2165,9 +2209,16 @@ function PackageManagementTab({ groups, subgroups, loading }) {
         qrSubgroupId: parseInt(selectedSubgroup),
         cloudinaryUrl: null, // TODO: Add image upload later
       });
+
+      if (newPackageImage && result?.data?.productId) {
+        const imageBase64 = await fileToBase64(newPackageImage);
+        await uploadPackageImage(result.data.productId, imageBase64);
+      }
       alert("✅ Package created successfully!");
       setShowCreatePackageModal(false);
       setNewPackageForm({ name: "", nameArabic: "", description: "", price: "" });
+      setNewPackageImage(null);
+      setNewPackageImagePreview("");
       loadPackageHeaders();
     } catch (err) {
       console.error("[CREATE-PACKAGE] Error:", err);
@@ -2320,6 +2371,17 @@ function PackageManagementTab({ groups, subgroups, loading }) {
                   }`}
                   onClick={() => setSelectedPackage(pkg)}
                 >
+                  <div className="mb-3 aspect-[3/2] overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center">
+                    {pkg.cloudinaryUrl ? (
+                      <img
+                        src={pkg.cloudinaryUrl}
+                        alt={pkg.Description}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-gray-400">No image</span>
+                    )}
+                  </div>
                   <h4 className="font-semibold text-gray-900 mb-2">{pkg.Description}</h4>
                   <p className="text-sm text-gray-600 mb-2">
                     Price: AED {(pkg.price || 0).toFixed(2)}
@@ -2327,6 +2389,33 @@ function PackageManagementTab({ groups, subgroups, loading }) {
                   <p className="text-xs text-gray-500">
                     Product ID: {pkg.ProductID}
                   </p>
+                  <label
+                    className={`mt-3 inline-flex w-full items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                      uploadingPackageImageId === pkg.ProductID
+                        ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
+                        : "cursor-pointer border-gray-300 text-gray-700 hover:bg-gray-50"
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {uploadingPackageImageId === pkg.ProductID ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      "Upload Image"
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingPackageImageId === pkg.ProductID}
+                      onChange={(e) => {
+                        handleExistingPackageImageUpload(pkg, e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
                 </div>
               ))}
             </div>
@@ -2695,6 +2784,31 @@ function PackageManagementTab({ groups, subgroups, loading }) {
                       className="input w-full"
                       required
                     />
+                  </div>
+
+                  {/* Package Image */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Package Image
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleNewPackageImageChange}
+                      className="input w-full"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Optional. JPG, PNG, or WebP below 5MB.
+                    </p>
+                    {newPackageImagePreview && (
+                      <div className="mt-3 aspect-[3/2] max-w-xs overflow-hidden rounded-lg border border-gray-200 bg-gray-100">
+                        <img
+                          src={newPackageImagePreview}
+                          alt="Package preview"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Preview */}

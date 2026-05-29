@@ -3,6 +3,9 @@
 
 import mssql from "mssql";
 import { connectToDb } from "../config/dbConfig.js";
+import { uploadImageToCloudinary } from "./cloudinary.service.js";
+
+
 
 const T_QR_PRODUCT_MASTER = "dbo.QrProductMaster";
 const T_QR_PRODUCT_CHILD = "dbo.QrProductChild";
@@ -175,6 +178,52 @@ export async function getPackageDetails(packageProductId) {
   
   const result = await request.query(sql);
   return result.recordset[0] || null;
+}
+
+
+
+
+export async function uploadPackageImage(packageProductId, imageBase64) {
+  if (!packageProductId) throw new Error("Package ProductID is required");
+  if (!imageBase64) throw new Error("Image data is required");
+
+  const cleanBase64 = String(imageBase64).replace(/^data:image\/\w+;base64,/, "");
+  const imageBuffer = Buffer.from(cleanBase64, "base64");
+
+  const uploadResult = await uploadImageToCloudinary(
+    imageBuffer,
+    `package-${packageProductId}`,
+    { folder: "qr-menu/packages" }
+  );
+
+  const pool = await connectToDb();
+  const request = pool.request();
+
+  request.input("productId", mssql.BigInt, packageProductId);
+  request.input("cloudinaryUrl", mssql.NVarChar, uploadResult.secure_url);
+
+  await request.query(`
+    IF EXISTS (
+      SELECT 1 FROM ${T_IMAGES}
+      WHERE ${q("DocID")} = @productId AND ${q("DocType")} = 'PRODUCT'
+    )
+    BEGIN
+      UPDATE ${T_IMAGES}
+      SET ${q("CloudinaryUrl")} = @cloudinaryUrl
+      WHERE ${q("DocID")} = @productId AND ${q("DocType")} = 'PRODUCT'
+    END
+    ELSE
+    BEGIN
+      INSERT INTO ${T_IMAGES} (${q("DocID")}, ${q("DocType")}, ${q("CloudinaryUrl")})
+      VALUES (@productId, 'PRODUCT', @cloudinaryUrl)
+    END
+  `);
+
+  return {
+    success: true,
+    productId: packageProductId,
+    cloudinaryUrl: uploadResult.secure_url,
+  };
 }
 
 /**
