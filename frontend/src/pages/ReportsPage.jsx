@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 // import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
 // import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
 import BottomNav from "../component/reservation/BottomNav";
+import AutocompleteInput from "../component/reservation/AutocompleteInput";
 import { formatLocalDate } from "../utils/date";
 import { 
   ArrowLeft, 
@@ -1207,14 +1208,24 @@ export default function ReportsPage() {
           {/* Search + group */}
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search guest / phone / table..."
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 z-[1100]" />
+              <AutocompleteInput
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full h-11 pl-11 pr-4 rounded-2xl border border-gray-200 bg-gray-50 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300"
+                onSelect={(customer) => setSearchQuery(customer.phone || customer.name || "")}
+                placeholder="Search customer (name / phone / email)..."
+                className="w-full h-11 pl-11 pr-10 rounded-2xl border border-gray-200 bg-gray-50 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 z-[1100] grid h-6 w-6 place-items-center rounded-full text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+                  aria-label="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-3">
