@@ -982,16 +982,6 @@ export default function ReportsPage() {
 
       const wb = XLSX.utils.book_new();
       const reportLabel = exportReportTypes.find((r) => r.value === activeExportConfig.reportType)?.label || "Report";
-      addSheet(wb, "Report Info", [
-        { Field: "Report", Value: reportLabel },
-        { Field: "Date mode", Value: activeExportConfig.dateMode === "single" ? "Single date" : "Date range" },
-        { Field: "Date", Value: activeExportConfig.dateMode === "single" ? activeExportConfig.selectedDate : `${activeExportConfig.startDate} to ${activeExportConfig.endDate}` },
-        { Field: "Status filter", Value: exportStatusOptions.find((s) => s.value === activeExportConfig.status)?.label || activeExportConfig.status },
-        { Field: "Search", Value: activeExportConfig.search || "" },
-        { Field: "Records", Value: rows.length },
-      ], [{ wch: 18 }, { wch: 34 }]);
-
-      const statsCols = [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
       const reportType = activeExportConfig.reportType;
 
       // The detail rows this report describes. Most types use the full filtered
@@ -1000,34 +990,66 @@ export default function ReportsPage() {
         ? rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"].includes(getEffectiveStatus(r)))
         : rows;
 
-      // Every report gets a counts summary so totals are always present.
-      addSheet(wb, "Summary", getExportStats(detailRows), statsCols);
+      // Build a single worksheet, stacking each section vertically. Sections are
+      // separated by a blank row and a title row so everything lives on one tab.
+      const ws = XLSX.utils.aoa_to_sheet([["Reservation Report"]]);
+      let firstSection = true;
+      const addTitle = (title) => {
+        // Blank spacer (except before the very first section) + title row.
+        XLSX.utils.sheet_add_aoa(ws, firstSection ? [[title]] : [[], [title]], { origin: -1 });
+        firstSection = false;
+      };
+      const addTable = (objs) => {
+        const data = objs.length ? objs : [{ Info: "No records found for the selected filters." }];
+        XLSX.utils.sheet_add_json(ws, data, { origin: -1 });
+      };
+      const addSection = (title, objs) => {
+        addTitle(title);
+        addTable(objs);
+      };
 
-      // Type-specific breakdown sheets (in addition to the summary + detail).
+      addSection("Report Info", [
+        { Field: "Report", Value: reportLabel },
+        { Field: "Date mode", Value: activeExportConfig.dateMode === "single" ? "Single date" : "Date range" },
+        { Field: "Date", Value: activeExportConfig.dateMode === "single" ? activeExportConfig.selectedDate : `${activeExportConfig.startDate} to ${activeExportConfig.endDate}` },
+        { Field: "Status filter", Value: exportStatusOptions.find((s) => s.value === activeExportConfig.status)?.label || activeExportConfig.status },
+        { Field: "Search", Value: activeExportConfig.search || "" },
+        { Field: "Records", Value: rows.length },
+      ]);
+
+      // Every report gets a counts summary so totals are always present.
+      addSection("Summary", getExportStats(detailRows));
+
+      // Type-specific breakdown sections (in addition to the summary + detail).
       if (reportType === "status-wise") {
         ["CONFIRMED", "ARRIVED", "SEATED", "LEFT", "CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "BOOKED", "PENDING"].forEach((status) => {
           const statusRows = rows.filter((r) => getEffectiveStatus(r) === status || (status === "CONFIRMED" && !getEffectiveStatus(r)));
-          if (statusRows.length) addSheet(wb, getStatusChip(status).label, getReservationExportRows(statusRows), detailCols);
+          if (statusRows.length) addSection(getStatusChip(status).label, getReservationExportRows(statusRows));
         });
       } else if (reportType === "meal-period") {
-        addSheet(wb, "Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "lunch")), detailCols);
-        addSheet(wb, "Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "dinner")), detailCols);
+        addSection("Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "lunch")));
+        addSection("Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "dinner")));
       } else if (reportType === "exceptions") {
-        addSheet(wb, "Cancelled", getReservationExportRows(detailRows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)))), detailCols);
-        addSheet(wb, "No Show", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "NO_SHOW")), detailCols);
-        addSheet(wb, "Left", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "LEFT")), detailCols);
+        addSection("Cancelled", getReservationExportRows(detailRows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)))));
+        addSection("No Show", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "NO_SHOW")));
+        addSection("Left", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "LEFT")));
       } else if (reportType === "customer") {
-        addSheet(wb, "Customers", buildCustomerRows(rows), [
-          { wch: 26 }, { wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 },
-        ]);
+        addSection("Customers", buildCustomerRows(rows));
       } else if (reportType === "table") {
-        addSheet(wb, "Tables", buildTableRows(rows), [
-          { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 34 }, { wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
-        ]);
+        addSection("Tables", buildTableRows(rows));
       }
 
       // Every report ends with the full per-reservation detail rows.
-      addSheet(wb, "Reservations", getReservationExportRows(detailRows), detailCols);
+      addSection("Reservations", getReservationExportRows(detailRows));
+
+      // Generous widths sized for the detail columns (the widest section).
+      ws["!cols"] = [
+        { wch: 16 }, { wch: 22 }, { wch: 12 }, { wch: 12 },
+        { wch: 26 }, { wch: 18 }, { wch: 28 }, { wch: 8 },
+        { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 8 },
+        { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 44 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, "Report");
 
       const stamp = activeExportConfig.dateMode === "single"
         ? activeExportConfig.selectedDate
