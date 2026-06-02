@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 // import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
 // import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
 import BottomNav from "../component/reservation/BottomNav";
+import { formatLocalDate } from "../utils/date";
 import { 
   ArrowLeft, 
   Home, 
@@ -31,21 +32,26 @@ import {
   ArrowDown,
   Sun,
   Moon,
+  FileDown,
+  X,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 
 // Mock data removed - using backend API only
 
 // tiny className helper (no external deps)
 const cn = (...classes) => classes.filter(Boolean).join(" ");
+const ACTIVE_EXCLUDED_STATUSES = new Set(["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"]);
+const isActiveStatus = (status) => !ACTIVE_EXCLUDED_STATUSES.has((status || "").toUpperCase());
 
 export default function ReportsPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
   const [dateMode, setDateMode] = useState("single"); // "single" or "range"
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
-  const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
+  const [selectedDate, setSelectedDate] = useState(formatLocalDate());
+  const [startDate, setStartDate] = useState(formatLocalDate());
+  const [endDate, setEndDate] = useState(formatLocalDate());
 
   // all, upcoming, cancelled, no-show, left, online, walkins, confirmed, arrived, seated...
   const [statusFilter, setStatusFilter] = useState("all");
@@ -59,6 +65,18 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [processingId, setProcessingId] = useState(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState(null);
+  const [exportConfig, setExportConfig] = useState({
+    reportType: "current",
+    dateMode: "single",
+    selectedDate: formatLocalDate(),
+    startDate: formatLocalDate(),
+    endDate: formatLocalDate(),
+    status: "all_active",
+    search: "",
+  });
 
   const prevLocationRef = useRef(location.pathname);
 
@@ -122,6 +140,8 @@ export default function ReportsPage() {
     return childStatus || masterStatus; // child always wins
   };
 
+  const isActiveReservation = (res) => isActiveStatus(getEffectiveStatus(res));
+
   const getStatusChip = (status) => {
     const s = (status || "").toUpperCase();
     const map = {
@@ -147,7 +167,7 @@ export default function ReportsPage() {
   // counts for badges
   const getStatusCount = useCallback((filter) => {
     if (!Array.isArray(allReservations)) return 0;
-    if (filter === "all") return allReservations.length;
+    if (filter === "all") return allReservations.filter(isActiveReservation).length;
     
     const now = new Date();
     
@@ -159,18 +179,18 @@ export default function ReportsPage() {
       if (filter === "upcoming") {
         if (!resDate || !resTime) return false;
         const resDateTime = new Date(`${resDate}T${resTime}`);
-        const isToday = resDate === new Date().toISOString().split("T")[0];
+        const isToday = resDate === formatLocalDate();
         if (isToday) {
-          return resDateTime > now && status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+          return resDateTime > now && isActiveStatus(status);
         }
-        return status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+        return isActiveStatus(status);
       }
       
       if (filter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
       if (filter === "no-show") return status === "NO_SHOW";
       if (filter === "left") return status === "LEFT";
-      if (filter === "online") return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
-      if (filter === "walkins") return isWalkIn(res);
+      if (filter === "online") return isActiveStatus(status) && ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+      if (filter === "walkins") return isActiveStatus(status) && isWalkIn(res);
       if (filter === "confirmed") return status === "CONFIRMED" || status === "" || !status;
       if (filter === "arrived") return status === "ARRIVED";
       if (filter === "seated") return status === "SEATED";
@@ -195,7 +215,7 @@ export default function ReportsPage() {
         const { getAllReservations } = await import("../services/reservation.service");
         
         // Determine if this is a backend-filtered status
-        const backendFilteredStatuses = ["cancelled", "no-show", "left", "confirmed", "arrived", "seated"];
+        const backendFilteredStatuses = ["confirmed", "arrived", "seated"];
         const isBackendFiltered = statusFilter !== "all" && backendFilteredStatuses.includes(statusFilter);
         
         // Build filters based on date mode
@@ -242,6 +262,8 @@ export default function ReportsPage() {
   // ===== stats =====
   const safeReservations = Array.isArray(reservations) ? reservations : [];
   const safeAllReservations = Array.isArray(allReservations) ? allReservations : [];
+  const activeReservations = safeReservations.filter(isActiveReservation);
+  const activeAllReservations = safeAllReservations.filter(isActiveReservation);
   
   // Helper to parse time and determine if it's lunch (8 AM - 6 PM) or dinner (after 6 PM)
   const getTimeCategory = (timeString) => {
@@ -267,27 +289,33 @@ export default function ReportsPage() {
   };
   
   const stats = {
-    total: safeReservations.length,
-    totalGuests: safeReservations.reduce((sum, r) => {
+    total: activeReservations.length,
+    totalGuests: activeReservations.reduce((sum, r) => {
       const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
       return sum + (isNaN(guests) ? 0 : guests);
     }, 0),
-    confirmed: safeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "CONFIRMED" || !r.status).length,
-    seated: safeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "SEATED").length,
-    walkInGuests: safeAllReservations.reduce((sum, r) => {
+    confirmed: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "CONFIRMED" || !r.status).length,
+    seated: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "SEATED").length,
+    walkInGuests: activeAllReservations.reduce((sum, r) => {
       if (isWalkIn(r)) {
         const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
       return sum;
     }, 0),
-    walkInCount: safeAllReservations.filter((r) => isWalkIn(r)).length,
+    walkInCount: activeAllReservations.filter((r) => isWalkIn(r)).length,
+    cancelled: safeAllReservations.filter((r) => {
+      const status = getEffectiveStatus(r);
+      return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
+    }).length,
+    noShow: safeAllReservations.filter((r) => getEffectiveStatus(r) === "NO_SHOW").length,
+    left: safeAllReservations.filter((r) => getEffectiveStatus(r) === "LEFT").length,
     // Lunch reservations (8 AM to 6 PM)
-    lunchReservations: safeAllReservations.filter((r) => {
+    lunchReservations: activeAllReservations.filter((r) => {
       const time = r.reservationTime || r.ReservationTime;
       return getTimeCategory(time) === "lunch";
     }).length,
-    lunchGuests: safeAllReservations.reduce((sum, r) => {
+    lunchGuests: activeAllReservations.reduce((sum, r) => {
       const time = r.reservationTime || r.ReservationTime;
       if (getTimeCategory(time) === "lunch") {
         const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
@@ -295,17 +323,17 @@ export default function ReportsPage() {
       }
       return sum;
     }, 0),
-    lunchTables: safeAllReservations.reduce((sum, r) => {
+    lunchTables: activeAllReservations.reduce((sum, r) => {
       const time = r.reservationTime || r.ReservationTime;
       if (getTimeCategory(time) === "lunch") return sum + getTableCount(r);
       return sum;
     }, 0),
     // Dinner reservations (after 6 PM)
-    dinnerReservations: safeAllReservations.filter((r) => {
+    dinnerReservations: activeAllReservations.filter((r) => {
       const time = r.reservationTime || r.ReservationTime;
       return getTimeCategory(time) === "dinner";
     }).length,
-    dinnerGuests: safeAllReservations.reduce((sum, r) => {
+    dinnerGuests: activeAllReservations.reduce((sum, r) => {
       const time = r.reservationTime || r.ReservationTime;
       if (getTimeCategory(time) === "dinner") {
         const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
@@ -313,7 +341,7 @@ export default function ReportsPage() {
       }
       return sum;
     }, 0),
-    dinnerTables: safeAllReservations.reduce((sum, r) => {
+    dinnerTables: activeAllReservations.reduce((sum, r) => {
       const time = r.reservationTime || r.ReservationTime;
       if (getTimeCategory(time) === "dinner") return sum + getTableCount(r);
       return sum;
@@ -501,16 +529,19 @@ export default function ReportsPage() {
 
   // ===== UI configs =====
   const statusFilters = [
-    { value: "all", label: "All", icon: ListFilter },
+    { value: "all", label: "All Active", icon: ListFilter },
     { value: "upcoming", label: "Upcoming", icon: Clock },
     { value: "online", label: "Online", icon: Globe },
     { value: "walkins", label: "Walk-ins", icon: Users },
     { value: "confirmed", label: "Confirmed", icon: CheckCircle2 },
     { value: "arrived", label: "Arrived", icon: Hand },
     { value: "seated", label: "Seated", icon: Armchair },
-    { value: "left", label: "Left", icon: LogOut },
-    { value: "cancelled", label: "Cancelled", icon: XCircle },
-    { value: "no-show", label: "No Show", icon: UserX },
+  ];
+
+  const exceptionFilters = [
+    { value: "cancelled", label: "Cancelled", count: stats.cancelled, icon: XCircle, color: "text-red-700", bg: "bg-red-50", border: "border-red-200" },
+    { value: "no-show", label: "No Show", count: stats.noShow, icon: UserX, color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" },
+    { value: "left", label: "Left", count: stats.left, icon: LogOut, color: "text-orange-700", bg: "bg-orange-50", border: "border-orange-200" },
   ];
 
   const groupOptions = [
@@ -519,19 +550,44 @@ export default function ReportsPage() {
     { value: "day", label: "By Day", icon: Calendar },
   ];
 
+  const exportReportTypes = [
+    { value: "current", label: "Current view", hint: "Exports the exact list currently shown on this page." },
+    { value: "detailed", label: "Reservation detail", hint: "Full reservation rows with selected date/status/search filters." },
+    { value: "summary", label: "Summary report", hint: "Totals for active, guests, lunch, dinner, walk-ins, and exceptions." },
+    { value: "status-wise", label: "Status-wise report", hint: "Separate Excel sheets by reservation status." },
+    { value: "meal-period", label: "Lunch / Dinner report", hint: "Separate sheets for lunch and dinner reservations." },
+    { value: "exceptions", label: "Exception report", hint: "Cancelled, no-show, and left reservations only." },
+    { value: "customer", label: "Customer report", hint: "Groups visits by customer name and phone." },
+    { value: "table", label: "Table report", hint: "Groups reservations and guests by assigned table." },
+  ];
+
+  const exportStatusOptions = [
+    { value: "all_active", label: "All Active" },
+    { value: "all", label: "All Statuses" },
+    { value: "upcoming", label: "Upcoming" },
+    { value: "online", label: "Online" },
+    { value: "walkins", label: "Walk-ins" },
+    { value: "confirmed", label: "Confirmed" },
+    { value: "arrived", label: "Arrived" },
+    { value: "seated", label: "Seated" },
+    { value: "cancelled", label: "Cancelled" },
+    { value: "no-show", label: "No Show" },
+    { value: "left", label: "Left" },
+  ];
+
   // Filter for display
   const displayList = useMemo(() => {
     // Start with reservations data
     let filtered = Array.isArray(reservations) ? [...reservations] : [];
     
-    // Apply status filter for frontend-filtered statuses (upcoming, online, walkins)
-    // Backend-filtered statuses (cancelled, no-show, left, confirmed, arrived, seated) are already filtered
-    if (statusFilter !== "all") {
-      const backendFilteredStatuses = ["cancelled", "no-show", "left", "confirmed", "arrived", "seated"];
+    if (statusFilter === "all") {
+      filtered = filtered.filter(isActiveReservation);
+    } else {
+      const backendFilteredStatuses = ["confirmed", "arrived", "seated"];
       const isBackendFiltered = backendFilteredStatuses.includes(statusFilter);
       
       if (!isBackendFiltered) {
-        // Frontend filtering for: upcoming, online, walkins
+        // Frontend filtering for: upcoming, online, walkins, exceptions
         const now = new Date();
         filtered = filtered.filter((res) => {
           const status = getEffectiveStatus(res);
@@ -541,19 +597,31 @@ export default function ReportsPage() {
           if (statusFilter === "upcoming") {
             if (!resDate || !resTime) return false;
             const resDateTime = new Date(`${resDate}T${resTime}`);
-            const isToday = resDate === new Date().toISOString().split("T")[0];
+            const isToday = resDate === formatLocalDate();
             if (isToday) {
-              return resDateTime > now && status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+              return resDateTime > now && isActiveStatus(status);
             }
-            return status !== "CANCELLED" && status !== "CANCELLED_NOTIFY" && status !== "NO_SHOW" && status !== "LEFT";
+            return isActiveStatus(status);
           }
           
           if (statusFilter === "online") {
-            return ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+            return isActiveStatus(status) && ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
           }
           
           if (statusFilter === "walkins") {
-            return isWalkIn(res);
+            return isActiveStatus(status) && isWalkIn(res);
+          }
+
+          if (statusFilter === "cancelled") {
+            return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
+          }
+
+          if (statusFilter === "no-show") {
+            return status === "NO_SHOW";
+          }
+
+          if (statusFilter === "left") {
+            return status === "LEFT";
           }
           
           return true;
@@ -575,6 +643,359 @@ export default function ReportsPage() {
     return filtered;
   }, [reservations, statusFilter, searchQuery]);
 
+  // Apply sort controls (same order as export)
+  const sortedDisplayList = useMemo(() => {
+    const list = [...displayList];
+    const mult = sortOrder === "asc" ? 1 : -1;
+    const timeOf = (r) => {
+      const d = r.reservationDate || r.ReservationDate || "";
+      const t = (r.reservationTime || r.ReservationTime || "00:00").slice(0, 8);
+      const ts = Date.parse(`${d}T${t}`);
+      return Number.isNaN(ts) ? 0 : ts;
+    };
+    list.sort((a, b) => {
+      if (sortBy === "name") {
+        const na = (a.customerName || a.CustomerName || "").toLowerCase();
+        const nb = (b.customerName || b.CustomerName || "").toLowerCase();
+        return mult * na.localeCompare(nb);
+      }
+      if (sortBy === "date") {
+        const da = a.reservationDate || a.ReservationDate || "";
+        const db = b.reservationDate || b.ReservationDate || "";
+        const c = da.localeCompare(db);
+        if (c !== 0) return mult * c;
+        return mult * (timeOf(a) - timeOf(b));
+      }
+      return mult * (timeOf(a) - timeOf(b));
+    });
+    return list;
+  }, [displayList, sortBy, sortOrder]);
+
+  const sortReservationRows = useCallback((rows) => {
+    const list = [...rows];
+    const mult = sortOrder === "asc" ? 1 : -1;
+    const timeOf = (r) => {
+      const d = r.reservationDate || r.ReservationDate || "";
+      const t = (r.reservationTime || r.ReservationTime || "00:00").slice(0, 8);
+      const ts = Date.parse(`${d}T${t}`);
+      return Number.isNaN(ts) ? 0 : ts;
+    };
+
+    list.sort((a, b) => {
+      if (sortBy === "name") {
+        const na = (a.customerName || a.CustomerName || "").toLowerCase();
+        const nb = (b.customerName || b.CustomerName || "").toLowerCase();
+        return mult * na.localeCompare(nb);
+      }
+      if (sortBy === "date") {
+        const da = a.reservationDate || a.ReservationDate || "";
+        const db = b.reservationDate || b.ReservationDate || "";
+        const c = da.localeCompare(db);
+        if (c !== 0) return mult * c;
+        return mult * (timeOf(a) - timeOf(b));
+      }
+      return mult * (timeOf(a) - timeOf(b));
+    });
+
+    return list;
+  }, [sortBy, sortOrder]);
+
+  const matchesExportStatus = useCallback((res, filter) => {
+    const status = getEffectiveStatus(res);
+    const source = ((res.bookingSource || res.BookingSource) || "").toUpperCase();
+
+    if (filter === "all") return true;
+    if (filter === "all_active") return isActiveStatus(status);
+    if (filter === "upcoming") {
+      const resDate = res.reservationDate || res.ReservationDate;
+      const resTime = res.reservationTime || res.ReservationTime;
+      if (!resDate || !resTime || !isActiveStatus(status)) return false;
+      return new Date(`${resDate}T${resTime}`) > new Date();
+    }
+    if (filter === "online") return isActiveStatus(status) && source === "GUEST_ONLINE";
+    if (filter === "walkins") return isActiveStatus(status) && isWalkIn(res);
+    if (filter === "confirmed") return status === "CONFIRMED" || status === "" || !status;
+    if (filter === "arrived") return status === "ARRIVED";
+    if (filter === "seated") return status === "SEATED";
+    if (filter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
+    if (filter === "no-show") return status === "NO_SHOW";
+    if (filter === "left") return status === "LEFT";
+    return true;
+  }, []);
+
+  const filterExportRows = useCallback((rows, config) => {
+    let filtered = Array.isArray(rows) ? [...rows] : [];
+    filtered = filtered.filter((r) => matchesExportStatus(r, config.status));
+
+    const q = String(config.search || "").trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter((r) => {
+        const name = (r.customerName || r.CustomerName || "").toLowerCase();
+        const phone = String(r.customerPhone || r.CustomerPhone || "");
+        const tableText = getTableLabel(r).toLowerCase();
+        return name.includes(q) || phone.includes(q) || tableText.includes(q);
+      });
+    }
+
+    return sortReservationRows(filtered);
+  }, [matchesExportStatus, sortReservationRows]);
+
+  const getReservationExportRows = useCallback((rows) => rows.map((r) => {
+      const status = getEffectiveStatus(r);
+      const statusLabel = getStatusChip(status).label;
+      const meal = getTimeCategory(r.reservationTime || r.ReservationTime);
+      const mealLabel = meal === "lunch" ? "Lunch" : meal === "dinner" ? "Dinner" : "";
+      const requests = (r.specialRequests || r.SpecialRequests || "").replace(/\r?\n/g, " ");
+      return {
+        "Reservation ID": r.reservationId || r.bookingID || r.ReservationID || "",
+        Date: r.reservationDate || r.ReservationDate || "",
+        Time: r.reservationTime || r.ReservationTime || "",
+        "Meal period": mealLabel,
+        "Guest name": r.customerName || r.CustomerName || "",
+        Phone: r.customerPhone || r.CustomerPhone || "",
+        Guests: r.numberOfGuests ?? r.NumberOfGuests ?? r.pax ?? "",
+        Table: getTableLabel(r),
+        Status: statusLabel,
+        Source: r.bookingSource || r.BookingSource || "",
+        "Walk-in": isWalkIn(r) ? "Yes" : "No",
+        "Special requests": requests,
+      };
+    }), []);
+
+  const sumGuests = useCallback((items) => items.reduce((sum, r) => {
+    const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10);
+    return sum + (isNaN(guests) ? 0 : guests);
+  }, 0), []);
+
+  const getExportStats = useCallback((rows) => {
+    const activeRows = rows.filter(isActiveReservation);
+    const lunchRows = activeRows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "lunch");
+    const dinnerRows = activeRows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "dinner");
+    const walkInRows = activeRows.filter(isWalkIn);
+    const onlineRows = activeRows.filter((r) => ((r.bookingSource || r.BookingSource) || "").toUpperCase() === "GUEST_ONLINE");
+    const confirmedRows = rows.filter((r) => getEffectiveStatus(r) === "CONFIRMED" || !getEffectiveStatus(r));
+    const arrivedRows = rows.filter((r) => getEffectiveStatus(r) === "ARRIVED");
+    const seatedRows = rows.filter((r) => getEffectiveStatus(r) === "SEATED");
+    const cancelledRows = rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)));
+    const noShowRows = rows.filter((r) => getEffectiveStatus(r) === "NO_SHOW");
+    const leftRows = rows.filter((r) => getEffectiveStatus(r) === "LEFT");
+    const unassignedRows = rows.filter((r) => getTableCount(r) === 0);
+
+    const tableTotal = (items) => items.reduce((sum, r) => sum + getTableCount(r), 0);
+    return [
+      { Metric: "All records", Count: rows.length, Guests: sumGuests(rows), Tables: tableTotal(rows) },
+      { Metric: "Active reservations", Count: activeRows.length, Guests: sumGuests(activeRows), Tables: tableTotal(activeRows) },
+      { Metric: "Lunch", Count: lunchRows.length, Guests: sumGuests(lunchRows), Tables: tableTotal(lunchRows) },
+      { Metric: "Dinner", Count: dinnerRows.length, Guests: sumGuests(dinnerRows), Tables: tableTotal(dinnerRows) },
+      { Metric: "Walk-ins", Count: walkInRows.length, Guests: sumGuests(walkInRows), Tables: tableTotal(walkInRows) },
+      { Metric: "Online", Count: onlineRows.length, Guests: sumGuests(onlineRows), Tables: tableTotal(onlineRows) },
+      { Metric: "Confirmed", Count: confirmedRows.length, Guests: sumGuests(confirmedRows), Tables: tableTotal(confirmedRows) },
+      { Metric: "Arrived", Count: arrivedRows.length, Guests: sumGuests(arrivedRows), Tables: tableTotal(arrivedRows) },
+      { Metric: "Seated", Count: seatedRows.length, Guests: sumGuests(seatedRows), Tables: tableTotal(seatedRows) },
+      { Metric: "Cancelled", Count: cancelledRows.length, Guests: sumGuests(cancelledRows), Tables: tableTotal(cancelledRows) },
+      { Metric: "No Show", Count: noShowRows.length, Guests: sumGuests(noShowRows), Tables: tableTotal(noShowRows) },
+      { Metric: "Left", Count: leftRows.length, Guests: sumGuests(leftRows), Tables: tableTotal(leftRows) },
+      { Metric: "Unassigned table", Count: unassignedRows.length, Guests: sumGuests(unassignedRows), Tables: 0 },
+    ];
+  }, [sumGuests]);
+
+  const buildCustomerRows = useCallback((rows) => {
+    const grouped = new Map();
+    rows.forEach((r) => {
+      const name = r.customerName || r.CustomerName || "Guest";
+      const phone = r.customerPhone || r.CustomerPhone || "";
+      const key = `${phone || "no-phone"}|${name.toLowerCase()}`;
+      const current = grouped.get(key) || {
+        "Guest name": name,
+        Phone: phone,
+        Reservations: 0,
+        Guests: 0,
+        "Last visit": "",
+        "Walk-ins": 0,
+        Cancelled: 0,
+        "No Show": 0,
+      };
+      const date = r.reservationDate || r.ReservationDate || "";
+      current.Reservations += 1;
+      current.Guests += parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10) || 0;
+      current["Last visit"] = !current["Last visit"] || date > current["Last visit"] ? date : current["Last visit"];
+      current["Walk-ins"] += isWalkIn(r) ? 1 : 0;
+      current.Cancelled += ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)) ? 1 : 0;
+      current["No Show"] += getEffectiveStatus(r) === "NO_SHOW" ? 1 : 0;
+      grouped.set(key, current);
+    });
+    return [...grouped.values()].sort((a, b) => b.Reservations - a.Reservations || a["Guest name"].localeCompare(b["Guest name"]));
+  }, []);
+
+  const buildTableRows = useCallback((rows) => {
+    const grouped = new Map();
+    rows.forEach((r) => {
+      const table = getTableLabel(r);
+      const current = grouped.get(table) || {
+        Table: table,
+        Reservations: 0,
+        "Active reservations": 0,
+        Guests: 0,
+        Lunch: 0,
+        Dinner: 0,
+        Cancelled: 0,
+        "No Show": 0,
+      };
+      const meal = getTimeCategory(r.reservationTime || r.ReservationTime);
+      current.Reservations += 1;
+      current["Active reservations"] += isActiveReservation(r) ? 1 : 0;
+      current.Guests += parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10) || 0;
+      current.Lunch += meal === "lunch" ? 1 : 0;
+      current.Dinner += meal === "dinner" ? 1 : 0;
+      current.Cancelled += ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)) ? 1 : 0;
+      current["No Show"] += getEffectiveStatus(r) === "NO_SHOW" ? 1 : 0;
+      grouped.set(table, current);
+    });
+    return [...grouped.values()].sort((a, b) => b.Reservations - a.Reservations || a.Table.localeCompare(b.Table));
+  }, []);
+
+  const addSheet = useCallback((wb, sheetName, rows, cols = null) => {
+    const safeName = String(sheetName || "Sheet").replace(/[\[\]*?:/\\]/g, " ").slice(0, 31);
+    const data = rows.length ? rows : [{ Message: "No records found for the selected filters." }];
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = cols || Object.keys(data[0] || {}).map(() => ({ wch: 18 }));
+    XLSX.utils.book_append_sheet(wb, ws, safeName);
+  }, []);
+
+  const detailCols = useMemo(() => [
+    { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 12 },
+    { wch: 26 }, { wch: 16 }, { wch: 8 }, { wch: 20 },
+    { wch: 14 }, { wch: 16 }, { wch: 8 }, { wch: 44 },
+  ], []);
+
+  const handleOpenExportModal = useCallback(() => {
+    setExportError(null);
+    setExportConfig({
+      reportType: "current",
+      dateMode,
+      selectedDate,
+      startDate,
+      endDate,
+      status: statusFilter === "all" ? "all_active" : statusFilter,
+      search: searchQuery,
+    });
+    setShowExportModal(true);
+  }, [dateMode, selectedDate, startDate, endDate, statusFilter, searchQuery]);
+
+  const normalizeExportConfig = useCallback((config) => {
+    if (config.reportType === "exceptions") {
+      return {
+        ...config,
+        status: ["cancelled", "no-show", "left", "all"].includes(config.status) ? config.status : "all",
+      };
+    }
+
+    if (["summary", "status-wise"].includes(config.reportType) && config.status === "all_active") {
+      return { ...config, status: "all" };
+    }
+
+    return config;
+  }, []);
+
+  const handleExportExcel = useCallback(async () => {
+    setExportLoading(true);
+    setExportError(null);
+
+    try {
+      const activeExportConfig = normalizeExportConfig(exportConfig);
+      let sourceRows = [];
+      if (activeExportConfig.reportType === "current") {
+        sourceRows = sortedDisplayList;
+      } else {
+        const { getAllReservations } = await import("../services/reservation.service");
+        const filters = activeExportConfig.dateMode === "single"
+          ? { date: activeExportConfig.selectedDate }
+          : { fromDate: activeExportConfig.startDate, toDate: activeExportConfig.endDate };
+        const response = await getAllReservations(filters);
+        sourceRows = Array.isArray(response) ? response : response?.reservations || [];
+      }
+
+      const rows = activeExportConfig.reportType === "current"
+        ? sortReservationRows(sourceRows)
+        : filterExportRows(sourceRows, activeExportConfig);
+
+      if (!rows.length) {
+        setExportError("No records found for the selected export filters.");
+        return;
+      }
+
+      const wb = XLSX.utils.book_new();
+      const reportLabel = exportReportTypes.find((r) => r.value === activeExportConfig.reportType)?.label || "Report";
+      addSheet(wb, "Report Info", [
+        { Field: "Report", Value: reportLabel },
+        { Field: "Date mode", Value: activeExportConfig.dateMode === "single" ? "Single date" : "Date range" },
+        { Field: "Date", Value: activeExportConfig.dateMode === "single" ? activeExportConfig.selectedDate : `${activeExportConfig.startDate} to ${activeExportConfig.endDate}` },
+        { Field: "Status filter", Value: exportStatusOptions.find((s) => s.value === activeExportConfig.status)?.label || activeExportConfig.status },
+        { Field: "Search", Value: activeExportConfig.search || "" },
+        { Field: "Records", Value: rows.length },
+      ], [{ wch: 18 }, { wch: 34 }]);
+
+      if (activeExportConfig.reportType === "summary") {
+        addSheet(wb, "Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+      } else if (activeExportConfig.reportType === "status-wise") {
+        addSheet(wb, "Status Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+        ["CONFIRMED", "ARRIVED", "SEATED", "LEFT", "CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "BOOKED", "PENDING"].forEach((status) => {
+          const statusRows = rows.filter((r) => getEffectiveStatus(r) === status || (status === "CONFIRMED" && !getEffectiveStatus(r)));
+          if (statusRows.length) addSheet(wb, getStatusChip(status).label, getReservationExportRows(statusRows), detailCols);
+        });
+      } else if (activeExportConfig.reportType === "meal-period") {
+        addSheet(wb, "Meal Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+        addSheet(wb, "Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "lunch")), detailCols);
+        addSheet(wb, "Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "dinner")), detailCols);
+      } else if (activeExportConfig.reportType === "exceptions") {
+        const exceptionRows = rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"].includes(getEffectiveStatus(r)));
+        addSheet(wb, "Exception Summary", getExportStats(exceptionRows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+        addSheet(wb, "Cancelled", getReservationExportRows(exceptionRows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)))), detailCols);
+        addSheet(wb, "No Show", getReservationExportRows(exceptionRows.filter((r) => getEffectiveStatus(r) === "NO_SHOW")), detailCols);
+        addSheet(wb, "Left", getReservationExportRows(exceptionRows.filter((r) => getEffectiveStatus(r) === "LEFT")), detailCols);
+      } else if (activeExportConfig.reportType === "customer") {
+        addSheet(wb, "Customers", buildCustomerRows(rows), [
+          { wch: 26 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
+        ]);
+        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
+      } else if (activeExportConfig.reportType === "table") {
+        addSheet(wb, "Tables", buildTableRows(rows), [
+          { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
+        ]);
+        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
+      } else {
+        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
+      }
+
+      const stamp = activeExportConfig.dateMode === "single"
+        ? activeExportConfig.selectedDate
+        : `${activeExportConfig.startDate}_to_${activeExportConfig.endDate}`;
+      const safeStamp = String(stamp).replace(/[\\/:*?"<>|]/g, "-");
+      const safeType = String(activeExportConfig.reportType).replace(/[\\/:*?"<>|]/g, "-");
+      XLSX.writeFile(wb, `${safeType}-reservations-report-${safeStamp}.xlsx`);
+      setShowExportModal(false);
+    } catch (err) {
+      console.error("Export report error:", err);
+      setExportError(err?.response?.data?.error || err?.message || "Failed to export report.");
+    } finally {
+      setExportLoading(false);
+    }
+  }, [
+    addSheet,
+    buildCustomerRows,
+    buildTableRows,
+    detailCols,
+    exportConfig,
+    exportReportTypes,
+    exportStatusOptions,
+    filterExportRows,
+    getExportStats,
+    getReservationExportRows,
+    normalizeExportConfig,
+    sortReservationRows,
+    sortedDisplayList,
+  ]);
+
   // ===== render =====
   return (
     <div className="min-h-screen bg-[radial-gradient(120%_60%_at_50%_0%,rgba(201,26,77,0.10),transparent_55%),linear-gradient(to_bottom,#fff,#fff)] pb-24">
@@ -594,6 +1015,22 @@ export default function ReportsPage() {
             <h1 className="text-xl font-extrabold text-gray-900 truncate">Reports</h1>
             <p className="text-sm text-gray-500 truncate">Daily overview for host &amp; reservation team</p>
           </div>
+
+          <button
+            type="button"
+            onClick={handleOpenExportModal}
+            disabled={loading || exportLoading}
+            className={cn(
+              "shrink-0 h-11 px-3 sm:px-4 rounded-2xl border text-sm font-extrabold transition-all inline-flex items-center gap-2",
+              loading || exportLoading
+                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 hover:border-emerald-300"
+            )}
+            title="Choose and download an Excel report"
+          >
+            <FileDown className="w-5 h-5 shrink-0" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
 
           <button
             onClick={() => navigate("/reservation")}
@@ -729,7 +1166,7 @@ export default function ReportsPage() {
               <Calendar className="w-4 h-4" />
             </div>
             <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.total)}</p>
-            <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Reservations</p>
+            <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Active Reservations</p>
           </div>
 
           <div className="relative overflow-hidden bg-white rounded-3xl border border-gray-200 shadow-sm p-4">
@@ -781,6 +1218,22 @@ export default function ReportsPage() {
             <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.seated)}</p>
             <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Seated</p>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter("cancelled")}
+            className={cn(
+              "relative overflow-hidden rounded-3xl border shadow-sm p-4 text-left transition-all hover:-translate-y-[1px]",
+              statusFilter === "cancelled" ? "border-red-300 bg-red-50" : "border-gray-200 bg-white hover:border-red-200"
+            )}
+          >
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-red-600 to-rose-500 opacity-10 rounded-bl-[40px]" />
+            <div className="inline-flex p-2 rounded-2xl bg-gradient-to-br from-red-600 to-rose-500 text-white mb-2 shadow-sm">
+              <XCircle className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-extrabold text-gray-900">{formatNumber(stats.cancelled)}</p>
+            <p className="text-xs font-extrabold text-gray-500 uppercase tracking-wide">Cancelled</p>
+          </button>
         </section>
 
         {/* Filters */}
@@ -840,6 +1293,7 @@ export default function ReportsPage() {
             </div>
           </div>
           
+            <p className="mb-2 text-xs font-extrabold uppercase tracking-wide text-gray-500">Active reservations</p>
             <div className="flex flex-wrap gap-2">
             {statusFilters.map((f) => {
               const Icon = f.icon;
@@ -872,6 +1326,43 @@ export default function ReportsPage() {
             );
           })}
             </div>
+
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-extrabold uppercase tracking-wide text-gray-500">Exceptions</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {exceptionFilters.map((f) => {
+                  const Icon = f.icon;
+                  const active = statusFilter === f.value;
+
+                  return (
+                    <button
+                      key={f.value}
+                      type="button"
+                      onClick={() => setStatusFilter(f.value)}
+                      className={cn(
+                        "rounded-2xl border p-4 text-left transition-all hover:-translate-y-[1px] hover:shadow-sm",
+                        active ? `${f.border} ${f.bg} shadow-sm` : "border-gray-200 bg-white hover:border-gray-300"
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl", f.bg, f.color)}>
+                            <Icon className="h-5 w-5" />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-extrabold text-gray-900">{f.label}</p>
+                            <p className="text-[11px] font-bold text-gray-500">Hidden from active totals</p>
+                          </div>
+                        </div>
+                        <span className={cn("inline-flex h-9 min-w-9 items-center justify-center rounded-full px-2 text-sm font-black", active ? "bg-white text-gray-900" : `${f.bg} ${f.color}`)}>
+                          {formatNumber(f.count)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
         </section>
 
         {/* List */}
@@ -884,7 +1375,7 @@ export default function ReportsPage() {
           <div className="bg-white rounded-3xl border border-red-200 shadow-sm p-6 text-center">
             <p className="text-red-700 font-extrabold">{error}</p>
             </div>
-        ) : displayList.length === 0 ? (
+        ) : sortedDisplayList.length === 0 ? (
           <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-10 text-center">
             <div className="w-14 h-14 rounded-2xl bg-gray-100 mx-auto mb-4 grid place-items-center">
               <Users className="w-7 h-7 text-gray-400" />
@@ -898,7 +1389,7 @@ export default function ReportsPage() {
               // Group rendering (UI only)
               if (groupBy === "hour") {
                 const grouped = {};
-                displayList.forEach((res) => {
+                sortedDisplayList.forEach((res) => {
                   const t = res.reservationTime || res.ReservationTime || "";
                   const hour = t ? t.split(":")[0] : "Unknown";
                   const key = `${hour}:00`;
@@ -941,7 +1432,7 @@ export default function ReportsPage() {
 
               if (groupBy === "day") {
                 const grouped = {};
-                displayList.forEach((res) => {
+                sortedDisplayList.forEach((res) => {
                   const d = res.reservationDate || res.ReservationDate || res.bookingDate || "";
                   const key = d ? d.split("T")[0] : "Unknown";
                   grouped[key] = grouped[key] || [];
@@ -982,11 +1473,199 @@ export default function ReportsPage() {
               }
 
               // none
-              return displayList.map((r, idx) => renderReservationCard(r, idx));
+              return sortedDisplayList.map((r, idx) => renderReservationCard(r, idx));
             })()}
           </div>
         )}
       </div>
+
+      {showExportModal && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 px-0 pb-[88px] pt-8 sm:pb-[96px]">
+          <div className="flex max-h-[calc(100dvh-120px)] w-full max-w-4xl flex-col overflow-hidden rounded-t-[28px] border border-gray-200 bg-white shadow-2xl">
+            <div className="shrink-0 border-b border-gray-100 bg-white px-4 pb-4 pt-3 sm:px-5">
+              <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-300" />
+              <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-emerald-700">Excel Export</p>
+                <h2 className="mt-1 text-lg font-black text-gray-900">Choose reservation report</h2>
+                <p className="mt-1 text-sm font-semibold text-gray-500">Generated from reservation API data for the selected filters.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                disabled={exportLoading}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Close export modal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 pb-6 sm:px-5 sm:py-5 sm:pb-6">
+              <div>
+                <p className="mb-2 text-xs font-extrabold uppercase tracking-wide text-gray-500">Report type</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+                  {exportReportTypes.map((type) => {
+                    const active = exportConfig.reportType === type.value;
+                    return (
+                      <button
+                        key={type.value}
+                        type="button"
+                        onClick={() => setExportConfig((prev) => ({
+                          ...prev,
+                          reportType: type.value,
+                          status: type.value === "exceptions"
+                            ? "all"
+                            : (["summary", "status-wise"].includes(type.value) && prev.status === "all_active" ? "all" : prev.status),
+                        }))}
+                        className={cn(
+                          "rounded-2xl border p-3 text-left transition-all sm:p-4",
+                          active
+                            ? "border-emerald-300 bg-emerald-50 shadow-sm"
+                            : "border-gray-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/40"
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span className={cn(
+                            "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border",
+                            active ? "border-emerald-600 bg-emerald-600" : "border-gray-300 bg-white"
+                          )}>
+                            {active && <span className="h-2 w-2 rounded-full bg-white" />}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-black text-gray-900">{type.label}</span>
+                            <span className="mt-1 block text-xs font-semibold leading-4 text-gray-500 sm:leading-5">{type.hint}</span>
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                  <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-gray-500">Date filter</p>
+                  <div className="inline-flex rounded-2xl border border-gray-200 bg-white p-1">
+                    {[
+                      { value: "single", label: "Single" },
+                      { value: "range", label: "Range" },
+                    ].map((mode) => (
+                      <button
+                        key={mode.value}
+                        type="button"
+                        onClick={() => setExportConfig((prev) => ({ ...prev, dateMode: mode.value }))}
+                        className={cn(
+                          "rounded-xl px-4 py-2 text-xs font-extrabold transition-all",
+                          exportConfig.dateMode === mode.value
+                            ? "bg-emerald-600 text-white shadow-sm"
+                            : "text-gray-600 hover:text-gray-900"
+                        )}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {exportConfig.dateMode === "single" ? (
+                    <div className="mt-4">
+                      <label className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-gray-500">Date</label>
+                      <input
+                        type="date"
+                        value={exportConfig.selectedDate}
+                        onChange={(e) => setExportConfig((prev) => ({ ...prev, selectedDate: e.target.value }))}
+                        className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-gray-500">From</label>
+                        <input
+                          type="date"
+                          value={exportConfig.startDate}
+                          max={exportConfig.endDate}
+                          onChange={(e) => setExportConfig((prev) => ({ ...prev, startDate: e.target.value }))}
+                          className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-gray-500">To</label>
+                        <input
+                          type="date"
+                          value={exportConfig.endDate}
+                          min={exportConfig.startDate}
+                          onChange={(e) => setExportConfig((prev) => ({ ...prev, endDate: e.target.value }))}
+                          className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                  <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-gray-500">Reservation filters</p>
+                  <label className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-gray-500">Status</label>
+                  <select
+                    value={exportConfig.status}
+                    onChange={(e) => setExportConfig((prev) => ({ ...prev, status: e.target.value }))}
+                    disabled={exportConfig.reportType === "current"}
+                    className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    {exportStatusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+
+                  <label className="mb-2 mt-4 block text-xs font-extrabold uppercase tracking-wide text-gray-500">Search</label>
+                  <input
+                    type="text"
+                    value={exportConfig.search}
+                    onChange={(e) => setExportConfig((prev) => ({ ...prev, search: e.target.value }))}
+                    disabled={exportConfig.reportType === "current"}
+                    placeholder="Guest / phone / table"
+                    className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none placeholder:text-gray-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                  {exportConfig.reportType === "current" && (
+                    <p className="mt-3 text-xs font-semibold leading-5 text-gray-500">
+                      Current view uses the filters already applied on the Reports page.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {exportError && (
+                <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  {exportError}
+                </div>
+              )}
+            </div>
+
+            <div className="shrink-0 border-t border-gray-100 bg-white px-4 py-3 sm:px-5 sm:py-4">
+              <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                disabled={exportLoading}
+                className="h-11 flex-1 rounded-2xl border border-gray-200 bg-white px-5 text-sm font-extrabold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                disabled={exportLoading}
+                className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-emerald-600 bg-emerald-600 px-5 text-sm font-extrabold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70 sm:flex-none"
+              >
+                {exportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
+                Generate Excel
+              </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <BottomNav />
     </div>

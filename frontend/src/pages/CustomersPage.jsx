@@ -1,602 +1,603 @@
 // frontend/src/pages/CustomersPage.jsx
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { searchCustomers, updateCustomer } from "../services/reservation.service";
-import BottomNav from "../component/reservation/BottomNav";
-import { 
-  Search, 
-  Phone, 
-  Mail, 
-  User,
-  History,
-  ChevronRight,
-  UserCircle2,
-  Calendar,
-  RefreshCw,
+import {
   ArrowUpDown,
-  X,
-  Save,
+  Calendar,
+  CalendarPlus,
+  ChevronRight,
   Edit2,
+  History,
+  Mail,
+  Phone,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
   TrendingUp,
+  User,
+  UserCircle2,
   UserPlus,
-  CalendarPlus
+  X
 } from "lucide-react";
+import BottomNav from "../component/reservation/BottomNav";
+import { createCustomer, searchCustomers, updateCustomer } from "../services/reservation.service";
+
+const PAGE_SIZE = 50;
+const cn = (...classes) => classes.filter(Boolean).join(" ");
+
+const sortOptions = [
+  { value: "recent", label: "Recently Added", icon: Calendar },
+  { value: "name", label: "Name A-Z", icon: User },
+  { value: "frequency", label: "Visit Frequency", icon: TrendingUp },
+  { value: "lastVisit", label: "Last Visit", icon: History }
+];
+
+const emptyForm = { name: "", phone: "", email: "" };
 
 export default function CustomersPage() {
   const navigate = useNavigate();
   const [customers, setCustomers] = useState([]);
-  const [filteredCustomers, setFilteredCustomers] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [sortBy, setSortBy] = useState("recent"); // recent, name, frequency, lastVisit
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState("recent");
   const [showSortMenu, setShowSortMenu] = useState(false);
-  
-  // Edit modal state
-  const [editingCustomer, setEditingCustomer] = useState(null);
-  const [editForm, setEditForm] = useState({ name: "", phone: "", email: "" });
-  const [editError, setEditError] = useState("");
-  const [saving, setSaving] = useState(false);
-  
-  // Quick action menu state
+  const [page, setPage] = useState(1);
+  const [paging, setPaging] = useState({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 });
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showActionMenu, setShowActionMenu] = useState(false);
+  const [modalMode, setModalMode] = useState(null); // add | edit | null
+  const [form, setForm] = useState(emptyForm);
+  const [formError, setFormError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const loadMoreRef = useRef(null);
 
-  useEffect(() => {
-    loadCustomers();
-  }, []);
+  const totalPages = Math.max(1, paging.totalPages || Math.ceil((paging.total || 0) / PAGE_SIZE));
+  const activeSort = sortOptions.find((option) => option.value === sortBy) || sortOptions[0];
 
-  useEffect(() => {
-    // Filter and sort customers
-    let filtered = customers;
-    
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(customer => 
-        customer.name?.toLowerCase().includes(query) ||
-        customer.phone?.toLowerCase().includes(query) ||
-        customer.email?.toLowerCase().includes(query)
-      );
-    }
-    
-    // Apply sorting
-    filtered = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case "name":
-          return (a.name || "").localeCompare(b.name || "");
-        case "frequency":
-          return (b.visitCount || 0) - (a.visitCount || 0);
-        case "lastVisit":
-          const dateA = a.lastVisit ? new Date(a.lastVisit) : new Date(0);
-          const dateB = b.lastVisit ? new Date(b.lastVisit) : new Date(0);
-          return dateB - dateA;
-        case "recent":
-        default:
-          const createdA = a.createdDate ? new Date(a.createdDate) : new Date(0);
-          const createdB = b.createdDate ? new Date(b.createdDate) : new Date(0);
-          return createdB - createdA;
-      }
-    });
-    
-    setFilteredCustomers(filtered);
-  }, [searchQuery, customers, sortBy]);
+  const loadCustomers = async (mode = "replace", nextPage = page) => {
+    const isAppend = mode === "append";
+    if (isAppend) setLoadingMore(true);
+    else setLoading(true);
+    setError("");
 
-  const loadCustomers = async () => {
-    setLoading(true);
-    setError(null);
     try {
-      const result = await searchCustomers('');
-      if (result.ok && Array.isArray(result.customers)) {
-        setCustomers(result.customers);
-        setFilteredCustomers(result.customers);
-      } else {
-        setError("Failed to load customers");
-        setCustomers([]);
-        setFilteredCustomers([]);
+      const result = await searchCustomers(debouncedSearchQuery, {
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+        sort: sortBy
+      });
+
+      if (!result.ok || !Array.isArray(result.customers)) {
+        throw new Error(result.error || "Failed to load customers");
       }
+
+      setCustomers((prev) => {
+        if (!isAppend) return result.customers;
+        const seen = new Set(prev.map((customer) => String(customer.id)));
+        return [
+          ...prev,
+          ...result.customers.filter((customer) => !seen.has(String(customer.id)))
+        ];
+      });
+      setPaging(result.paging || {
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+        total: result.customers.length,
+        totalPages: 1
+      });
     } catch (err) {
       console.error("Error loading customers:", err);
       setError(err.message || "Failed to load customers");
-      setCustomers([]);
-      setFilteredCustomers([]);
+      if (!isAppend) {
+        setCustomers([]);
+        setPaging({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 });
+      }
     } finally {
-      setLoading(false);
+      if (isAppend) setLoadingMore(false);
+      else setLoading(false);
     }
   };
 
-  const handleRefresh = () => {
-    loadCustomers();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [sortBy]);
+
+  useEffect(() => {
+    loadCustomers(page === 1 ? "replace" : "append", page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearchQuery, page, sortBy]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting || loading || loadingMore || page >= totalPages) return;
+        setPage((p) => p + 1);
+      },
+      { rootMargin: "260px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [loading, loadingMore, page, totalPages]);
+
+  const resetAndReload = () => {
+    if (page === 1) loadCustomers("replace", 1);
+    else setPage(1);
   };
 
-  const handleEditClick = (customer, e) => {
-    e.stopPropagation();
-    setEditingCustomer(customer);
-    setEditForm({
+  const openAddModal = () => {
+    setModalMode("add");
+    setForm(emptyForm);
+    setFormError("");
+  };
+
+  const openEditModal = (customer, event) => {
+    event?.stopPropagation();
+    setModalMode("edit");
+    setSelectedCustomer(customer);
+    setForm({
       name: customer.name || "",
       phone: customer.phone || "",
       email: customer.email || ""
     });
-    setEditError("");
+    setFormError("");
   };
 
-  const handleEditChange = (e) => {
-    const { name, value } = e.target;
-    setEditForm(prev => ({ ...prev, [name]: value }));
-    setEditError("");
+  const closeCustomerModal = () => {
+    setModalMode(null);
+    setForm(emptyForm);
+    setFormError("");
+    setSaving(false);
   };
 
-  const handleSaveEdit = async () => {
-    if (!editForm.name.trim()) {
-      setEditError("Name is required");
+  const saveCustomer = async () => {
+    const name = form.name.trim();
+    const phone = form.phone.trim();
+    const email = form.email.trim();
+
+    if (!name) {
+      setFormError("Name is required");
       return;
     }
-    if (!editForm.phone.trim()) {
-      setEditError("Phone is required");
+    if (!phone) {
+      setFormError("Phone is required");
       return;
     }
 
     setSaving(true);
-    setEditError("");
-    
-    try {
-      const result = await updateCustomer(editingCustomer.id, {
-        name: editForm.name.trim(),
-        phone: editForm.phone.trim(),
-        email: editForm.email.trim()
-      });
+    setFormError("");
 
-      if (result.ok) {
-        // Update local state
-        const updatedCustomers = customers.map(c => 
-          c.id === editingCustomer.id 
-            ? { ...c, name: editForm.name.trim(), phone: editForm.phone.trim(), email: editForm.email.trim() }
-            : c
-        );
-        setCustomers(updatedCustomers);
-        setEditingCustomer(null);
-      } else {
-        setEditError(result.error || "Failed to update customer");
+    try {
+      if (modalMode === "add") {
+        const result = await createCustomer({ name, phone, email });
+        if (!result.ok) throw new Error(result.error || "Failed to create customer");
+
+        const newCustomer = result.customer || {
+          id: Date.now(),
+          name,
+          phone,
+          email,
+          visitCount: 0,
+          lastVisit: null,
+          createdDate: new Date().toISOString()
+        };
+
+        setCustomers((prev) => [newCustomer, ...prev]);
+        setPaging((prev) => ({ ...prev, total: Number(prev.total || 0) + 1 }));
+        closeCustomerModal();
+        return;
       }
+
+      const result = await updateCustomer(selectedCustomer.id, { name, phone, email });
+      if (!result.ok) throw new Error(result.error || "Failed to update customer");
+
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === selectedCustomer.id
+            ? { ...customer, name, phone, email }
+            : customer
+        )
+      );
+      closeCustomerModal();
     } catch (err) {
-      console.error("Error updating customer:", err);
-      setEditError(err?.response?.data?.error || err.message || "Failed to update customer");
+      console.error("Error saving customer:", err);
+      setFormError(err?.response?.data?.error || err.message || "Failed to save customer");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleCancelEdit = () => {
-    setEditingCustomer(null);
-    setEditForm({ name: "", phone: "", email: "" });
-    setEditError("");
-  };
-
-  const handleCustomerClick = (customer) => {
-    // Show action menu to choose between Walk-in or Reservation
+  const openBookingActions = (customer) => {
     setSelectedCustomer(customer);
     setShowActionMenu(true);
   };
 
-  const handleWalkIn = () => {
-    if (selectedCustomer) {
-      navigate('/walk-in', { 
-        state: { 
-          customerData: {
-            name: selectedCustomer.name,
-            phone: selectedCustomer.phone,
-            email: selectedCustomer.email
-          }
+  const closeBookingActions = () => {
+    setShowActionMenu(false);
+    setSelectedCustomer(null);
+  };
+
+  const goToWalkIn = () => {
+    if (!selectedCustomer) return;
+    navigate("/walk-in", {
+      state: {
+        customerData: {
+          name: selectedCustomer.name,
+          phone: selectedCustomer.phone,
+          email: selectedCustomer.email
         }
-      });
-    }
-    setShowActionMenu(false);
-    setSelectedCustomer(null);
+      }
+    });
   };
 
-  const handleReservation = () => {
-    if (selectedCustomer) {
-      navigate('/reservation-form', { 
-        state: { 
-          customerData: {
-            name: selectedCustomer.name,
-            phone: selectedCustomer.phone,
-            email: selectedCustomer.email
-          }
+  const goToReservation = () => {
+    if (!selectedCustomer) return;
+    navigate("/reservation-form", {
+      state: {
+        customerData: {
+          name: selectedCustomer.name,
+          phone: selectedCustomer.phone,
+          email: selectedCustomer.email
         }
-      });
-    }
-    setShowActionMenu(false);
-    setSelectedCustomer(null);
+      }
+    });
   };
 
-  const handleCloseActionMenu = () => {
-    setShowActionMenu(false);
-    setSelectedCustomer(null);
-  };
-
-  const sortOptions = [
-    { value: "recent", label: "Recently Added", icon: Calendar },
-    { value: "name", label: "Name (A-Z)", icon: User },
-    { value: "frequency", label: "Visit Frequency", icon: TrendingUp },
-    { value: "lastVisit", label: "Last Visit", icon: History }
-  ];
+  const customerInitial = (name) => (name || "?").trim().charAt(0).toUpperCase() || "?";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50 pb-24">
-      {/* Header */}
-      <div className="bg-white shadow-sm sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div 
-                className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                style={{ backgroundColor: 'var(--grad-start-soft)' }}
-              >
-                <UserCircle2 className="w-6 h-6" style={{ color: 'var(--text-accent)' }} />
+    <div className="min-h-screen bg-[#f7f7f8] pb-24">
+      <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto max-w-5xl px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#FBE6EC] text-[#C91A4D]">
+                <UserCircle2 className="h-6 w-6" />
               </div>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
-                <p className="text-sm text-gray-500">
-                  {filteredCustomers.length} {filteredCustomers.length === 1 ? 'customer' : 'customers'}
-                </p>
+              <div className="min-w-0">
+                <h1 className="truncate text-xl font-bold text-gray-950">Customers</h1>
+                <p className="text-sm font-medium text-gray-500">All</p>
               </div>
             </div>
+
             <div className="flex items-center gap-2">
-              {/* Sort Button */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowSortMenu(!showSortMenu)}
-                  className="p-3 rounded-xl hover:bg-gray-50 transition-colors relative"
-                  style={{ color: '#C91A4D' }}
-                >
-                  <ArrowUpDown className="w-5 h-5" />
-                  {sortBy !== "recent" && (
-                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full" style={{ backgroundColor: '#C91A4D' }}></span>
-                  )}
-                </button>
-                
-                {/* Sort Menu */}
-                {showSortMenu && (
-                  <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-50">
-                    {sortOptions.map(option => {
-                      const Icon = option.icon;
-                      return (
-                        <button
-                          key={option.value}
-                          onClick={() => {
-                            setSortBy(option.value);
-                            setShowSortMenu(false);
-                          }}
-                          className={`w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors ${
-                            sortBy === option.value ? 'bg-rose-50' : ''
-                          }`}
-                        >
-                          <Icon 
-                            className="w-4 h-4" 
-                            style={{ color: sortBy === option.value ? '#C91A4D' : '#6B7280' }} 
-                          />
-                          <span 
-                            className={`text-sm ${
-                              sortBy === option.value ? 'font-semibold' : 'font-medium'
-                            }`}
-                            style={{ color: sortBy === option.value ? '#C91A4D' : '#374151' }}
-                          >
-                            {option.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              
-              {/* Refresh Button */}
               <button
-                onClick={handleRefresh}
-                disabled={loading}
-                className="p-3 rounded-xl hover:bg-gray-50 transition-colors"
-                style={{ color: '#C91A4D' }}
+                type="button"
+                onClick={resetAndReload}
+                disabled={loading || loadingMore}
+                className="grid h-11 w-11 place-items-center rounded-xl border border-gray-200 bg-white text-[#C91A4D] transition hover:bg-gray-50 disabled:opacity-50"
+                aria-label="Refresh customers"
+                title="Refresh"
               >
-                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={cn("h-5 w-5", (loading || loadingMore) && "animate-spin")} />
+              </button>
+              <button
+                type="button"
+                onClick={openAddModal}
+                className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#C91A4D] px-4 text-sm font-bold text-white shadow-sm transition hover:bg-[#ad143f]"
+              >
+                <Plus className="h-4 w-4" />
+                Add
               </button>
             </div>
           </div>
 
-          {/* Search Bar */}
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by name, phone, or email..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-transparent"
-            />
+          <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search name, phone, or email"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 pl-12 pr-4 text-sm font-medium text-gray-900 outline-none transition focus:border-[#C91A4D] focus:bg-white focus:ring-2 focus:ring-[#FBE6EC]"
+              />
+            </div>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowSortMenu((value) => !value)}
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-700 transition hover:bg-gray-50 md:w-auto"
+              >
+                <ArrowUpDown className="h-4 w-4 text-[#C91A4D]" />
+                {activeSort.label}
+              </button>
+
+              {showSortMenu && (
+                <div className="absolute right-0 z-50 mt-2 w-56 rounded-xl border border-gray-200 bg-white py-2 shadow-lg">
+                  {sortOptions.map((option) => {
+                    const Icon = option.icon;
+                    const active = sortBy === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setSortBy(option.value);
+                          setShowSortMenu(false);
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition",
+                          active ? "bg-[#FBE6EC] font-bold text-[#C91A4D]" : "font-medium text-gray-700 hover:bg-gray-50"
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Content */}
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <main className="mx-auto max-w-5xl px-4 py-5">
         {loading && customers.length === 0 ? (
-          <div className="text-center py-12">
-            <RefreshCw className="w-12 h-12 mx-auto mb-4 animate-spin" style={{ color: '#C91A4D' }} />
-            <p className="text-gray-600">Loading customers...</p>
+          <div className="grid min-h-[40vh] place-items-center rounded-2xl border border-gray-200 bg-white">
+            <div className="text-center">
+              <RefreshCw className="mx-auto mb-3 h-9 w-9 animate-spin text-[#C91A4D]" />
+              <p className="text-sm font-semibold text-gray-600">Loading customers...</p>
+            </div>
           </div>
         ) : error && customers.length === 0 ? (
-          <div className="text-center py-12">
-            <div 
-              className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
-              style={{ backgroundColor: '#FBE6EC' }}
-            >
-              <User className="w-8 h-8" style={{ color: '#C91A4D' }} />
-            </div>
-            <p className="text-gray-600 mb-4">{error}</p>
+          <div className="rounded-2xl border border-red-200 bg-white p-8 text-center">
+            <p className="mb-4 font-semibold text-red-700">{error}</p>
             <button
-              onClick={handleRefresh}
-              className="px-6 py-2 rounded-xl text-white font-medium hover:shadow-lg transition-all"
-              style={{ backgroundColor: '#C91A4D' }}
+              type="button"
+              onClick={resetAndReload}
+              className="rounded-xl bg-[#C91A4D] px-5 py-2.5 text-sm font-bold text-white"
             >
               Try Again
             </button>
           </div>
-        ) : filteredCustomers.length === 0 ? (
-          <div className="text-center py-12">
-            <div 
-              className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
-              style={{ backgroundColor: '#FBE6EC' }}
-            >
-              <Search className="w-8 h-8" style={{ color: '#C91A4D' }} />
+        ) : customers.length === 0 ? (
+          <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center">
+            <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-xl bg-[#FBE6EC] text-[#C91A4D]">
+              <UserPlus className="h-7 w-7" />
             </div>
-            <p className="text-gray-600">
-              {searchQuery ? 'No customers found matching your search' : 'No customers yet'}
+            <h2 className="mb-1 text-lg font-bold text-gray-950">No customers found</h2>
+            <p className="mb-5 text-sm font-medium text-gray-500">
+              {debouncedSearchQuery ? "Try another search or add a new customer." : "Add your first customer to get started."}
             </p>
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="rounded-xl bg-[#C91A4D] px-5 py-2.5 text-sm font-bold text-white"
+            >
+              Add Customer
+            </button>
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredCustomers.map((customer) => (
-              <div
+          <div className="grid gap-3">
+            {customers.map((customer) => (
+              <article
                 key={customer.id}
-                onClick={() => handleCustomerClick(customer)}
-                className="bg-white rounded-2xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer border border-gray-100"
+                onClick={() => openBookingActions(customer)}
+                className="group cursor-pointer rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition hover:-translate-y-[1px] hover:border-[#C91A4D]/30 hover:shadow-md"
               >
                 <div className="flex items-start gap-4">
-                  {/* Avatar */}
-                  <div 
-                    className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: '#FBE6EC' }}
-                  >
-                    <User className="w-6 h-6" style={{ color: '#C91A4D' }} />
+                  <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[#FBE6EC] text-lg font-black text-[#C91A4D]">
+                    {customerInitial(customer.name)}
                   </div>
 
-                  {/* Customer Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <h3 className="font-semibold text-gray-900 text-lg truncate">
-                        {customer.name || 'Unknown'}
-                      </h3>
-                      <div className="flex items-center gap-2 shrink-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-base font-bold text-gray-950">
+                          {customer.name || "Unknown"}
+                        </h3>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-medium text-gray-600">
+                          {customer.phone && (
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
+                              <Phone className="h-4 w-4 shrink-0 text-[#C91A4D]" />
+                              <span className="truncate">{customer.phone}</span>
+                            </span>
+                          )}
+                          {customer.email && (
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
+                              <Mail className="h-4 w-4 shrink-0 text-[#C91A4D]" />
+                              <span className="truncate">{customer.email}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1">
                         <button
-                          onClick={(e) => handleEditClick(customer, e)}
-                          className="p-2 rounded-lg hover:bg-rose-50 transition-colors"
-                          style={{ color: '#C91A4D' }}
+                          type="button"
+                          onClick={(event) => openEditModal(customer, event)}
+                          className="grid h-9 w-9 place-items-center rounded-lg text-gray-400 transition hover:bg-[#FBE6EC] hover:text-[#C91A4D]"
+                          aria-label={`Edit ${customer.name || "customer"}`}
+                          title="Edit customer"
                         >
-                          <Edit2 className="w-4 h-4" />
+                          <Edit2 className="h-4 w-4" />
                         </button>
-                        <ChevronRight className="w-5 h-5 text-gray-400" />
+                        <ChevronRight className="h-5 w-5 text-gray-300 transition group-hover:text-[#C91A4D]" />
                       </div>
                     </div>
 
-                    {/* Contact Info */}
-                    <div className="space-y-1.5">
-                      {customer.phone && (
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Phone className="w-4 h-4 shrink-0" style={{ color: '#C91A4D' }} />
-                          <span className="truncate">{customer.phone}</span>
-                        </div>
-                      )}
-                      {customer.email && (
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Mail className="w-4 h-4 shrink-0" style={{ color: '#C91A4D' }} />
-                          <span className="truncate">{customer.email}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Stats */}
-                    <div className="flex items-center gap-4 mt-2 pt-2 border-t border-gray-100">
-                      {customer.visitCount !== undefined && customer.visitCount !== null && (
-                        <div className="flex items-center gap-2 text-xs text-gray-500">
-                          <TrendingUp className="w-3.5 h-3.5" />
-                          <span>{customer.visitCount} {customer.visitCount === 1 ? 'visit' : 'visits'}</span>
-                        </div>
-                      )}
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 text-xs font-bold text-gray-500">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1">
+                        <TrendingUp className="h-3.5 w-3.5" />
+                        {customer.visitCount ?? 0} {(customer.visitCount ?? 0) === 1 ? "visit" : "visits"}
+                      </span>
                       {customer.lastVisit && (
-                        <div className="flex items-center gap-2 text-xs text-gray-500">
-                          <History className="w-3.5 h-3.5" />
-                          <span>Last: {new Date(customer.lastVisit).toLocaleDateString()}</span>
-                        </div>
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1">
+                          <History className="h-3.5 w-3.5" />
+                          Last {new Date(customer.lastVisit).toLocaleDateString()}
+                        </span>
                       )}
                     </div>
                   </div>
                 </div>
-              </div>
+              </article>
             ))}
+
+            <div ref={loadMoreRef} className="py-5 text-center">
+              {loadingMore ? (
+                <div className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500">
+                  <RefreshCw className="h-4 w-4 animate-spin text-[#C91A4D]" />
+                  Loading more...
+                </div>
+              ) : page < totalPages ? (
+                <span className="text-xs font-semibold text-gray-400">Scroll for more</span>
+              ) : customers.length > PAGE_SIZE ? (
+                <span className="text-xs font-semibold text-gray-400">All loaded</span>
+              ) : null}
+            </div>
           </div>
         )}
-      </div>
+      </main>
 
-      {/* Quick Action Menu */}
       {showActionMenu && selectedCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900">Create Booking</h2>
-              <button
-                onClick={handleCloseActionMenu}
-                className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-
-            {/* Customer Info Preview */}
-            <div className="mb-6 p-4 rounded-xl bg-gray-50 border border-gray-100">
-              <div className="flex items-center gap-3 mb-2">
-                <div 
-                  className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: '#FBE6EC' }}
-                >
-                  <User className="w-5 h-5" style={{ color: '#C91A4D' }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 truncate">{selectedCustomer.name}</p>
-                  <p className="text-sm text-gray-600 truncate">{selectedCustomer.phone}</p>
-                </div>
+        <div className="fixed inset-0 z-50 grid place-items-end bg-black/45 p-0 sm:place-items-center sm:p-4">
+          <div className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-bold text-gray-950">{selectedCustomer.name}</h2>
+                <p className="truncate text-sm font-medium text-gray-500">{selectedCustomer.phone}</p>
               </div>
+              <button
+                type="button"
+                onClick={closeBookingActions}
+                className="grid h-10 w-10 place-items-center rounded-xl hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
             </div>
 
-            <p className="text-sm text-gray-600 mb-4">Choose booking type:</p>
-
-            {/* Action Buttons */}
-            <div className="space-y-3">
+            <div className="grid gap-3">
               <button
-                onClick={handleWalkIn}
-                className="w-full px-6 py-4 rounded-xl border-2 font-medium text-left hover:shadow-md transition-all flex items-center gap-4 group"
-                style={{ borderColor: '#C91A4D', color: '#C91A4D' }}
+                type="button"
+                onClick={goToWalkIn}
+                className="flex items-center gap-4 rounded-2xl border border-gray-200 p-4 text-left transition hover:border-[#C91A4D]/30 hover:bg-[#FBE6EC]/40"
               >
-                <div 
-                  className="w-12 h-12 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"
-                  style={{ backgroundColor: '#FBE6EC' }}
-                >
-                  <UserPlus className="w-6 h-6" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-base">Walk-in</p>
-                  <p className="text-sm text-gray-600">Seat customer now</p>
-                </div>
-                <ChevronRight className="w-5 h-5" />
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-[#FBE6EC] text-[#C91A4D]">
+                  <UserPlus className="h-5 w-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-bold text-gray-950">Walk-in</span>
+                  <span className="block text-sm font-medium text-gray-500">Seat customer now</span>
+                </span>
+                <ChevronRight className="h-5 w-5 text-gray-300" />
               </button>
 
               <button
-                onClick={handleReservation}
-                className="w-full px-6 py-4 rounded-xl border-2 font-medium text-left hover:shadow-md transition-all flex items-center gap-4 group"
-                style={{ borderColor: '#C91A4D', color: '#C91A4D' }}
+                type="button"
+                onClick={goToReservation}
+                className="flex items-center gap-4 rounded-2xl border border-gray-200 p-4 text-left transition hover:border-[#C91A4D]/30 hover:bg-[#FBE6EC]/40"
               >
-                <div 
-                  className="w-12 h-12 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"
-                  style={{ backgroundColor: '#FBE6EC' }}
-                >
-                  <CalendarPlus className="w-6 h-6" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-base">Reservation</p>
-                  <p className="text-sm text-gray-600">Book for later</p>
-                </div>
-                <ChevronRight className="w-5 h-5" />
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-[#FBE6EC] text-[#C91A4D]">
+                  <CalendarPlus className="h-5 w-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-bold text-gray-950">Reservation</span>
+                  <span className="block text-sm font-medium text-gray-500">Book for later</span>
+                </span>
+                <ChevronRight className="h-5 w-5 text-gray-300" />
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Edit Modal */}
-      {editingCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900">Edit Customer</h2>
+      {modalMode && (
+        <div className="fixed inset-0 z-50 grid place-items-end bg-black/45 p-0 sm:place-items-center sm:p-4">
+          <div className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl">
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-950">
+                {modalMode === "add" ? "Add Customer" : "Edit Customer"}
+              </h2>
               <button
-                onClick={handleCancelEdit}
-                className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+                type="button"
+                onClick={closeCustomerModal}
+                className="grid h-10 w-10 place-items-center rounded-xl hover:bg-gray-100"
+                aria-label="Close"
               >
-                <X className="w-5 h-5 text-gray-500" />
+                <X className="h-5 w-5 text-gray-500" />
               </button>
             </div>
 
-            {editError && (
-              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200">
-                <p className="text-sm text-red-600">{editError}</p>
+            {formError && (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {formError}
               </div>
             )}
 
-            <div className="space-y-4 mb-6">
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Name *
-                </label>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-gray-700">Name</span>
                 <input
                   type="text"
-                  name="name"
-                  value={editForm.name}
-                  onChange={handleEditChange}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-transparent"
-                  placeholder="Customer name"
+                  value={form.name}
+                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
                   disabled={saving}
+                  className="h-12 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium outline-none focus:border-[#C91A4D] focus:ring-2 focus:ring-[#FBE6EC]"
+                  placeholder="Customer name"
                 />
-              </div>
+              </label>
 
-              {/* Phone */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone *
-                </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-gray-700">Phone</span>
                 <input
                   type="tel"
-                  name="phone"
-                  value={editForm.phone}
-                  onChange={handleEditChange}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-transparent"
-                  placeholder="Phone number"
+                  value={form.phone}
+                  onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
                   disabled={saving}
+                  className="h-12 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium outline-none focus:border-[#C91A4D] focus:ring-2 focus:ring-[#FBE6EC]"
+                  placeholder="Phone number"
                 />
-              </div>
+              </label>
 
-              {/* Email */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email
-                </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-gray-700">Email</span>
                 <input
                   type="email"
-                  name="email"
-                  value={editForm.email}
-                  onChange={handleEditChange}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-transparent"
-                  placeholder="Email address (optional)"
+                  value={form.email}
+                  onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
                   disabled={saving}
+                  className="h-12 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium outline-none focus:border-[#C91A4D] focus:ring-2 focus:ring-[#FBE6EC]"
+                  placeholder="Optional"
                 />
-              </div>
+              </label>
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-3">
+            <div className="mt-6 flex gap-3">
               <button
-                onClick={handleCancelEdit}
+                type="button"
+                onClick={closeCustomerModal}
                 disabled={saving}
-                className="flex-1 px-6 py-3 rounded-xl border border-gray-200 font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                className="h-12 flex-1 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSaveEdit}
+                type="button"
+                onClick={saveCustomer}
                 disabled={saving}
-                className="flex-1 px-6 py-3 rounded-xl font-medium text-white hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                style={{ backgroundColor: '#C91A4D' }}
+                className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#C91A4D] text-sm font-bold text-white transition hover:bg-[#ad143f] disabled:opacity-50"
               >
-                {saving ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Saving...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    <span>Save</span>
-                  </>
-                )}
+                {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save
               </button>
             </div>
           </div>

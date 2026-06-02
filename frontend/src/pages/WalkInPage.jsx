@@ -10,6 +10,8 @@ import FloorMapContainer from "../component/reservation/FloorMapContainer";
 import AutocompleteInput from "../component/reservation/AutocompleteInput";
 import PhoneInputWithCountry from "../component/reservation/PhoneInputWithCountry";
 import BottomNav from "../component/reservation/BottomNav";
+import { formatLocalDate } from "../utils/date";
+import { normalizePhoneForInput } from "../utils/phone";
 
 export default function WalkInPage() {
   const navigate = useNavigate();
@@ -32,7 +34,9 @@ export default function WalkInPage() {
   
   const [formData, setFormData] = useState({
     guestName: prefilledCustomer?.name || "",
-    phone: prefilledCustomer?.phone || "",
+    phone: normalizePhoneForInput(prefilledCustomer?.phone || "", "ae"),
+    email: prefilledCustomer?.email || "",
+    customerId: prefilledCustomer?.id ?? prefilledCustomer?.customerId ?? prefilledCustomer?.customerID ?? null,
     partySize: 1,
     seatingPreference: "",
     notes: "",
@@ -55,6 +59,9 @@ export default function WalkInPage() {
   const [waitTimeMinutes, setWaitTimeMinutes] = useState(15); // Default 15 minutes
   const processedTableRef = useRef(null);
   const [customerHistory, setCustomerHistory] = useState([]); // Customer autocomplete history
+  const [phoneLockedByCustomer, setPhoneLockedByCustomer] = useState(
+    Boolean(String(prefilledCustomer?.phone || "").trim())
+  );
 
   // Get selected area name
   const selectedAreaName = formData.seatingPreference 
@@ -97,18 +104,26 @@ export default function WalkInPage() {
     
     setFormData(prev => ({
       ...prev,
-      [name]: name === "partySize" ? parseInt(processedValue) || 1 : processedValue
+      [name]: name === "partySize" ? parseInt(processedValue) || 1 : processedValue,
+      ...(name === "guestName" ? { customerId: null } : {})
     }));
+
+    if (name === "guestName") {
+      setPhoneLockedByCustomer(false);
+    }
   };
 
   // Handle customer selection from autocomplete
   const handleCustomerSelect = (customer) => {
+    const customerPhone = normalizePhoneForInput(customer.phone || "", "ae");
     setFormData(prev => ({
       ...prev,
       guestName: customer.name || '',
-      phone: customer.phone || '',
-      email: customer.email || ''
+      phone: customerPhone,
+      email: customer.email || '',
+      customerId: customer.id ?? customer.customerId ?? customer.customerID ?? null
     }));
+    setPhoneLockedByCustomer(Boolean(String(customerPhone || "").trim()));
     // Clear any field errors
     setFieldErrors({});
   };
@@ -237,7 +252,7 @@ export default function WalkInPage() {
       }
 
       const now = new Date();
-      const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const currentDate = formatLocalDate(now); // YYYY-MM-DD in local timezone
       const currentTime = now.toTimeString().slice(0, 5); // HH:mm
       
       const reservationData = {
@@ -255,6 +270,7 @@ export default function WalkInPage() {
         hostessName: formData.hostessId ? (hostesses.find(h => h.id === formData.hostessId)?.name || null) : null,
         isWalkIn: true, // Mark as walk-in
         bookingSource: "WALKIN",
+        customerId: formData.customerId ?? null,
         initialStatus: "SEATED" // Create directly as SEATED, skip CHECKED_IN
       };
       const result = await createReservation(reservationData);
@@ -299,11 +315,14 @@ export default function WalkInPage() {
         setFormData({
           guestName: "",
           phone: "",
+          email: "",
+          customerId: null,
           partySize: 1,
           seatingPreference: "",
           notes: "",
           hostessId: null
         });
+        setPhoneLockedByCustomer(false);
         setSelectedTables([]);
         setSuggestedTables([]);
       } else {
@@ -367,11 +386,14 @@ export default function WalkInPage() {
         setFormData({
           guestName: "",
           phone: "",
+          email: "",
+          customerId: null,
           partySize: 1,
           seatingPreference: "",
           notes: "",
           hostessId: null
         });
+        setPhoneLockedByCustomer(false);
         setSelectedTables([]);
         
         // Navigate to waitlist page
@@ -690,9 +712,9 @@ export default function WalkInPage() {
                   onChange={handleChange}
                   onSelect={handleCustomerSelect}
                   suggestions={customerHistory}
-                  field="name"
+                  field="search"
                   name="guestName"
-                  placeholder="Enter guest name (start typing...)"
+                  placeholder="Search customer by name or phone"
                   style={{
                     width: "100%",
                     padding: "14px",
@@ -731,6 +753,7 @@ export default function WalkInPage() {
                   <PhoneInputWithCountry
                     value={formData.phone}
                     onChange={(phone) => {
+                      if (phoneLockedByCustomer) return;
                       setFormData(prev => ({ ...prev, phone: phone || "" }));
                       if (fieldErrors.phone) {
                         setFieldErrors(prev => {
@@ -743,7 +766,28 @@ export default function WalkInPage() {
                     placeholder="Phone number"
                     defaultCountry="ae"
                     hasError={!!fieldErrors.phone}
+                    disabled={phoneLockedByCustomer}
                   />
+                  {!fieldErrors.phone && phoneLockedByCustomer && (
+                    <div style={{
+                      marginTop: "6px",
+                      fontSize: "12px",
+                      color: "#6b7280",
+                      fontWeight: "600"
+                    }}>
+                      Phone is locked from the selected customer.
+                    </div>
+                  )}
+                  {!fieldErrors.phone && formData.customerId && !phoneLockedByCustomer && (
+                    <div style={{
+                      marginTop: "6px",
+                      fontSize: "12px",
+                      color: "#6b7280",
+                      fontWeight: "600"
+                    }}>
+                      This customer has no saved phone. Add one here.
+                    </div>
+                  )}
                   {fieldErrors.phone && (
                     <div style={{
                       marginTop: "6px",
@@ -1926,4 +1970,3 @@ export default function WalkInPage() {
     </div>
   );
 }
-

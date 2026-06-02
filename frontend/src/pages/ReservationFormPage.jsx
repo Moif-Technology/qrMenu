@@ -53,9 +53,9 @@ export default function ReservationFormPage() {
 
   const [formData, setFormData] = useState({
     firstName: prefilledCustomer?.name || "",
-    phone: prefilledCustomer?.phone || "",
+    phone: normalizePhoneForInput(prefilledCustomer?.phone || "", "ae"),
     email: prefilledCustomer?.email || "",
-    customerId: prefilledCustomer?.id ?? null, // When user selects a customer from dropdown, we update this customer if they change name/phone
+    customerId: prefilledCustomer?.id ?? prefilledCustomer?.customerId ?? prefilledCustomer?.customerID ?? null, // When user selects a customer from dropdown, we update this customer if they change name/phone
     cover: 2, // Party size
     section: "", // Area/Floor selection
     comments: "",
@@ -86,6 +86,9 @@ export default function ReservationFormPage() {
   const processedTableRef = useRef(null); // Track if we've processed the table from navigation
   const [loadingReservation, setLoadingReservation] = useState(false); // Loading reservation data for edit mode
   const [customerHistory, setCustomerHistory] = useState([]); // Customer autocomplete history
+  const [phoneLockedByCustomer, setPhoneLockedByCustomer] = useState(
+    Boolean(String(prefilledCustomer?.phone || "").trim())
+  );
 
   // Get today's date in local timezone (YYYY-MM-DD format)
   const getTodayDateString = () => {
@@ -221,6 +224,12 @@ export default function ReservationFormPage() {
             reservationDate: reservation.reservationDate || reservation.ReservationDate || selectedDate,
             reservationTime: reservation.reservationTime || reservation.ReservationTime || ""
           }));
+          setPhoneLockedByCustomer(
+            Boolean(
+              (reservation.customerID ?? reservation.customerId) &&
+              String(reservation.customerPhone || reservation.CustomerPhone || "").trim()
+            )
+          );
 
           // Set selected tables if we have table data
             if (tablesData.length > 0) {
@@ -450,21 +459,28 @@ export default function ReservationFormPage() {
     
     setFormData((prev) => ({
       ...prev,
-      [name]: name === "cover" ? parseInt(processedValue) || 1 : processedValue
+      [name]: name === "cover" ? parseInt(processedValue) || 1 : processedValue,
+      ...(name === "firstName" ? { customerId: null } : {})
     }));
+
+    if (name === "firstName") {
+      setPhoneLockedByCustomer(false);
+    }
   };
 
   const setField = (name, value) => setFormData((p) => ({ ...p, [name]: value }));
 
   // Handle customer selection from autocomplete — store customerId so we can update this customer if they change name/phone
   const handleCustomerSelect = (customer) => {
+    const customerPhone = normalizePhoneForInput(customer.phone || "", "ae");
     setFormData(prev => ({
       ...prev,
       firstName: customer.name || '',
-      phone: customer.phone || '',
+      phone: customerPhone,
       email: customer.email || '',
-      customerId: customer.id ?? null
+      customerId: customer.id ?? customer.customerId ?? customer.customerID ?? null
     }));
+    setPhoneLockedByCustomer(Boolean(String(customerPhone || "").trim()));
     // Clear any field errors
     setFieldErrors({});
   };
@@ -1438,10 +1454,10 @@ export default function ReservationFormPage() {
                     onChange={handleChange}
                     onSelect={handleCustomerSelect}
                     suggestions={customerHistory}
-                    field="name"
+                    field="search"
                     name="firstName"
                     required
-                    placeholder="Guest name (start typing...)"
+                    placeholder="Search customer by name or phone"
                     style={S.input}
                     onFocus={(e) => {
                       e.currentTarget.style.borderColor = "#C91A4D";
@@ -1461,6 +1477,7 @@ export default function ReservationFormPage() {
                   <PhoneInputWithCountry
                     value={formData.phone}
                     onChange={(phone) => {
+                      if (phoneLockedByCustomer) return;
                       setFormData(prev => ({ ...prev, phone: phone || "" }));
                       if (fieldErrors.phone) {
                         setFieldErrors(prev => {
@@ -1473,7 +1490,28 @@ export default function ReservationFormPage() {
                     placeholder="Phone number"
                     defaultCountry="ae"
                     hasError={!!fieldErrors.phone}
+                    disabled={phoneLockedByCustomer}
                   />
+                  {!fieldErrors.phone && phoneLockedByCustomer && (
+                    <div style={{
+                      marginTop: "6px",
+                      fontSize: "12px",
+                      color: "#6b7280",
+                      fontWeight: "600"
+                    }}>
+                      Phone is locked from the selected customer.
+                    </div>
+                  )}
+                  {!fieldErrors.phone && formData.customerId && !phoneLockedByCustomer && (
+                    <div style={{
+                      marginTop: "6px",
+                      fontSize: "12px",
+                      color: "#6b7280",
+                      fontWeight: "600"
+                    }}>
+                      This customer has no saved phone. Add one here.
+                    </div>
+                  )}
                   {fieldErrors.phone && (
                     <div style={{
                       marginTop: "6px",

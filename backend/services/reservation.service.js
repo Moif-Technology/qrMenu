@@ -11,6 +11,14 @@ const T_BOOKINGC = "dbo.BookingChild";
 const T_CUSTOMER = "dbo.CustomerMaster";
 const q = (n) => `[${n}]`;
 
+function formatLocalDate(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // Helper to get next ID within a transaction
 async function getNextIdTx(controlName, tx) {
   const req = new mssql.Request(tx);
@@ -71,7 +79,7 @@ async function findCustomerByPhone(phone, tx) {
 }
 
 // Helper to create a new customer
-async function createCustomer(customerData, tx) {
+export async function createCustomer(customerData, tx) {
   const {
     name,
     email,
@@ -1065,7 +1073,7 @@ function mapReservationRow(row, selectedDate) {
     reservationId: row.bookingID,
     bookingID: row.bookingID,
     bookingChildID: row.bookingChildID,
-    reservationDate: row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : selectedDate,
+    reservationDate: row.bookingDate ? formatLocalDate(row.bookingDate) : selectedDate,
     reservationTime: reservationTime,
     customerID: row.customerID,
     customerName: customerName,
@@ -1295,7 +1303,7 @@ export async function getReservationsByDateRange(filters = {}) {
  */
 export async function getReservationsByDate(filters = {}) {
   const { date, status, tableId } = filters;
-  const selectedDate = date || new Date().toISOString().split('T')[0];
+  const selectedDate = date || formatLocalDate();
   console.log("[RESERVATION-SERVICE-DATE] ENTRY", { date, selectedDate, status, tableId });
   
   const pool = await connectToDb();
@@ -1572,7 +1580,7 @@ export async function getReservationById(bookingId) {
     reservationTime = new Date(row.bookingDate).toTimeString().slice(0, 5);
   }
   
-  const reservationDate = row.bookingDate ? new Date(row.bookingDate).toISOString().split('T')[0] : null;
+  const reservationDate = row.bookingDate ? formatLocalDate(row.bookingDate) : null;
 
   // Build tables from ALL BookingChild rows (one row per table)
   const tables = (result.recordset || []).map((r) => {
@@ -1756,4 +1764,3 @@ export async function updateReservationStatus(bookingId, status) {
     throw error;
   }
 }
-

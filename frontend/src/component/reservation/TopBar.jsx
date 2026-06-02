@@ -1,6 +1,7 @@
 // frontend/src/component/reservation/TopBar.jsx
 import { useState, useEffect } from "react";
 import { useReservationStore } from "../../store/reservationStore";
+import { formatLocalDate } from "../../utils/date";
 
 export default function TopBar({ onSearch, onDateChange }) {
   const { 
@@ -37,9 +38,9 @@ export default function TopBar({ onSearch, onDateChange }) {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     
-    if (dateString === today.toISOString().split('T')[0]) {
+    if (dateString === formatLocalDate(today)) {
       return 'Today';
-    } else if (dateString === tomorrow.toISOString().split('T')[0]) {
+    } else if (dateString === formatLocalDate(tomorrow)) {
       return 'Tomorrow';
     } else {
       return date.toLocaleDateString('en-US', { 

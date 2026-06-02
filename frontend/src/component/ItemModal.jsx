@@ -109,21 +109,19 @@ export default function ItemModal({ open, item, onClose, onAdd }) {
 
   if (!open || !item) return null;
 
-  // Unit price only (exclude tax) - match ItemCard display
-
-const unitPriceVal = (() => {
-  const v = item["pc.UnitPrice"] ?? item["pc_UnitPrice"] ?? item._raw?.["pc.UnitPrice"] ?? item._raw?.["pc_UnitPrice"] ?? 0;
-  return Number.isFinite(Number(v)) ? Number(v) : 0;
-})();
-
-// Tax amount
-const tax1Amount = (() => {
-  const v = item["pc.Tax1Amount"] ?? item["pc_Tax1Amount"] ?? item._raw?.["pc.Tax1Amount"] ?? item._raw?.["pc_Tax1Amount"] ?? 0;
-  return Number.isFinite(Number(v)) ? Number(v) : 0;
-})();
-
-// Price including VAT
-const totalPrice = Number((unitPriceVal + tax1Amount).toFixed(2));
+  // Display VAT-inclusive price to match the menu card.
+  const unitPriceVal = (() => {
+    const v = item["pc.UnitPrice"] ?? item["pc_UnitPrice"] ?? item._raw?.["pc.UnitPrice"] ?? item._raw?.["pc_UnitPrice"] ?? 0;
+    return Number.isFinite(Number(v)) ? Number(v) : 0;
+  })();
+  const tax1Amount = (() => {
+    const v = item["pc.Tax1Amount"] ?? item["pc_Tax1Amount"] ?? item._raw?.["pc.Tax1Amount"] ?? item._raw?.["pc_Tax1Amount"] ?? 0;
+    return Number.isFinite(Number(v)) ? Number(v) : 0;
+  })();
+  const mappedPrice = Number.isFinite(Number(item.price)) ? Number(item.price) : 0;
+  const totalPrice = unitPriceVal || tax1Amount
+    ? Number((unitPriceVal + tax1Amount).toFixed(2))
+    : mappedPrice;
 
   // Get item name - use Arabic if available and language is Arabic
   const arabicName = item._raw?.["pm.DescriptionArabic"] || 
@@ -397,7 +395,7 @@ const totalPrice = Number((unitPriceVal + tax1Amount).toFixed(2));
           className="flex flex-shrink-0 flex-col gap-2 border-t border-neutral-100 bg-white/90 p-4 backdrop-blur-sm sm:flex-row sm:gap-3 sm:p-5"
           style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 0px))" }}
         >
-          {/*  {onAdd && (
+          {/* {onAdd && (
             <button
               type="button"
               onClick={() => {
@@ -413,7 +411,7 @@ const totalPrice = Number((unitPriceVal + tax1Amount).toFixed(2));
               <span>{t("menu.add_to_cart") || "Add to cart"}</span>
               <span className="btn-ripple" aria-hidden />
             </button>
-          )}  */}
+          )} */}
           <button
             type="button"
             onClick={handleClose}

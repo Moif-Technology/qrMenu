@@ -5,8 +5,6 @@ import mssql from "mssql";
 import { connectToDb } from "../config/dbConfig.js";
 import { uploadImageToCloudinary } from "./cloudinary.service.js";
 
-
-
 const T_QR_PRODUCT_MASTER = "dbo.QrProductMaster";
 const T_QR_PRODUCT_CHILD = "dbo.QrProductChild";
 const T_IMAGES = "dbo.ImageMaster";
@@ -179,8 +177,6 @@ export async function getPackageDetails(packageProductId) {
   const result = await request.query(sql);
   return result.recordset[0] || null;
 }
-
-
 
 
 export async function uploadPackageImage(packageProductId, imageBase64) {
@@ -624,4 +620,3 @@ export async function createPackage({
     throw error;
   }
 }
-

@@ -184,12 +184,20 @@ export async function createGuestReservation(guestData) {
  * @param {string} [searchQuery] - Optional search query to filter customers
  * @returns {Promise<Object>} Object with customers array containing { id, name, phone, email }
  */
-export async function searchCustomers(searchQuery = '') {
+export async function searchCustomers(searchQuery = '', options = {}) {
   try {
+    const {
+      page,
+      pageSize,
+      sort
+    } = options;
     const params = new URLSearchParams();
     if (searchQuery && searchQuery.trim()) {
       params.append('q', searchQuery.trim());
     }
+    if (page) params.append('page', page);
+    if (pageSize) params.append('pageSize', pageSize);
+    if (sort) params.append('sort', sort);
     
     const queryString = params.toString();
     const url = `/reservation/customers/search${queryString ? `?${queryString}` : ''}`;
@@ -209,7 +217,7 @@ export async function searchCustomers(searchQuery = '') {
 export async function getCustomerHistory() {
   try {
     // Call search endpoint without query to get recent customers
-    return await searchCustomers('');
+    return await searchCustomers('', { page: 1, pageSize: 50, sort: 'recent' });
   } catch (error) {
     console.error("[Reservation Service] Get customer history error:", error);
     return { ok: false, customers: [], error: error.message };
@@ -231,6 +239,25 @@ export async function updateCustomer(customerId, customerData) {
     return response.data;
   } catch (error) {
     console.error("[Reservation Service] Update customer error:", error);
+    console.error("[Reservation Service] Error response:", error?.response?.data);
+    throw error;
+  }
+}
+
+/**
+ * Create a basic customer
+ * @param {Object} customerData
+ * @param {string} customerData.name
+ * @param {string} customerData.phone
+ * @param {string} [customerData.email]
+ * @returns {Promise<Object>} Created customer
+ */
+export async function createCustomer(customerData) {
+  try {
+    const response = await API.post("/reservation/customers", customerData);
+    return response.data;
+  } catch (error) {
+    console.error("[Reservation Service] Create customer error:", error);
     console.error("[Reservation Service] Error response:", error?.response?.data);
     throw error;
   }

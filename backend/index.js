@@ -2,20 +2,20 @@ import cors from "cors";
 import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { closeDb, connectToDb, pingDb, closePaymentDb, connectToPaymentDb, pingPaymentDb, INVENTORY_DB_NAME, PAYMENT_DB_NAME } from "./config/dbConfig.js";
+import { closeDb, closePaymentDb, connectToDb, connectToPaymentDb, INVENTORY_DB_NAME, PAYMENT_DB_NAME, pingDb, pingPaymentDb } from "./config/dbConfig.js";
+import floorLayoutRoutes from "./routes/floorLayout.routes.js";
 import kotSaveRoutes from "./routes/kotSave.routes.js";
 import menuRoutes from "./routes/menu.routes.js";
-import modifierRoutes from "./routes/modifier.routes.js"
-import tableRoutes from "./routes/table.routes.js";
+import modifierRoutes from "./routes/modifier.routes.js";
+import packageRoutes from "./routes/package.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
-import reservationRoutes from "./routes/reservation.routes.js";
-import waitlistRoutes from "./routes/waitlist.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import qrMenuRoutes from "./routes/qrMenu.routes.js";
-import packageRoutes from "./routes/package.routes.js";
-import floorLayoutRoutes from "./routes/floorLayout.routes.js";
+import reservationRoutes from "./routes/reservation.routes.js";
+import tableRoutes from "./routes/table.routes.js";
+import waitlistRoutes from "./routes/waitlist.routes.js";
+import { getAutoMigrationStatus, startAutoMigration, stopAutoMigration } from "./services/imageAutoMigration.service.js";
 import telrRoutes from "./telr.routes.js";
-import { startAutoMigration, stopAutoMigration, getAutoMigrationStatus } from "./services/imageAutoMigration.service.js";
 const app = express();
 const PORT = process.env.PORT || 5001;
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -30,6 +30,9 @@ const parsePositiveInt = (value, fallback) => {
 };
 
 const publicReadPaths = new Set([
+  "/menu/group",
+  "/menu/items",
+  "/menu/areas",
   "/menu/images/mapping",
   "/qr-menu/categories",
   "/qr-menu/menu-items",
@@ -37,6 +40,10 @@ const publicReadPaths = new Set([
 
 const isPublicMenuRead = (req) => {
   return req.method === "GET" && publicReadPaths.has(req.path);
+};
+
+const isCustomerSessionRead = (req) => {
+  return req.method === "POST" && req.path === "/r/resolve";
 };
 
 // In production, only the actual frontend domain is allowed.
@@ -50,7 +57,6 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.use(express.json({ limit: "10mb" }));
-
 // Rate limiting configuration
 // DISABLED in development - React Strict Mode causes double API calls
 // Only enabled in production for security
@@ -69,6 +75,7 @@ const apiLimiter = rateLimit({
     return req.path === "/health"
       || req.path === "/health/db"
       || req.path.startsWith("/payment")
+      || isCustomerSessionRead(req)
       || isPublicMenuRead(req);
   }
 });
@@ -77,6 +84,14 @@ const publicMenuReadLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_MENU_MAX, 1200),
   message: { ok: false, error: "Menu is busy. Please try again in a moment." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const customerSessionLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: parsePositiveInt(process.env.RATE_LIMIT_CUSTOMER_SESSION_MAX, 300),
+  message: { ok: false, error: "Session is refreshing too often. Please wait a moment." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -102,15 +117,23 @@ const paymentLimiter = rateLimit({
 if (process.env.NODE_ENV === "development") {
   console.log("[RATE LIMIT] DISABLED — NODE_ENV=development");
   app.use("/api/menu/images/mapping", noOpLimiter);
+  app.use("/api/menu/group", noOpLimiter);
+  app.use("/api/menu/items", noOpLimiter);
+  app.use("/api/menu/areas", noOpLimiter);
   app.use("/api/qr-menu/categories", noOpLimiter);
   app.use("/api/qr-menu/menu-items", noOpLimiter);
+  app.use("/api/r/resolve", noOpLimiter);
   app.use("/api/payment", noOpLimiter);
   app.use("/api", noOpLimiter);
 } else {
   console.log("[RATE LIMIT] ENABLED — NODE_ENV:", process.env.NODE_ENV || "(not set, defaulting to production rules)");
   app.use("/api/menu/images/mapping", publicMenuReadLimiter);
+  app.use("/api/menu/group", publicMenuReadLimiter);
+  app.use("/api/menu/items", publicMenuReadLimiter);
+  app.use("/api/menu/areas", publicMenuReadLimiter);
   app.use("/api/qr-menu/categories", publicMenuReadLimiter);
   app.use("/api/qr-menu/menu-items", publicMenuReadLimiter);
+  app.use("/api/r/resolve", customerSessionLimiter);
   app.use("/api/payment", paymentLimiter);
   app.use("/api", apiLimiter);
 }

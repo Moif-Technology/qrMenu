@@ -1,9 +1,10 @@
 // frontend/src/store/reservationStore.js
 import { create } from "zustand";
+import { formatLocalDate } from "../utils/date";
 
 export const useReservationStore = create((set, get) => ({
   // State
-  selectedDate: new Date().toISOString().split('T')[0], // Today by default
+  selectedDate: formatLocalDate(), // Today by default, local timezone
   selectedAreaId: null,
   areas: [],
   tables: [],
@@ -87,4 +88,3 @@ export const useReservationStore = create((set, get) => ({
     get().setTables(tables);
   }
 }));
-

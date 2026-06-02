@@ -5,6 +5,7 @@ import { useReservationStore } from "../store/reservationStore";
 import { getAllReservations, updateReservationStatus } from "../services/reservation.service";
 import { getMockReservations, updateMockReservationStatus } from "../services/reservation.mock";
 import BottomNav from "../component/reservation/BottomNav";
+import { formatLocalDate, getLocalTomorrow } from "../utils/date";
 import { 
   Utensils, 
   Moon, 
@@ -21,6 +22,24 @@ import {
 
 // Toggle this to use mock data instead of API
 const USE_MOCK_DATA = false;
+const ACTIVE_EXCLUDED_STATUSES = new Set(["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"]);
+const ACTIVE_FILTER_OPTIONS = [
+  { value: "all", label: "All Active", icon: <ListFilter className="w-3.5 h-3.5" /> },
+  { value: "upcoming", label: "Upcoming", icon: <Clock className="w-3.5 h-3.5" /> },
+  { value: "online", label: "Online", icon: <Globe className="w-3.5 h-3.5" /> },
+  { value: "confirmed", label: "Confirmed", icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
+  { value: "arrived", label: "Arrived", icon: <Hand className="w-3.5 h-3.5" /> },
+  { value: "seated", label: "Seated", icon: <Armchair className="w-3.5 h-3.5" /> }
+];
+const EXCEPTION_FILTER_OPTIONS = [
+  { value: "cancelled", label: "Cancelled", hint: "Not shown in active list", icon: <XCircle className="w-5 h-5" />, color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
+  { value: "no-show", label: "No Show", hint: "Not shown in active list", icon: <UserX className="w-5 h-5" />, color: "#6b7280", bg: "#f9fafb", border: "#d1d5db" }
+];
+
+const normalizeStatus = (reservation) =>
+  (reservation?.status || reservation?.Status || "").toUpperCase();
+
+const isActiveReservationStatus = (status) => !ACTIVE_EXCLUDED_STATUSES.has(status);
 
 export default function ReservationListPage() {
   const navigate = useNavigate();
@@ -144,10 +163,10 @@ export default function ReservationListPage() {
       });
     }
     
-    // Filter out LEFT status reservations from all counts
+    // Filter out terminal statuses from active counts; cancelled/no-show have their own filters.
     const activeReservations = periodFiltered.filter(res => {
-      const status = (res.status || res.Status || '').toUpperCase();
-      return status !== 'LEFT';
+      const status = normalizeStatus(res);
+      return isActiveReservationStatus(status);
     });
     
     if (filterValue === 'all') return activeReservations.length;
@@ -160,11 +179,11 @@ export default function ReservationListPage() {
       if (filterValue === 'upcoming') {
         if (!resDate || !resTime) return false;
         const resDateTime = new Date(`${resDate}T${resTime}`);
-        const isToday = resDate === new Date().toISOString().split('T')[0];
+        const isToday = resDate === formatLocalDate();
         if (isToday) {
-          return resDateTime > now && status !== 'CANCELLED' && status !== 'NO_SHOW' && status !== 'LEFT';
+          return resDateTime > now && isActiveReservationStatus(status);
         } else {
-          return status !== 'CANCELLED' && status !== 'NO_SHOW' && status !== 'LEFT';
+          return isActiveReservationStatus(status);
         }
       }
       
@@ -186,9 +205,7 @@ export default function ReservationListPage() {
 
   const filteredReservations = (Array.isArray(reservations) ? reservations : [])
     .filter(r => {
-      // Always hide LEFT status reservations
-      const status = (r.status || '').toUpperCase();
-      if (status === 'LEFT') return false;
+      const status = normalizeStatus(r);
 
       // Meal period filter (all / lunch / dinner, same as report)
       if (selectedPeriod !== "all") {
@@ -208,7 +225,7 @@ export default function ReservationListPage() {
       }
 
       // Status filter
-      if (filter === 'all') return true;
+      if (filter === 'all') return isActiveReservationStatus(status);
       
       const now = new Date();
       const resDate = r.reservationDate || r.ReservationDate;
@@ -217,12 +234,12 @@ export default function ReservationListPage() {
       if (filter === 'upcoming') {
         if (!resDate || !resTime) return false;
         const resDateTime = new Date(`${resDate}T${resTime}`);
-        const isToday = resDate === new Date().toISOString().split('T')[0];
+        const isToday = resDate === formatLocalDate();
         // For today: show future reservations, for other dates: show all non-cancelled/no-show
         if (isToday) {
-          return resDateTime > now && status !== 'CANCELLED' && status !== 'NO_SHOW' && status !== 'LEFT';
+          return resDateTime > now && isActiveReservationStatus(status);
         } else {
-          return status !== 'CANCELLED' && status !== 'NO_SHOW' && status !== 'LEFT';
+          return isActiveReservationStatus(status);
         }
       }
       
@@ -677,11 +694,11 @@ export default function ReservationListPage() {
               }}>
                 {(() => {
                   if (key === "all") {
-                    return allReservations.filter(r => (r.status || '').toUpperCase() !== 'LEFT').length;
+                    return allReservations.filter(r => isActiveReservationStatus(normalizeStatus(r))).length;
                   }
                   return allReservations.filter(res => {
-                    const status = (res.status || '').toUpperCase();
-                    if (status === 'LEFT') return false;
+                    const status = normalizeStatus(res);
+                    if (!isActiveReservationStatus(status)) return false;
                     return getTimeCategory(res.reservationTime || res.ReservationTime) === key;
                   }).length;
                 })()}
@@ -722,7 +739,7 @@ export default function ReservationListPage() {
           marginBottom: "8px",
           marginTop: "4px"
         }}>
-          Filter by Status:
+          Active Reservations:
         </div>
         
         {/* Quick Filter Buttons */}
@@ -731,16 +748,7 @@ export default function ReservationListPage() {
           gap: "0.5rem",
           flexWrap: "wrap"
         }}>
-          {[
-            { value: "all", label: "All", icon: <ListFilter className="w-3.5 h-3.5" /> },
-            { value: "upcoming", label: "Upcoming", icon: <Clock className="w-3.5 h-3.5" /> },
-            { value: "online", label: "Online", icon: <Globe className="w-3.5 h-3.5" /> },
-            { value: "confirmed", label: "Confirmed", icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
-            { value: "arrived", label: "Arrived", icon: <Hand className="w-3.5 h-3.5" /> },
-            { value: "seated", label: "Seated", icon: <Armchair className="w-3.5 h-3.5" /> },
-            { value: "cancelled", label: "Cancelled", icon: <XCircle className="w-3.5 h-3.5" /> },
-            { value: "no-show", label: "No Show", icon: <UserX className="w-3.5 h-3.5" /> }
-          ].map((filterOption) => {
+          {ACTIVE_FILTER_OPTIONS.map((filterOption) => {
             const count = getStatusCount(filterOption.value);
             const isActive = filter === filterOption.value;
             
@@ -797,6 +805,102 @@ export default function ReservationListPage() {
                   fontSize: "0.6875rem",
                   fontWeight: "800",
                   marginLeft: "2px"
+                }}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{
+          fontSize: "13px",
+          fontWeight: "700",
+          color: "#374151",
+          marginBottom: "8px",
+          marginTop: "16px"
+        }}>
+          Exceptions:
+        </div>
+
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: "0.75rem"
+        }}>
+          {EXCEPTION_FILTER_OPTIONS.map((option) => {
+            const count = getStatusCount(option.value);
+            const isActive = filter === option.value;
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setFilter(option.value)}
+                style={{
+                  padding: "0.9rem",
+                  borderRadius: "14px",
+                  border: isActive ? `2px solid ${option.color}` : `1px solid ${option.border}`,
+                  backgroundColor: isActive ? option.bg : "#fff",
+                  color: option.color,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  textAlign: "left",
+                  boxShadow: isActive ? "0 8px 18px rgba(17, 24, 39, 0.08)" : "0 1px 3px rgba(17, 24, 39, 0.04)",
+                  transition: "all 0.2s"
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.borderColor = option.color;
+                    e.currentTarget.style.backgroundColor = option.bg;
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.borderColor = option.border;
+                    e.currentTarget.style.backgroundColor = "#fff";
+                  }
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
+                  <span style={{
+                    display: "grid",
+                    placeItems: "center",
+                    width: "38px",
+                    height: "38px",
+                    borderRadius: "11px",
+                    backgroundColor: option.bg,
+                    flexShrink: 0
+                  }}>
+                    {option.icon}
+                  </span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: "0.9rem", fontWeight: "800", color: "#111827" }}>
+                      {option.label}
+                    </span>
+                    <span style={{ display: "block", marginTop: "2px", fontSize: "0.72rem", fontWeight: "600", color: "#6b7280" }}>
+                      {option.hint}
+                    </span>
+                  </span>
+                </span>
+                <span style={{
+                  minWidth: "36px",
+                  height: "36px",
+                  padding: "0 10px",
+                  borderRadius: "18px",
+                  background: isActive ? option.color : option.bg,
+                  color: isActive ? "#fff" : option.color,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "1rem",
+                  fontWeight: "900",
+                  flexShrink: 0
                 }}>
                   {count}
                 </span>
@@ -1148,15 +1252,15 @@ export default function ReservationListPage() {
             }}>
               <button
                 onClick={() => {
-                  const today = new Date().toISOString().split('T')[0];
+                  const today = formatLocalDate();
                   setTempDate(today);
                 }}
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "8px",
-                  border: tempDate === new Date().toISOString().split('T')[0] ? "2px solid #C91A4D" : "1px solid #d1d5db",
-                  backgroundColor: tempDate === new Date().toISOString().split('T')[0] ? "#FBE6EC" : "#fff",
-                  color: tempDate === new Date().toISOString().split('T')[0] ? "#C91A4D" : "#374151",
+                  border: tempDate === formatLocalDate() ? "2px solid #C91A4D" : "1px solid #d1d5db",
+                  backgroundColor: tempDate === formatLocalDate() ? "#FBE6EC" : "#fff",
+                  color: tempDate === formatLocalDate() ? "#C91A4D" : "#374151",
                   fontSize: "0.875rem",
                   fontWeight: "600",
                   cursor: "pointer",
@@ -1167,28 +1271,19 @@ export default function ReservationListPage() {
               </button>
               <button
                 onClick={() => {
-                  const tomorrow = new Date();
-                  tomorrow.setDate(tomorrow.getDate() + 1);
-                  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-                  setTempDate(tomorrowStr);
+                  setTempDate(getLocalTomorrow());
                 }}
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "8px",
                   border: (() => {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    return tempDate === tomorrow.toISOString().split('T')[0] ? "2px solid #C91A4D" : "1px solid #d1d5db";
+                    return tempDate === getLocalTomorrow() ? "2px solid #C91A4D" : "1px solid #d1d5db";
                   })(),
                   backgroundColor: (() => {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    return tempDate === tomorrow.toISOString().split('T')[0] ? "#FBE6EC" : "#fff";
+                    return tempDate === getLocalTomorrow() ? "#FBE6EC" : "#fff";
                   })(),
                   color: (() => {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    return tempDate === tomorrow.toISOString().split('T')[0] ? "#C91A4D" : "#374151";
+                    return tempDate === getLocalTomorrow() ? "#C91A4D" : "#374151";
                   })(),
                   fontSize: "0.875rem",
                   fontWeight: "600",
@@ -1265,4 +1360,3 @@ export default function ReservationListPage() {
     </div>
   );
 }
-

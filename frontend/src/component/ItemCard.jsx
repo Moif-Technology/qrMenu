@@ -1,9 +1,9 @@
 // src/components/ItemCard.jsx
-import { useEffect, useMemo, useState, memo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useCart } from "../store/cartStore";
 import Icon from "./Icon";
 import ModifierModal from "./ModifierModal";
-import { useTranslation } from "react-i18next";
 
 /** 🔧 COMMON IMAGE */
 const COMMON_IMAGE =
@@ -147,10 +147,14 @@ function ItemCard({
     unitPriceVal,
     tax1Amount,
   ]);
+  const displayPrice = useMemo(() => {
+    if (unitPriceVal || tax1Amount) return totalPrice;
+    return num(item?.price);
+  }, [item?.price, tax1Amount, totalPrice, unitPriceVal]);
 
   const itemForCart = useMemo(
-    () => ({ ...item, id: itemId, name: itemName, price: totalPrice }),
-    [item, itemId, itemName, totalPrice]
+    () => ({ ...item, id: itemId, name: itemName, price: displayPrice }),
+    [item, itemId, itemName, displayPrice]
   );
 
   const lineKey = useMemo(
@@ -372,7 +376,7 @@ function ItemCard({
                 )}
               </div>
               <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                AED {totalPrice.toFixed(2)}
+                AED {displayPrice.toFixed(2)}
               </div>
             </div>
 
@@ -461,7 +465,7 @@ function ItemCard({
               style={{ letterSpacing: "0.2em" }}
               role="note"
             >
-              {t("menu.vat_service_note") || "Prices are subject to VAT & service charge"}
+              {t("menu.vat_service_note") || "All prices are inclusive of 5% VAT."}
             </span>
           </div>
           */}
@@ -473,9 +477,7 @@ function ItemCard({
                 {t("menu.price")}
               </div>
               <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                   AED {totalPrice.toFixed(2)}
-                 {/* AED {unitPriceVal.toFixed(2)} */}
-
+                AED {displayPrice.toFixed(2)}
               </div>
             </div>
           </div>
@@ -520,10 +522,19 @@ export default memo(ItemCard, (prevProps, nextProps) => {
   // Check both img and images array (updateItemImage updates item.img and item.images)
   const prevImage = prevProps.item?.img || prevProps.item?.image || prevProps.item?.images?.[0];
   const nextImage = nextProps.item?.img || nextProps.item?.image || nextProps.item?.images?.[0];
+  const prevName = prevProps.item?.name;
+  const nextName = nextProps.item?.name;
+  const prevDesc = prevProps.item?.desc || prevProps.item?.subtitle;
+  const nextDesc = nextProps.item?.desc || nextProps.item?.subtitle;
+  const prevPrice = prevProps.item?.price;
+  const nextPrice = nextProps.item?.price;
   
   // Re-render if ID changed OR image changed (return false means "should update")
   if (prevItemId !== nextItemId) return false;
   if (prevImage !== nextImage) return false;
+  if (prevName !== nextName) return false;
+  if (prevDesc !== nextDesc) return false;
+  if (prevPrice !== nextPrice) return false;
   
   // No changes - skip re-render
   return true;

@@ -7,10 +7,18 @@ import {
   getReservationByIdController,
   updateReservationStatusController
 } from "../controllers/reservation.controller.js";
-import { getNextBookingChildIdTx, updateCustomer } from "../services/reservation.service.js";
+import { createCustomer, getNextBookingChildIdTx, updateCustomer } from "../services/reservation.service.js";
 
 const router = Router();
 const q = (n) => `[${n}]`; // Helper to quote SQL identifiers
+
+const formatLocalDate = (date = new Date()) => {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 /**
  * GET /api/reservation/tables
@@ -111,7 +119,7 @@ router.get("/reservation/tables", async (req, res) => {
       request.input("selectedDate", mssql.Date, date);
     } else {
       // If no date provided, use today's date
-      request.input("selectedDate", mssql.Date, new Date().toISOString().split('T')[0]);
+      request.input("selectedDate", mssql.Date, formatLocalDate());
     }
     
     sql += ` ORDER BY t.[TableNO], t.[TableID]`;
@@ -1296,65 +1304,74 @@ router.get("/reservation/:bookingId", getReservationByIdController);
 router.get("/reservation/customers/search", async (req, res) => {
   try {
     const pool = await connectToDb();
-    const { q: searchQuery } = req.query;
-    
-    // If no search query, return all customers with visit count (limit 200)
-    if (!searchQuery || searchQuery.trim().length === 0) {
-      const result = await pool.request().query(`
-        SELECT TOP 200
-          cm.[CustomerID] AS id,
-          cm.[CustomerName] AS name,
-          cm.[MobileNo] AS phone,
-          cm.[Email] AS email,
-          cm.[CrOn] AS createdDate,
-          (SELECT COUNT(*) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS visitCount,
-          (SELECT MAX([BookingDate]) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS lastVisit
-        FROM dbo.[CustomerMaster] cm
-        WHERE cm.[CustomerName] IS NOT NULL 
-          AND cm.[CustomerName] <> ''
-          AND cm.[CustomerName] <> '0'
-          AND cm.[MobileNo] IS NOT NULL
-          AND cm.[MobileNo] <> ''
-          AND cm.[MobileNo] <> '0'
-        ORDER BY cm.[CrOn] DESC
-      `);
-      
-      return res.json({
-        ok: true,
-        customers: result.recordset || []
-      });
+    const { q: searchQuery, sort = "recent" } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
+    const offset = (page - 1) * pageSize;
+
+    const searchText = String(searchQuery || "").trim();
+    const hasSearch = searchText.length > 0;
+    const orderByMap = {
+      recent: "cm.[CrOn] DESC, cm.[CustomerID] DESC",
+      name: "cm.[CustomerName] ASC, cm.[CustomerID] DESC",
+      frequency: "visitCount DESC, cm.[CrOn] DESC",
+      lastVisit: "lastVisit DESC, cm.[CrOn] DESC"
+    };
+    const orderBy = orderByMap[sort] || orderByMap.recent;
+
+    const baseWhere = `
+      cm.[CustomerName] IS NOT NULL 
+      AND cm.[CustomerName] <> ''
+      AND cm.[CustomerName] <> '0'
+      AND cm.[MobileNo] IS NOT NULL
+      AND cm.[MobileNo] <> ''
+      AND cm.[MobileNo] <> '0'
+      ${hasSearch ? "AND (cm.[CustomerName] LIKE @searchQuery OR cm.[MobileNo] LIKE @searchQuery OR cm.[Email] LIKE @searchQuery)" : ""}
+    `;
+
+    const countReq = pool.request();
+    const dataReq = pool.request();
+    dataReq.input("offset", mssql.Int, offset);
+    dataReq.input("pageSize", mssql.Int, pageSize);
+
+    if (hasSearch) {
+      const query = `%${searchText}%`;
+      countReq.input("searchQuery", mssql.NVarChar, query);
+      dataReq.input("searchQuery", mssql.NVarChar, query);
     }
     
-    // Search customers by name or phone
-    const query = `%${searchQuery.trim()}%`;
-    const result = await pool.request()
-      .input('searchQuery', mssql.NVarChar, query)
-      .query(`
-        SELECT TOP 50
-          cm.[CustomerID] AS id,
-          cm.[CustomerName] AS name,
-          cm.[MobileNo] AS phone,
-          cm.[Email] AS email,
-          cm.[CrOn] AS createdDate,
-          (SELECT COUNT(*) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS visitCount,
-          (SELECT MAX([BookingDate]) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS lastVisit
-        FROM dbo.[CustomerMaster] cm
-        WHERE (
-          cm.[CustomerName] LIKE @searchQuery 
-          OR cm.[MobileNo] LIKE @searchQuery
-        )
-        AND cm.[CustomerName] IS NOT NULL 
-        AND cm.[CustomerName] <> ''
-        AND cm.[CustomerName] <> '0'
-        AND cm.[MobileNo] IS NOT NULL
-        AND cm.[MobileNo] <> ''
-        AND cm.[MobileNo] <> '0'
-        ORDER BY cm.[CrOn] DESC
-      `);
+    const countResult = await countReq.query(`
+      SELECT COUNT(*) AS total
+      FROM dbo.[CustomerMaster] cm
+      WHERE ${baseWhere}
+    `);
+
+    const result = await dataReq.query(`
+      SELECT
+        cm.[CustomerID] AS id,
+        cm.[CustomerName] AS name,
+        cm.[MobileNo] AS phone,
+        cm.[Email] AS email,
+        cm.[CrOn] AS createdDate,
+        (SELECT COUNT(*) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS visitCount,
+        (SELECT MAX([BookingDate]) FROM dbo.[BookingMaster] WHERE [CustomerID] = cm.[CustomerID]) AS lastVisit
+      FROM dbo.[CustomerMaster] cm
+      WHERE ${baseWhere}
+      ORDER BY ${orderBy}
+      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+    `);
+
+    const total = Number(countResult.recordset?.[0]?.total || 0);
     
     res.json({
       ok: true,
-      customers: result.recordset || []
+      customers: result.recordset || [],
+      paging: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize))
+      }
     });
   } catch (error) {
     console.error("[CUSTOMER_SEARCH] Error:", error);
@@ -1362,6 +1379,64 @@ router.get("/reservation/customers/search", async (req, res) => {
       ok: false,
       error: "Failed to search customers",
       customers: []
+    });
+  }
+});
+
+/**
+ * POST /api/reservation/customers
+ * Create a basic customer
+ * Body: { name, phone, email }
+ */
+router.post("/reservation/customers", async (req, res) => {
+  const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const { name, phone, email } = req.body;
+
+  console.log(`[CUSTOMER_CREATE][${reqId}] POST /api/reservation/customers`, { name, phone, email });
+
+  try {
+    if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
+      return res.status(400).json({
+        ok: false,
+        error: "Name and phone are required"
+      });
+    }
+
+    const pool = await connectToDb();
+    const tx = new mssql.Transaction(pool);
+    await tx.begin();
+
+    try {
+      const customerID = await createCustomer({
+        name: String(name).trim(),
+        phone: String(phone).trim(),
+        email: email ? String(email).trim() : ""
+      }, tx);
+
+      await tx.commit();
+
+      res.status(201).json({
+        ok: true,
+        message: "Customer created successfully",
+        customer: {
+          id: customerID,
+          name: String(name).trim(),
+          phone: String(phone).trim(),
+          email: email ? String(email).trim() : "",
+          visitCount: 0,
+          lastVisit: null,
+          createdDate: new Date().toISOString()
+        }
+      });
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error(`[CUSTOMER_CREATE][${reqId}] Error:`, error);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to create customer"
     });
   }
 });
@@ -1437,4 +1512,3 @@ router.put("/reservation/customers/:customerId", async (req, res) => {
 });
 
 export default router;
-

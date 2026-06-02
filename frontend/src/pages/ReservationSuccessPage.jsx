@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import BottomNav from "../component/reservation/BottomNav";
+import { formatLocalDate } from "../utils/date";
 
 export default function ReservationSuccessPage() {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ export default function ReservationSuccessPage() {
     customerPhone: searchParams.get("phone") || "555-9876",
     customerEmail: searchParams.get("email") || "jane.smith@email.com",
     numberOfGuests: parseInt(searchParams.get("guests")) || 4,
-    reservationDate: searchParams.get("date") || new Date().toISOString().split("T")[0],
+    reservationDate: searchParams.get("date") || formatLocalDate(),
     reservationTime: searchParams.get("time") || "19:00",
     tableIds: tableIdsParam,
     tableDisplay,
@@ -351,4 +352,3 @@ export default function ReservationSuccessPage() {
     </div>
   );
 }
-
