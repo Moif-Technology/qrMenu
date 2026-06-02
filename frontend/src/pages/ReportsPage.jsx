@@ -103,9 +103,38 @@ export default function ReportsPage() {
     return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
   };
 
+  const firstValue = (...values) => {
+    for (const value of values) {
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        return value;
+      }
+    }
+    return "";
+  };
+
+  const getReservationId = (r) =>
+    firstValue(r.reservationId, r.bookingID, r.BookingID, r.ReservationID, r.id);
+  const getReservationDateValue = (r) =>
+    firstValue(r.reservationDate, r.ReservationDate, r.bookingDate, r.BookingDate);
+  const getReservationTimeValue = (r) =>
+    firstValue(r.reservationTime, r.ReservationTime, r.time, r.Time);
+  const getCustomerName = (r) =>
+    firstValue(r.customerName, r.CustomerName, r.guestName, r.GuestName, r.customerNameFromMaster, r.CustomerNameFromMaster, r.name, r.Name, "Guest");
+  const getCustomerPhone = (r) =>
+    firstValue(r.customerPhone, r.CustomerPhone, r.guestPhone, r.GuestPhone, r.customerPhoneFromMaster, r.CustomerPhoneFromMaster, r.phone, r.Phone);
+  const getCustomerEmail = (r) =>
+    firstValue(r.customerEmail, r.CustomerEmail, r.guestEmail, r.GuestEmail, r.customerEmailFromMaster, r.CustomerEmailFromMaster, r.email, r.Email);
+  const getGuestCount = (r) =>
+    firstValue(r.numberOfGuests, r.NumberOfGuests, r.pax, r.Pax, r.guests, r.Guests, r.partySize, r.PartySize);
+  const getSource = (r) => firstValue(r.bookingSource, r.BookingSource, r.source, r.Source);
+  const getHostessName = (r) => firstValue(r.hostessName, r.HostessName, r.hostess, r.Hostess);
+  const getConfirmationCode = (r) => firstValue(r.confirmationCode, r.ConfirmationCode);
+  const getSpecialRequests = (r) => firstValue(r.specialRequests, r.SpecialRequests, r.notes, r.Notes, r.comments, r.Comments);
+  const getTags = (r) => firstValue(r.tags, r.Tags);
+
   // Helper to check if reservation is walk-in
   const isWalkIn = (r) =>
-    (r.isWalkIn || r.IsWalkIn) || ((r.bookingSource || r.BookingSource || "").toUpperCase() === "WALKIN");
+    (r.isWalkIn || r.IsWalkIn) || (String(getSource(r)).toUpperCase() === "WALKIN");
 
   const getTableLabel = (r) => {
     const tableName = r.tableName || r.TableName;
@@ -173,8 +202,8 @@ export default function ReportsPage() {
     
     return allReservations.filter((res) => {
       const status = getEffectiveStatus(res);
-      const resDate = res.reservationDate || res.ReservationDate;
-      const resTime = res.reservationTime || res.ReservationTime;
+      const resDate = getReservationDateValue(res);
+      const resTime = getReservationTimeValue(res);
       
       if (filter === "upcoming") {
         if (!resDate || !resTime) return false;
@@ -189,7 +218,7 @@ export default function ReportsPage() {
       if (filter === "cancelled") return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
       if (filter === "no-show") return status === "NO_SHOW";
       if (filter === "left") return status === "LEFT";
-      if (filter === "online") return isActiveStatus(status) && ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+      if (filter === "online") return isActiveStatus(status) && String(getSource(res)).toUpperCase() === "GUEST_ONLINE";
       if (filter === "walkins") return isActiveStatus(status) && isWalkIn(res);
       if (filter === "confirmed") return status === "CONFIRMED" || status === "" || !status;
       if (filter === "arrived") return status === "ARRIVED";
@@ -291,14 +320,14 @@ export default function ReportsPage() {
   const stats = {
     total: activeReservations.length,
     totalGuests: activeReservations.reduce((sum, r) => {
-      const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+      const guests = parseInt(getGuestCount(r) || 0, 10);
       return sum + (isNaN(guests) ? 0 : guests);
     }, 0),
     confirmed: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "CONFIRMED" || !r.status).length,
     seated: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "SEATED").length,
     walkInGuests: activeAllReservations.reduce((sum, r) => {
       if (isWalkIn(r)) {
-        const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+        const guests = parseInt(getGuestCount(r) || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
       return sum;
@@ -312,37 +341,37 @@ export default function ReportsPage() {
     left: safeAllReservations.filter((r) => getEffectiveStatus(r) === "LEFT").length,
     // Lunch reservations (8 AM to 6 PM)
     lunchReservations: activeAllReservations.filter((r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       return getTimeCategory(time) === "lunch";
     }).length,
     lunchGuests: activeAllReservations.reduce((sum, r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "lunch") {
-        const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+        const guests = parseInt(getGuestCount(r) || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
       return sum;
     }, 0),
     lunchTables: activeAllReservations.reduce((sum, r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "lunch") return sum + getTableCount(r);
       return sum;
     }, 0),
     // Dinner reservations (after 6 PM)
     dinnerReservations: activeAllReservations.filter((r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       return getTimeCategory(time) === "dinner";
     }).length,
     dinnerGuests: activeAllReservations.reduce((sum, r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "dinner") {
-        const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || 0, 10);
+        const guests = parseInt(getGuestCount(r) || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
       return sum;
     }, 0),
     dinnerTables: activeAllReservations.reduce((sum, r) => {
-      const time = r.reservationTime || r.ReservationTime;
+      const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "dinner") return sum + getTableCount(r);
       return sum;
     }, 0),
@@ -370,7 +399,7 @@ export default function ReportsPage() {
 
   // ===== card renderer =====
   const renderReservationCard = (reservation, index) => {
-    const reservationId = reservation.reservationId || reservation.bookingID || reservation.ReservationID || reservation.ReservationID;
+    const reservationId = getReservationId(reservation);
     // Use single source of truth for status
     const status = getEffectiveStatus(reservation);
     const isProcessing = processingId === reservationId;
@@ -382,7 +411,7 @@ export default function ReportsPage() {
     const canSeat = ["ARRIVED", "CONFIRMED", "BOOKED", "PENDING", ""].includes(status) && !["SEATED", "CANCELLED", "LEFT"].includes(status);
     const canMarkLeft = ["SEATED", "ARRIVED", "CHECKED_IN"].includes(status) && !["LEFT", "CANCELLED"].includes(status);
 
-    const isOnline = ((reservation.bookingSource || reservation.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+    const isOnline = String(getSource(reservation)).toUpperCase() === "GUEST_ONLINE";
     const isWalk = isWalkIn(reservation);
     
     return (
@@ -402,7 +431,7 @@ export default function ReportsPage() {
               {/* name + chips */}
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-extrabold text-gray-900 truncate">
-                  {reservation.customerName || reservation.CustomerName || "Guest"}
+                  {getCustomerName(reservation)}
                 </h3>
 
                 <span className={cn("text-[11px] font-extrabold px-2.5 py-1 rounded-full border", chip.cls)}>
@@ -429,14 +458,14 @@ export default function ReportsPage() {
                 <span className="inline-flex items-center gap-1.5">
                   <Phone className="w-4 h-4" />
                   <span className="font-semibold text-gray-600">
-                    {reservation.customerPhone || reservation.CustomerPhone || "—"}
+                    {getCustomerPhone(reservation) || "—"}
                 </span>
                 </span>
 
                 <span className="inline-flex items-center gap-1.5">
                   <Users className="w-4 h-4" />
                   <span className="font-semibold text-gray-600">
-                    {reservation.numberOfGuests || reservation.NumberOfGuests || reservation.pax || "—"} guests
+                    {getGuestCount(reservation) || "—"} guests
                 </span>
                 </span>
 
@@ -448,15 +477,15 @@ export default function ReportsPage() {
                 <span className="inline-flex items-center gap-1.5">
                   <Clock className="w-4 h-4" />
                   <span className="font-extrabold text-gray-900">
-                    {formatTime(reservation.reservationTime || reservation.ReservationTime)}
+                    {formatTime(getReservationTimeValue(reservation))}
                   </span>
                 </span>
               </div>
 
               {/* note */}
-              {(reservation.specialRequests || reservation.SpecialRequests) && (
+              {getSpecialRequests(reservation) && (
                 <p className="mt-2 text-sm text-gray-400 italic line-clamp-1">
-                  {reservation.specialRequests || reservation.SpecialRequests}
+                  {getSpecialRequests(reservation)}
                 </p>
               )}
 
@@ -516,7 +545,7 @@ export default function ReportsPage() {
             <div className="shrink-0 flex items-center gap-2">
               <div className="text-right hidden sm:block">
                 <p className="text-lg font-extrabold bg-gradient-to-r from-rose-700 to-pink-600 bg-clip-text text-transparent">
-                  {formatTime(reservation.reservationTime || reservation.ReservationTime)}
+                  {formatTime(getReservationTimeValue(reservation))}
                 </p>
               </div>
               <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-rose-600 transition-colors" />
@@ -591,8 +620,8 @@ export default function ReportsPage() {
         const now = new Date();
         filtered = filtered.filter((res) => {
           const status = getEffectiveStatus(res);
-          const resDate = res.reservationDate || res.ReservationDate;
-          const resTime = res.reservationTime || res.ReservationTime;
+          const resDate = getReservationDateValue(res);
+          const resTime = getReservationTimeValue(res);
           
           if (statusFilter === "upcoming") {
             if (!resDate || !resTime) return false;
@@ -605,7 +634,7 @@ export default function ReportsPage() {
           }
           
           if (statusFilter === "online") {
-            return isActiveStatus(status) && ((res.bookingSource || res.BookingSource) || "").toUpperCase() === "GUEST_ONLINE";
+            return isActiveStatus(status) && String(getSource(res)).toUpperCase() === "GUEST_ONLINE";
           }
           
           if (statusFilter === "walkins") {
@@ -633,8 +662,8 @@ export default function ReportsPage() {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter((r) => {
-        const name = (r.customerName || r.CustomerName || "").toLowerCase();
-        const phone = (r.customerPhone || r.CustomerPhone || "");
+        const name = String(getCustomerName(r)).toLowerCase();
+        const phone = String(getCustomerPhone(r));
         const tableText = getTableLabel(r).toLowerCase();
         return name.includes(q) || phone.includes(q) || tableText.includes(q);
       });
@@ -648,20 +677,20 @@ export default function ReportsPage() {
     const list = [...displayList];
     const mult = sortOrder === "asc" ? 1 : -1;
     const timeOf = (r) => {
-      const d = r.reservationDate || r.ReservationDate || "";
-      const t = (r.reservationTime || r.ReservationTime || "00:00").slice(0, 8);
+      const d = getReservationDateValue(r) || "";
+      const t = String(getReservationTimeValue(r) || "00:00").slice(0, 8);
       const ts = Date.parse(`${d}T${t}`);
       return Number.isNaN(ts) ? 0 : ts;
     };
     list.sort((a, b) => {
       if (sortBy === "name") {
-        const na = (a.customerName || a.CustomerName || "").toLowerCase();
-        const nb = (b.customerName || b.CustomerName || "").toLowerCase();
+        const na = String(getCustomerName(a)).toLowerCase();
+        const nb = String(getCustomerName(b)).toLowerCase();
         return mult * na.localeCompare(nb);
       }
       if (sortBy === "date") {
-        const da = a.reservationDate || a.ReservationDate || "";
-        const db = b.reservationDate || b.ReservationDate || "";
+        const da = getReservationDateValue(a) || "";
+        const db = getReservationDateValue(b) || "";
         const c = da.localeCompare(db);
         if (c !== 0) return mult * c;
         return mult * (timeOf(a) - timeOf(b));
@@ -675,21 +704,21 @@ export default function ReportsPage() {
     const list = [...rows];
     const mult = sortOrder === "asc" ? 1 : -1;
     const timeOf = (r) => {
-      const d = r.reservationDate || r.ReservationDate || "";
-      const t = (r.reservationTime || r.ReservationTime || "00:00").slice(0, 8);
+      const d = getReservationDateValue(r) || "";
+      const t = String(getReservationTimeValue(r) || "00:00").slice(0, 8);
       const ts = Date.parse(`${d}T${t}`);
       return Number.isNaN(ts) ? 0 : ts;
     };
 
     list.sort((a, b) => {
       if (sortBy === "name") {
-        const na = (a.customerName || a.CustomerName || "").toLowerCase();
-        const nb = (b.customerName || b.CustomerName || "").toLowerCase();
+        const na = String(getCustomerName(a)).toLowerCase();
+        const nb = String(getCustomerName(b)).toLowerCase();
         return mult * na.localeCompare(nb);
       }
       if (sortBy === "date") {
-        const da = a.reservationDate || a.ReservationDate || "";
-        const db = b.reservationDate || b.ReservationDate || "";
+        const da = getReservationDateValue(a) || "";
+        const db = getReservationDateValue(b) || "";
         const c = da.localeCompare(db);
         if (c !== 0) return mult * c;
         return mult * (timeOf(a) - timeOf(b));
@@ -702,13 +731,13 @@ export default function ReportsPage() {
 
   const matchesExportStatus = useCallback((res, filter) => {
     const status = getEffectiveStatus(res);
-    const source = ((res.bookingSource || res.BookingSource) || "").toUpperCase();
+    const source = String(getSource(res)).toUpperCase();
 
     if (filter === "all") return true;
     if (filter === "all_active") return isActiveStatus(status);
     if (filter === "upcoming") {
-      const resDate = res.reservationDate || res.ReservationDate;
-      const resTime = res.reservationTime || res.ReservationTime;
+      const resDate = getReservationDateValue(res);
+      const resTime = getReservationTimeValue(res);
       if (!resDate || !resTime || !isActiveStatus(status)) return false;
       return new Date(`${resDate}T${resTime}`) > new Date();
     }
@@ -730,8 +759,8 @@ export default function ReportsPage() {
     const q = String(config.search || "").trim().toLowerCase();
     if (q) {
       filtered = filtered.filter((r) => {
-        const name = (r.customerName || r.CustomerName || "").toLowerCase();
-        const phone = String(r.customerPhone || r.CustomerPhone || "");
+        const name = String(getCustomerName(r)).toLowerCase();
+        const phone = String(getCustomerPhone(r));
         const tableText = getTableLabel(r).toLowerCase();
         return name.includes(q) || phone.includes(q) || tableText.includes(q);
       });
@@ -743,36 +772,40 @@ export default function ReportsPage() {
   const getReservationExportRows = useCallback((rows) => rows.map((r) => {
       const status = getEffectiveStatus(r);
       const statusLabel = getStatusChip(status).label;
-      const meal = getTimeCategory(r.reservationTime || r.ReservationTime);
+      const meal = getTimeCategory(getReservationTimeValue(r));
       const mealLabel = meal === "lunch" ? "Lunch" : meal === "dinner" ? "Dinner" : "";
-      const requests = (r.specialRequests || r.SpecialRequests || "").replace(/\r?\n/g, " ");
+      const requests = String(getSpecialRequests(r) || "").replace(/\r?\n/g, " ");
       return {
-        "Reservation ID": r.reservationId || r.bookingID || r.ReservationID || "",
-        Date: r.reservationDate || r.ReservationDate || "",
-        Time: r.reservationTime || r.ReservationTime || "",
+        "Reservation ID": getReservationId(r) || "",
+        Date: getReservationDateValue(r) || "",
+        Time: getReservationTimeValue(r) || "",
         "Meal period": mealLabel,
-        "Guest name": r.customerName || r.CustomerName || "",
-        Phone: r.customerPhone || r.CustomerPhone || "",
-        Guests: r.numberOfGuests ?? r.NumberOfGuests ?? r.pax ?? "",
+        "Customer name": getCustomerName(r),
+        Phone: getCustomerPhone(r),
+        Email: getCustomerEmail(r),
+        Guests: getGuestCount(r) || "",
         Table: getTableLabel(r),
         Status: statusLabel,
-        Source: r.bookingSource || r.BookingSource || "",
+        Source: getSource(r) || "",
         "Walk-in": isWalkIn(r) ? "Yes" : "No",
+        Hostess: getHostessName(r),
+        "Confirmation code": getConfirmationCode(r),
+        Tags: getTags(r),
         "Special requests": requests,
       };
     }), []);
 
   const sumGuests = useCallback((items) => items.reduce((sum, r) => {
-    const guests = parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10);
+    const guests = parseInt(getGuestCount(r) || 0, 10);
     return sum + (isNaN(guests) ? 0 : guests);
   }, 0), []);
 
   const getExportStats = useCallback((rows) => {
     const activeRows = rows.filter(isActiveReservation);
-    const lunchRows = activeRows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "lunch");
-    const dinnerRows = activeRows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "dinner");
+    const lunchRows = activeRows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "lunch");
+    const dinnerRows = activeRows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "dinner");
     const walkInRows = activeRows.filter(isWalkIn);
-    const onlineRows = activeRows.filter((r) => ((r.bookingSource || r.BookingSource) || "").toUpperCase() === "GUEST_ONLINE");
+    const onlineRows = activeRows.filter((r) => String(getSource(r)).toUpperCase() === "GUEST_ONLINE");
     const confirmedRows = rows.filter((r) => getEffectiveStatus(r) === "CONFIRMED" || !getEffectiveStatus(r));
     const arrivedRows = rows.filter((r) => getEffectiveStatus(r) === "ARRIVED");
     const seatedRows = rows.filter((r) => getEffectiveStatus(r) === "SEATED");
@@ -802,29 +835,39 @@ export default function ReportsPage() {
   const buildCustomerRows = useCallback((rows) => {
     const grouped = new Map();
     rows.forEach((r) => {
-      const name = r.customerName || r.CustomerName || "Guest";
-      const phone = r.customerPhone || r.CustomerPhone || "";
-      const key = `${phone || "no-phone"}|${name.toLowerCase()}`;
+      const name = getCustomerName(r);
+      const phone = getCustomerPhone(r);
+      const email = getCustomerEmail(r);
+      const key = `${phone || email || "no-contact"}|${String(name).toLowerCase()}`;
       const current = grouped.get(key) || {
-        "Guest name": name,
+        "Customer name": name,
         Phone: phone,
+        Email: email,
         Reservations: 0,
         Guests: 0,
         "Last visit": "",
         "Walk-ins": 0,
+        "Last table": "",
+        "Last status": "",
+        Hostess: "",
         Cancelled: 0,
         "No Show": 0,
       };
-      const date = r.reservationDate || r.ReservationDate || "";
+      const date = getReservationDateValue(r) || "";
       current.Reservations += 1;
-      current.Guests += parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10) || 0;
-      current["Last visit"] = !current["Last visit"] || date > current["Last visit"] ? date : current["Last visit"];
+      current.Guests += parseInt(getGuestCount(r) || 0, 10) || 0;
+      if (!current["Last visit"] || date >= current["Last visit"]) {
+        current["Last visit"] = date;
+        current["Last table"] = getTableLabel(r);
+        current["Last status"] = getStatusChip(getEffectiveStatus(r)).label;
+        current.Hostess = getHostessName(r);
+      }
       current["Walk-ins"] += isWalkIn(r) ? 1 : 0;
       current.Cancelled += ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)) ? 1 : 0;
       current["No Show"] += getEffectiveStatus(r) === "NO_SHOW" ? 1 : 0;
       grouped.set(key, current);
     });
-    return [...grouped.values()].sort((a, b) => b.Reservations - a.Reservations || a["Guest name"].localeCompare(b["Guest name"]));
+    return [...grouped.values()].sort((a, b) => b.Reservations - a.Reservations || a["Customer name"].localeCompare(b["Customer name"]));
   }, []);
 
   const buildTableRows = useCallback((rows) => {
@@ -836,15 +879,25 @@ export default function ReportsPage() {
         Reservations: 0,
         "Active reservations": 0,
         Guests: 0,
+        "Customer names": "",
+        Phones: "",
         Lunch: 0,
         Dinner: 0,
         Cancelled: 0,
         "No Show": 0,
       };
-      const meal = getTimeCategory(r.reservationTime || r.ReservationTime);
+      const meal = getTimeCategory(getReservationTimeValue(r));
       current.Reservations += 1;
       current["Active reservations"] += isActiveReservation(r) ? 1 : 0;
-      current.Guests += parseInt(r.numberOfGuests || r.NumberOfGuests || r.pax || 0, 10) || 0;
+      current.Guests += parseInt(getGuestCount(r) || 0, 10) || 0;
+      const customerName = getCustomerName(r);
+      const customerPhone = getCustomerPhone(r);
+      if (customerName && !String(current["Customer names"]).split(", ").includes(customerName)) {
+        current["Customer names"] = current["Customer names"] ? `${current["Customer names"]}, ${customerName}` : customerName;
+      }
+      if (customerPhone && !String(current.Phones).split(", ").includes(customerPhone)) {
+        current.Phones = current.Phones ? `${current.Phones}, ${customerPhone}` : customerPhone;
+      }
       current.Lunch += meal === "lunch" ? 1 : 0;
       current.Dinner += meal === "dinner" ? 1 : 0;
       current.Cancelled += ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)) ? 1 : 0;
@@ -864,8 +917,9 @@ export default function ReportsPage() {
 
   const detailCols = useMemo(() => [
     { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 12 },
-    { wch: 26 }, { wch: 16 }, { wch: 8 }, { wch: 20 },
-    { wch: 14 }, { wch: 16 }, { wch: 8 }, { wch: 44 },
+    { wch: 26 }, { wch: 18 }, { wch: 28 }, { wch: 8 },
+    { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 8 },
+    { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 44 },
   ], []);
 
   const handleOpenExportModal = useCallback(() => {
@@ -945,8 +999,8 @@ export default function ReportsPage() {
         });
       } else if (activeExportConfig.reportType === "meal-period") {
         addSheet(wb, "Meal Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
-        addSheet(wb, "Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "lunch")), detailCols);
-        addSheet(wb, "Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(r.reservationTime || r.ReservationTime) === "dinner")), detailCols);
+        addSheet(wb, "Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "lunch")), detailCols);
+        addSheet(wb, "Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "dinner")), detailCols);
       } else if (activeExportConfig.reportType === "exceptions") {
         const exceptionRows = rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"].includes(getEffectiveStatus(r)));
         addSheet(wb, "Exception Summary", getExportStats(exceptionRows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
@@ -955,12 +1009,12 @@ export default function ReportsPage() {
         addSheet(wb, "Left", getReservationExportRows(exceptionRows.filter((r) => getEffectiveStatus(r) === "LEFT")), detailCols);
       } else if (activeExportConfig.reportType === "customer") {
         addSheet(wb, "Customers", buildCustomerRows(rows), [
-          { wch: 26 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
+          { wch: 26 }, { wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 },
         ]);
         addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
       } else if (activeExportConfig.reportType === "table") {
         addSheet(wb, "Tables", buildTableRows(rows), [
-          { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
+          { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 34 }, { wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
         ]);
         addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
       } else {
@@ -1390,7 +1444,7 @@ export default function ReportsPage() {
               if (groupBy === "hour") {
                 const grouped = {};
                 sortedDisplayList.forEach((res) => {
-                  const t = res.reservationTime || res.ReservationTime || "";
+                  const t = getReservationTimeValue(res) || "";
                   const hour = t ? t.split(":")[0] : "Unknown";
                   const key = `${hour}:00`;
                   grouped[key] = grouped[key] || [];
@@ -1433,7 +1487,7 @@ export default function ReportsPage() {
               if (groupBy === "day") {
                 const grouped = {};
                 sortedDisplayList.forEach((res) => {
-                  const d = res.reservationDate || res.ReservationDate || res.bookingDate || "";
+                  const d = getReservationDateValue(res) || "";
                   const key = d ? d.split("T")[0] : "Unknown";
                   grouped[key] = grouped[key] || [];
                   grouped[key].push(res);
