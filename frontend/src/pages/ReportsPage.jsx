@@ -775,10 +775,12 @@ export default function ReportsPage() {
       const meal = getTimeCategory(getReservationTimeValue(r));
       const mealLabel = meal === "lunch" ? "Lunch" : meal === "dinner" ? "Dinner" : "";
       const requests = String(getSpecialRequests(r) || "").replace(/\r?\n/g, " ");
+      const rawDate = getReservationDateValue(r) || "";
+      const rawTime = getReservationTimeValue(r) || "";
       return {
         "Reservation ID": getReservationId(r) || "",
-        Date: getReservationDateValue(r) || "",
-        Time: getReservationTimeValue(r) || "",
+        Date: rawDate ? formatDate(rawDate) : "",
+        Time: rawTime ? formatTime(rawTime) : "",
         "Meal period": mealLabel,
         "Customer name": getCustomerName(r),
         Phone: getCustomerPhone(r),
@@ -989,38 +991,43 @@ export default function ReportsPage() {
         { Field: "Records", Value: rows.length },
       ], [{ wch: 18 }, { wch: 34 }]);
 
-      if (activeExportConfig.reportType === "summary") {
-        addSheet(wb, "Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
-        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
-      } else if (activeExportConfig.reportType === "status-wise") {
-        addSheet(wb, "Status Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+      const statsCols = [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      const reportType = activeExportConfig.reportType;
+
+      // The detail rows this report describes. Most types use the full filtered
+      // set; the exceptions report narrows to cancelled / no-show / left only.
+      const detailRows = reportType === "exceptions"
+        ? rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"].includes(getEffectiveStatus(r)))
+        : rows;
+
+      // Every report gets a counts summary so totals are always present.
+      addSheet(wb, "Summary", getExportStats(detailRows), statsCols);
+
+      // Type-specific breakdown sheets (in addition to the summary + detail).
+      if (reportType === "status-wise") {
         ["CONFIRMED", "ARRIVED", "SEATED", "LEFT", "CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "BOOKED", "PENDING"].forEach((status) => {
           const statusRows = rows.filter((r) => getEffectiveStatus(r) === status || (status === "CONFIRMED" && !getEffectiveStatus(r)));
           if (statusRows.length) addSheet(wb, getStatusChip(status).label, getReservationExportRows(statusRows), detailCols);
         });
-      } else if (activeExportConfig.reportType === "meal-period") {
-        addSheet(wb, "Meal Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+      } else if (reportType === "meal-period") {
         addSheet(wb, "Lunch", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "lunch")), detailCols);
         addSheet(wb, "Dinner", getReservationExportRows(rows.filter((r) => getTimeCategory(getReservationTimeValue(r)) === "dinner")), detailCols);
-      } else if (activeExportConfig.reportType === "exceptions") {
-        const exceptionRows = rows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "LEFT"].includes(getEffectiveStatus(r)));
-        addSheet(wb, "Exception Summary", getExportStats(exceptionRows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
-        addSheet(wb, "Cancelled", getReservationExportRows(exceptionRows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)))), detailCols);
-        addSheet(wb, "No Show", getReservationExportRows(exceptionRows.filter((r) => getEffectiveStatus(r) === "NO_SHOW")), detailCols);
-        addSheet(wb, "Left", getReservationExportRows(exceptionRows.filter((r) => getEffectiveStatus(r) === "LEFT")), detailCols);
-      } else if (activeExportConfig.reportType === "customer") {
+      } else if (reportType === "exceptions") {
+        addSheet(wb, "Cancelled", getReservationExportRows(detailRows.filter((r) => ["CANCELLED", "CANCELLED_NOTIFY"].includes(getEffectiveStatus(r)))), detailCols);
+        addSheet(wb, "No Show", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "NO_SHOW")), detailCols);
+        addSheet(wb, "Left", getReservationExportRows(detailRows.filter((r) => getEffectiveStatus(r) === "LEFT")), detailCols);
+      } else if (reportType === "customer") {
         addSheet(wb, "Customers", buildCustomerRows(rows), [
           { wch: 26 }, { wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 },
         ]);
-        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
-      } else if (activeExportConfig.reportType === "table") {
+      } else if (reportType === "table") {
         addSheet(wb, "Tables", buildTableRows(rows), [
           { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 34 }, { wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
         ]);
-        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
-      } else {
-        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
       }
+
+      // Every report ends with the full per-reservation detail rows.
+      addSheet(wb, "Reservations", getReservationExportRows(detailRows), detailCols);
 
       const stamp = activeExportConfig.dateMode === "single"
         ? activeExportConfig.selectedDate
