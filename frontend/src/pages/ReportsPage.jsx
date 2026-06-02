@@ -991,6 +991,7 @@ export default function ReportsPage() {
 
       if (activeExportConfig.reportType === "summary") {
         addSheet(wb, "Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
+        addSheet(wb, "Reservations", getReservationExportRows(rows), detailCols);
       } else if (activeExportConfig.reportType === "status-wise") {
         addSheet(wb, "Status Summary", getExportStats(rows), [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]);
         ["CONFIRMED", "ARRIVED", "SEATED", "LEFT", "CANCELLED", "CANCELLED_NOTIFY", "NO_SHOW", "BOOKED", "PENDING"].forEach((status) => {
