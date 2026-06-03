@@ -294,7 +294,17 @@ export default function ReportsPage() {
   const safeAllReservations = Array.isArray(allReservations) ? allReservations : [];
   const activeReservations = safeReservations.filter(isActiveReservation);
   const activeAllReservations = safeAllReservations.filter(isActiveReservation);
-  
+
+  // "Counted" = reservations that actually happened. Includes SEATED and LEFT
+  // (guest came and dined), excludes only CANCELLED / NO_SHOW. Used for the
+  // headline stat cards so past dates (everyone LEFT) still show real totals.
+  const isCounted = (r) => {
+    const s = getEffectiveStatus(r);
+    return s !== "CANCELLED" && s !== "CANCELLED_NOTIFY" && s !== "NO_SHOW";
+  };
+  const countedReservations = safeReservations.filter(isCounted);
+  const countedAllReservations = safeAllReservations.filter(isCounted);
+
   // Helper to parse time and determine if it's lunch (8 AM - 6 PM) or dinner (after 6 PM)
   const getTimeCategory = (timeString) => {
     if (!timeString) return null;
@@ -319,21 +329,21 @@ export default function ReportsPage() {
   };
   
   const stats = {
-    total: activeReservations.length,
-    totalGuests: activeReservations.reduce((sum, r) => {
+    total: countedReservations.length,
+    totalGuests: countedReservations.reduce((sum, r) => {
       const guests = parseInt(getGuestCount(r) || 0, 10);
       return sum + (isNaN(guests) ? 0 : guests);
     }, 0),
     confirmed: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "CONFIRMED" || !r.status).length,
     seated: activeReservations.filter((r) => (r.status || r.Status || "").toUpperCase() === "SEATED").length,
-    walkInGuests: activeAllReservations.reduce((sum, r) => {
+    walkInGuests: countedAllReservations.reduce((sum, r) => {
       if (isWalkIn(r)) {
         const guests = parseInt(getGuestCount(r) || 0, 10);
         return sum + (isNaN(guests) ? 0 : guests);
       }
       return sum;
     }, 0),
-    walkInCount: activeAllReservations.filter((r) => isWalkIn(r)).length,
+    walkInCount: countedAllReservations.filter((r) => isWalkIn(r)).length,
     cancelled: safeAllReservations.filter((r) => {
       const status = getEffectiveStatus(r);
       return status === "CANCELLED" || status === "CANCELLED_NOTIFY";
@@ -341,11 +351,11 @@ export default function ReportsPage() {
     noShow: safeAllReservations.filter((r) => getEffectiveStatus(r) === "NO_SHOW").length,
     left: safeAllReservations.filter((r) => getEffectiveStatus(r) === "LEFT").length,
     // Lunch reservations (8 AM to 6 PM)
-    lunchReservations: activeAllReservations.filter((r) => {
+    lunchReservations: countedAllReservations.filter((r) => {
       const time = getReservationTimeValue(r);
       return getTimeCategory(time) === "lunch";
     }).length,
-    lunchGuests: activeAllReservations.reduce((sum, r) => {
+    lunchGuests: countedAllReservations.reduce((sum, r) => {
       const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "lunch") {
         const guests = parseInt(getGuestCount(r) || 0, 10);
@@ -353,17 +363,17 @@ export default function ReportsPage() {
       }
       return sum;
     }, 0),
-    lunchTables: activeAllReservations.reduce((sum, r) => {
+    lunchTables: countedAllReservations.reduce((sum, r) => {
       const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "lunch") return sum + getTableCount(r);
       return sum;
     }, 0),
     // Dinner reservations (after 6 PM)
-    dinnerReservations: activeAllReservations.filter((r) => {
+    dinnerReservations: countedAllReservations.filter((r) => {
       const time = getReservationTimeValue(r);
       return getTimeCategory(time) === "dinner";
     }).length,
-    dinnerGuests: activeAllReservations.reduce((sum, r) => {
+    dinnerGuests: countedAllReservations.reduce((sum, r) => {
       const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "dinner") {
         const guests = parseInt(getGuestCount(r) || 0, 10);
@@ -371,7 +381,7 @@ export default function ReportsPage() {
       }
       return sum;
     }, 0),
-    dinnerTables: activeAllReservations.reduce((sum, r) => {
+    dinnerTables: countedAllReservations.reduce((sum, r) => {
       const time = getReservationTimeValue(r);
       if (getTimeCategory(time) === "dinner") return sum + getTableCount(r);
       return sum;
