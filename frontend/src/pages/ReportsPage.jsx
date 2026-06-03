@@ -1713,15 +1713,27 @@ export default function ReportsPage() {
                     ))}
                   </select>
 
-                  <label className="mb-2 mt-4 block text-xs font-extrabold uppercase tracking-wide text-gray-500">Search</label>
-                  <input
-                    type="text"
-                    value={exportConfig.search}
-                    onChange={(e) => setExportConfig((prev) => ({ ...prev, search: e.target.value }))}
-                    disabled={exportConfig.reportType === "current"}
-                    placeholder="Guest / phone / table"
-                    className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-800 outline-none placeholder:text-gray-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
-                  />
+                  <label className="mb-2 mt-4 block text-xs font-extrabold uppercase tracking-wide text-gray-500">Search customer</label>
+                  <div className="relative">
+                    <AutocompleteInput
+                      value={exportConfig.search}
+                      onChange={(e) => setExportConfig((prev) => ({ ...prev, search: e.target.value }))}
+                      onSelect={(customer) => setExportConfig((prev) => ({ ...prev, search: customer.phone || customer.name || "" }))}
+                      disabled={exportConfig.reportType === "current"}
+                      placeholder="Customer name / phone / email"
+                      className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-4 pr-10 text-sm font-bold text-gray-800 outline-none placeholder:text-gray-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                    />
+                    {exportConfig.search && exportConfig.reportType !== "current" && (
+                      <button
+                        type="button"
+                        onClick={() => setExportConfig((prev) => ({ ...prev, search: "" }))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 z-[1100] grid h-6 w-6 place-items-center rounded-full text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+                        aria-label="Clear customer search"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                   {exportConfig.reportType === "current" && (
                     <p className="mt-3 text-xs font-semibold leading-5 text-gray-500">
                       Current view uses the filters already applied on the Reports page.
