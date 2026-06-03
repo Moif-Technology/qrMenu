@@ -16,10 +16,23 @@ export default function CartDrawer({ open, onClose }) {
 
   const orderPayload = useMemo(() => {
     const sendableItems = items.filter((x) => !x.isExistingOrder);
-    const lines = sendableItems.map((x) => {
+    // Resolve the KOTChild id for an already-sent line so the backend can skip
+    // it (no re-insert, no reprint). New lines have no kotChildId.
+    const existingChildId = (x) => {
+      if (!x.isExistingOrder) return null;
+      const fromProduct =
+        x.product?.KotChildID ?? x.product?.kotChildID ?? x.product?.kotChildId;
+      if (fromProduct != null) return fromProduct;
+      const m = String(x._k || "").match(/existing::(\d+)/);
+      return m ? Number(m[1]) : null;
+    };
+    // Send ALL lines (existing + new). Existing carry kotChildId; backend
+    // inserts only the new ones. Mirrors Tablet Module saveKot.
+    const lines = items.map((x) => {
       const full = x.product || x.raw || x.meta || x.item || x;
       return {
         key: x._k,
+        kotChildId: existingChildId(x),
         qty: x.qty,
         unitPrice: x.price,
         lineTotal: Number((x.price * x.qty).toFixed(2)),
@@ -44,7 +57,7 @@ export default function CartDrawer({ open, onClose }) {
       items: lines,
     };
   }, [items, note, total, tableId, tableAreaId]);
-  const hasSendableItems = orderPayload.items.length > 0;
+  const hasSendableItems = orderPayload.items.some((l) => l.kotChildId == null);
 
   async function handleSend() {
     if (!hasSendableItems || sending) return;

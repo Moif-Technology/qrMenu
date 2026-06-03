@@ -211,11 +211,19 @@ export async function saveKot(payload) {
       console.log("[KOT:SVC] Creating new KOTMasterID =", kotMasterID);
     }
 
-    // 2) Totals
+    // Helper: an item already saved to KOTChild carries its KotChildID.
+    // Mirrors Tablet Module saveKot — existing rows are never re-inserted or
+    // reprinted; only brand-new items (no child id) go to the kitchen.
+    const isExistingChild = (it) =>
+      toInt(it?.kotChildId ?? it?.KotChildID ?? it?.kotChildID) > 0;
+
+    // 2) Totals — only NEW items contribute. Existing children already counted
+    // in the master totals from when they were first sent.
     let subTotalM = 0,
       tax1M = 0,
       amountM = 0;
     for (const it of items) {
+      if (isExistingChild(it)) continue;
       const c = computeLine(it);
       subTotalM += c.subTotal;
       tax1M += c.tax1Amount;
@@ -361,8 +369,16 @@ export async function saveKot(payload) {
       console.log("[KOT:SVC] Updated existing KOTMaster totals");
     }
 
-    // 4) Insert Child rows
+    // 4) Insert Child rows — NEW items only.
     for (const [idx, line] of items.entries()) {
+      // Skip items already in KOTChild: do NOT re-insert, leave their
+      // Androidprint / KOTDisplayStatus untouched so the kitchen does not
+      // reprint previously-sent items. (Mirrors Tablet Module saveKot.)
+      if (isExistingChild(line)) {
+        console.log("[KOT:SVC] skip existing child", line.kotChildId ?? line.KotChildID);
+        continue;
+      }
+
       const raw = (line.product && (line.product._raw || {})) || {};
 
       // Accept your frontend’s product shape (MenuCard -> product.id)
@@ -495,7 +511,7 @@ export async function saveKot(payload) {
       kotPrefix: payload.__kotPrefix ?? null,
       tableId,
       totals: { subTotalM, tax1M, amountM },
-      rows: items.length,
+      rows: items.filter((it) => !isExistingChild(it)).length,
     };
   } catch (err) {
     try {
