@@ -100,19 +100,6 @@ export default function CartDrawer({ open, onClose }) {
     }
   }
 
-  function handlePreviewSuccess() {
-    const variants = ["chef", "ticket", "bell"];
-    showSuccess({
-      kotId: `KOT${Math.floor(100000 + Math.random() * 900000)}`,
-      tableId: orderPayload.header.tableId,
-      itemsCount: orderPayload.header.itemsCount || 3,
-      subtotal: orderPayload.header.subtotal || 42.5,
-      currency: orderPayload.header.currency || "AED",
-      etaMin: 12,
-      variant: variants[Math.floor(Math.random() * variants.length)],
-    });
-  }
-
   return (
     <div className={`drawer ${open ? "" : "pointer-events-none"}`}>
       {/* Backdrop */}
@@ -313,24 +300,14 @@ export default function CartDrawer({ open, onClose }) {
               )}
             </button>
 
-            <div className="flex gap-2">
-              <button 
-                className="btn-outline flex-1 py-2 text-sm flex items-center justify-center gap-1"
-                onClick={handlePreviewSuccess} 
-                disabled={sending}
-              >
-                <Icon name="eye" className="h-4 w-4" />
-                {t("cart.preview")}
-              </button>
-              <button 
-                className="btn-ghost flex-1 py-2 text-sm text-gray-600 hover:text-red-600 border border-gray-200 rounded-xl flex items-center justify-center gap-1"
-                onClick={clear}
-                disabled={sending || !hasSendableItems}
-              >
-                <Icon name="trash-2" className="h-4 w-4" />
-                {t("cart.clear")}
-              </button>
-            </div>
+            <button
+              className="btn-ghost w-full py-2 text-sm text-gray-600 hover:text-red-600 border border-gray-200 rounded-xl flex items-center justify-center gap-1"
+              onClick={clear}
+              disabled={sending || !hasSendableItems}
+            >
+              <Icon name="trash-2" className="h-4 w-4" />
+              {t("cart.clear")}
+            </button>
           </div>
         </div>
       </div>
