@@ -28,6 +28,7 @@ function ItemCard({
   onOpen,
   onModifiers,
   qtyInCart,
+  canOrder = true,
 }) {
   const items = useCart((s) => s.items);
   const inc = useCart((s) => s.inc);
@@ -359,28 +360,25 @@ function ItemCard({
         </div>
 
         <div className="mt-auto flex flex-col gap-3">
-          {/* OLD ORDERING FOOTER VERSION - full restore block.
-              To bring back add-to-cart, in-cart label, quantity controls, and customize:
-              replace the CURRENT READ-ONLY FOOTER VERSION below with this block.
-
-          <div className="flex min-h-14 w-full shrink-0 items-center justify-between gap-2 sm:gap-3">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center pr-1">
-              <div className="flex items-center gap-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
-                  {t("menu.price")}
-                </div>
-                {visibleQtyInCart > 0 && (
-                  <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-semibold leading-none text-amber-700">
-                    In cart: {visibleQtyInCart}
-                  </span>
-                )}
+          {!canOrder ? (
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                {t("menu.price")}
               </div>
-              <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
+              <div className="mt-1 whitespace-nowrap text-xl font-bold text-slate-900">
                 AED {displayPrice.toFixed(2)}
               </div>
             </div>
-
-            {qtyFromStore <= 0 ? (
+          ) : qtyFromStore <= 0 ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                  {t("menu.price")}
+                </div>
+                <div className="mt-1 whitespace-nowrap text-xl font-bold text-slate-900">
+                  AED {displayPrice.toFixed(2)}
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={(e) => {
@@ -389,105 +387,99 @@ function ItemCard({
                   onQuickAdd?.(itemForCart, selectedMods);
                 }}
                 onPointerDown={setRipple}
-                className="item-card-add-cta relative grid h-10 w-10 shrink-0 touch-manipulation place-items-center overflow-hidden rounded-xl border border-stone-800/10 bg-[var(--text-primary)] text-[var(--bg-card)] shadow-sm transition hover:bg-stone-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2 sm:h-11 sm:w-11"
+                className="item-card-add-cta relative grid h-11 w-11 shrink-0 touch-manipulation place-items-center overflow-hidden rounded-xl border border-stone-800/10 bg-[var(--text-primary)] text-[var(--bg-card)] shadow-sm transition hover:bg-stone-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2"
                 aria-label={`${t("menu.add_to_cart")}: ${itemName}`}
                 title={t("menu.add_to_cart")}
               >
-                <Icon name="plus" className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
+                <Icon name="plus" className="h-5 w-5" strokeWidth={2.25} />
                 <span className="btn-ripple" aria-hidden />
               </button>
-            ) : (
+            </div>
+          ) : (
+            <>
+              <div className="flex items-end justify-between gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
+                  {t("menu.price")}
+                </div>
+                <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-semibold leading-none text-amber-700">
+                  In cart: {visibleQtyInCart}
+                </span>
+              </div>
+              <div className="-mt-1 whitespace-nowrap text-xl font-bold text-slate-900">
+                AED {displayPrice.toFixed(2)}
+              </div>
               <div
-                className="flex h-10 shrink-0 items-stretch overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm sm:h-11"
+                className="flex h-11 w-full items-stretch overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm"
                 role="group"
                 aria-label={`Quantity controls for ${itemName}`}
               >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    setRipple(e);
-                    vibrate(8);
-                    if (qtyFromStore <= 1) {
-                      remove(lineKey);
-                    } else {
-                      dec(lineKey);
-                    }
-                  }}
-                  onPointerDown={setRipple}
-                  className="item-card-qty-btn relative grid min-h-10 min-w-10 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100 sm:min-h-11 sm:min-w-11"
-                  aria-label={qtyFromStore <= 1 ? "Remove from cart" : "Decrease quantity"}
-                  title={qtyFromStore <= 1 ? "Remove" : "Decrease"}
-                >
-                  <Icon name={qtyFromStore <= 1 ? "trash" : "minus"} className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
-                  <span className="btn-ripple" aria-hidden />
-                </button>
-                <span className="flex min-w-[2rem] items-center justify-center border-x border-stone-200 px-1 text-sm font-semibold tabular-nums leading-none text-stone-900 sm:min-w-[2.25rem] sm:px-1.5">
-                  {qtyFromStore}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    setRipple(e);
-                    vibrate(8);
-                    inc(lineKey);
-                  }}
-                  onPointerDown={setRipple}
-                  className="item-card-qty-btn relative grid min-h-10 min-w-10 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100 sm:min-h-11 sm:min-w-11"
-                  aria-label="Increase quantity"
-                  title="Increase"
-                >
-                  <Icon name="plus" className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.25} />
-                  <span className="btn-ripple" aria-hidden />
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] font-medium text-gray-500 sm:text-xs">
-            <button
-              type="button"
-              onClick={(e) => {
-                setRipple(e);
-                vibrate(8);
-                setShowMods(true);
-              }}
-              onPointerDown={setRipple}
-              className="relative inline-flex items-center gap-1 rounded-full border border-transparent px-2.5 py-1.5 text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.25)] hover:bg-[var(--grad-start-soft)] sm:px-3"
-              title="Customize"
-            >
-              <Icon name="sliders" className="h-3.5 w-3.5" />
-              {t("menu.customize")}
-              <span className="btn-ripple" aria-hidden />
-            </button>
-
-            <span
-              className="rounded-full border border-[rgba(139,111,71,0.08)] bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]"
-              style={{ letterSpacing: "0.2em" }}
-              role="note"
-            >
-              {t("menu.vat_service_note") || "All prices are inclusive of 5% VAT."}
-            </span>
-          </div>
-          */}
-
-          {/* CURRENT READ-ONLY FOOTER VERSION - active code. */}
-          <div className="flex min-h-14 w-full shrink-0 items-center justify-between gap-2 sm:gap-3">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center pr-1">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-400" style={{ letterSpacing: "0.24em" }}>
-                {t("menu.price")}
-              </div>
-              <div className="mt-1 text-lg font-bold text-slate-900 sm:text-[1.25rem]">
-                AED {displayPrice.toFixed(2)}
-              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  setRipple(e);
+                  vibrate(8);
+                  if (qtyFromStore <= 1) {
+                    remove(lineKey);
+                  } else {
+                    dec(lineKey);
+                  }
+                }}
+                onPointerDown={setRipple}
+                className="item-card-qty-btn relative grid flex-1 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100"
+                aria-label={qtyFromStore <= 1 ? "Remove from cart" : "Decrease quantity"}
+                title={qtyFromStore <= 1 ? "Remove" : "Decrease"}
+              >
+                <Icon name={qtyFromStore <= 1 ? "trash" : "minus"} className="h-4 w-4" strokeWidth={2.25} />
+                <span className="btn-ripple" aria-hidden />
+              </button>
+              <span className="flex flex-1 items-center justify-center border-x border-stone-200 text-sm font-semibold tabular-nums leading-none text-stone-900">
+                {qtyFromStore}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  setRipple(e);
+                  vibrate(8);
+                  inc(lineKey);
+                }}
+                onPointerDown={setRipple}
+                className="item-card-qty-btn relative grid flex-1 touch-manipulation place-items-center overflow-hidden text-stone-600 transition hover:bg-stone-50 active:bg-stone-100"
+                aria-label="Increase quantity"
+                title="Increase"
+              >
+                <Icon name="plus" className="h-4 w-4" strokeWidth={2.25} />
+                <span className="btn-ripple" aria-hidden />
+              </button>
             </div>
-          </div>
+            </>
+          )}
 
-          <div className="flex items-center justify-end text-[11px] font-medium text-gray-500 sm:text-xs">
-            <span
-              className="rounded-full border border-[rgba(139,111,71,0.08)] bg-[var(--grad-start-soft)] px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-[var(--grad-start)] sm:px-3 sm:text-[0.7rem]"
-              style={{ letterSpacing: "0.2em" }}
-              role="note"
-            >
+          {canOrder && (
+            <div className="flex items-center justify-start">
+              <button
+                type="button"
+                onClick={(e) => {
+                  setRipple(e);
+                  vibrate(8);
+                  setShowMods(true);
+                }}
+                onPointerDown={setRipple}
+                className="relative inline-flex items-center gap-1.5 rounded-full border border-stone-200 px-3 py-1.5 text-[11px] font-medium text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.35)] hover:bg-[var(--grad-start-soft)] active:scale-95 sm:text-xs"
+                title="Customize"
+              >
+                <Icon name="sliders" className="h-3.5 w-3.5" />
+                {t("menu.customize")}
+                <span className="btn-ripple" aria-hidden />
+              </button>
+            </div>
+          )}
+
+          <div
+            className="flex items-start gap-1.5 rounded-lg border border-[rgba(139,111,71,0.12)] bg-[var(--grad-start-soft)] px-2 py-1.5 text-[10px] font-medium leading-snug text-[var(--grad-start)] sm:px-2.5 sm:text-[11px]"
+            role="note"
+          >
+            <Icon name="info" className="mt-[1px] h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" strokeWidth={2.25} />
+            <span className="min-w-0 flex-1 text-balance">
               {t("menu.vat_service_note") || "All prices are inclusive of 5% VAT."}
             </span>
           </div>

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import CartDrawer from "../component/CartDrawer";
 import CategoryTabs from "../component/CategoryTabs";
 import FilterBar from "../component/FilterBar";
+import FloatingCartButton from "../component/FloatingCartButton";
 import ItemModal from "../component/ItemModal";
 import MenuGrid from "../component/MenuGrid";
 import MenuGroupList from "../component/MenuGroupList";
@@ -17,6 +18,7 @@ import { useUI } from "../store/uiStore";
 
 // 🔌 LIVE API
 import { log, error as logError } from "../lib/logger";
+import { isOrderMode } from "../lib/orderMode";
 import { getImageMapping, getQrCategories, getQrMenuItems, getSingleProductImageBinary } from "../services/menu.service";
 import { getPackageHeaders } from "../services/package.service";
 import { checkTableOrders } from "../services/payment.service";
@@ -274,6 +276,10 @@ export default function MenuPage() {
   const { t } = useTranslation();
   const lang = useUI((s) => s.lang);
   const linkDetailsLoggedRef = useRef(false);
+
+  // Ordering (add-to-cart + send-to-kitchen) only in test mode (?order=1).
+  // Customer links stay view-only: browse menu + view bill, no ordering.
+  const orderMode = useMemo(() => isOrderMode(), []);
 
   // Dev: show full link details in console when this page is opened from generated link (menu view)
   useEffect(() => {
@@ -2006,13 +2012,14 @@ export default function MenuPage() {
           </div>
         </section>
       ) : items.length > 0 ? (
-        <MenuGrid 
-          items={items} 
-          onQuickAdd={undefined} 
-          onOpen={openModal} 
+        <MenuGrid
+          items={items}
+          onQuickAdd={undefined}
+          onOpen={openModal}
           categoryKey={activeCat}
           isPackageView={false}
           sections={groupedSections}
+          canOrder={orderMode}
         />
       ) : loading ? (
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12">
@@ -2070,16 +2077,14 @@ export default function MenuPage() {
         }}
       />
 
-      <CartDrawer open={drawer} onClose={() => setDrawer(false)} />
+      {orderMode && <CartDrawer open={drawer} onClose={() => setDrawer(false)} />}
 
-      {/* OLD FLOATING CART BUTTON - full restore block.
-          To bring back the floating view-cart button, uncomment this block.
-
-      <FloatingCartButton
-        isOpen={drawer || modalOpen}
-        onClick={() => setDrawer(true)}
-      />
-      */}
+      {orderMode && (
+        <FloatingCartButton
+          isOpen={drawer || modalOpen}
+          onClick={() => setDrawer(true)}
+        />
+      )}
 
       <ScrollTopButton />
     </div>

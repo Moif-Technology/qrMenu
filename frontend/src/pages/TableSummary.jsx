@@ -15,7 +15,9 @@ import SplitOptionsSheet from "../component/SplitOptionSheet";
 import SplitPickItemsSheet from "../component/SplitPickItemsSheet";
 import Toast from "../component/Toast";
 import { API } from "../lib/api";
+
 import { log, error as logError } from "../lib/logger";
+import { isOrderMode } from "../lib/orderMode";
 import { checkTelrStatus, createTelrSession, getBalance, getPaidItems, getPaymentMethods, processCustomSplit, processEqualSplit, processItemSplit } from "../services/payment.service";
 import { useCart } from "../store/cartStore";
 
@@ -341,6 +343,12 @@ export default function TableSummaryPremium() {
   const navigate = useNavigate();
   const setTableId = useCart((s) => s.setTableId);
   const setToken = useCart((s) => s.setToken);
+
+  // Capture ?order=1 here so test mode survives the redirect to the menu (/),
+  // which drops the query string. Persists to sessionStorage for this tab.
+  useEffect(() => {
+    isOrderMode();
+  }, []);
 
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState({

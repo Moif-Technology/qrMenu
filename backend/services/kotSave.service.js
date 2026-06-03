@@ -61,27 +61,58 @@ async function getNextIdTx(controlName, tx) {
   return Number(rs.recordset[0].val);
 }
 
-/** Compute one line (unit price is tax-inclusive; tax1 only) */
+/** Compute one line (menu price is tax-inclusive; tax1 only) */
 function computeLine(line) {
   const qty = toNum(line.qty, 1);
   const gross = toNum(line.unitPrice ?? line.lineTotal ?? line.price, 0);
 
   const raw = (line.product && (line.product._raw || {})) || {};
-  const tax1Rate =
+
+  // Authoritative per-unit values from ProductChild (menu query returns plain
+  // `UnitPrice` = ex-tax base, `Tax1Amount` = per-unit tax amount).
+  const baseFromData = toNum(
+    raw["pc.UnitPrice"] ?? raw["pc_UnitPrice"] ?? raw.UnitPrice ??
+    line.product?.pc?.UnitPrice
+  );
+  const taxAmtFromData = toNum(
+    raw["pc.Tax1Amount"] ?? raw["pc_Tax1Amount"] ?? raw.Tax1Amount ??
+    line.product?.pc?.Tax1Amount
+  );
+
+  // Direct percent rate, if some payload provides it.
+  const tax1RateDirect =
     toNum(raw["pc.Tax1Rate"]) ||
     toNum(line.product?.pc?.Tax1Rate) ||
     toNum(line.product?.tax1Rate) ||
     0;
 
-  const baseUnit = tax1Rate > 0 ? gross / (1 + tax1Rate / 100) : gross;
-  const subTotal = r2(baseUnit * qty);
-  const tax1Amount = r2(gross * qty - subTotal);
-  const lineTotal = r2(gross * qty);
+  let unitBase, taxPerUnit, tax1Rate;
+
+  if (baseFromData > 0) {
+    // Most reliable: absolute amounts from the menu (tax may be 0 for exempt items)
+    unitBase = baseFromData;
+    taxPerUnit = taxAmtFromData > 0 ? taxAmtFromData : 0;
+    tax1Rate = unitBase > 0 ? r2((taxPerUnit / unitBase) * 100) : 0;
+  } else if (tax1RateDirect > 0) {
+    // Derive from inclusive gross + percent rate
+    unitBase = gross / (1 + tax1RateDirect / 100);
+    taxPerUnit = gross - unitBase;
+    tax1Rate = tax1RateDirect;
+  } else {
+    // No tax info available → treat gross as ex-tax, no tax split
+    unitBase = gross;
+    taxPerUnit = 0;
+    tax1Rate = 0;
+  }
+
+  const subTotal = r2(unitBase * qty);
+  const tax1Amount = r2(taxPerUnit * qty);
+  const lineTotal = r2((unitBase + taxPerUnit) * qty);
 
   return {
     qty,
     tax1Rate,
-    unitBase: r2(baseUnit),
+    unitBase: r2(unitBase),
     subTotal,
     tax1Amount,
     lineTotal,
@@ -205,10 +236,44 @@ export async function saveKot(payload) {
 
     // 3) Insert or Update Master
     if (!isExistingKot) {
+      // --- Generate KotNumber + KotPrefix + CounterNo (mirror POS saveKot) ---
+      // KotPrefix comes from AreaMaster; KotNumber is next-per-area-per-day.
+      let kotPrefix = "";
+      let kotNumber = 1;
+      if (areaId) {
+        const reqPfx = new mssql.Request(tx);
+        reqPfx.input("AreaID", mssql.BigInt, areaId);
+        const pfxRs = await reqPfx.query(
+          `SELECT TOP 1 ${q("KotPrefix")} AS p FROM dbo.AreaMaster WHERE ${q("AreaID")} = @AreaID`
+        );
+        kotPrefix = pfxRs.recordset[0]?.p != null ? String(pfxRs.recordset[0].p) : "";
+
+        const reqNo = new mssql.Request(tx);
+        reqNo.input("AreaID", mssql.BigInt, areaId);
+        const noRs = await reqNo.query(
+          `SELECT ISNULL(MAX(${q("KotNumber")}), 0) + 1 AS n
+           FROM ${T_KOTM}
+           WHERE ${q("AreaID")} = @AreaID
+             AND CONVERT(date, ${q("KotDate")}) = CONVERT(date, GETDATE())`
+        );
+        kotNumber = Number(noRs.recordset[0]?.n || 1);
+      } else {
+        const reqNo = new mssql.Request(tx);
+        const noRs = await reqNo.query(
+          `SELECT ISNULL(MAX(${q("KotNumber")}), 0) + 1 AS n
+           FROM ${T_KOTM}
+           WHERE CONVERT(date, ${q("KotDate")}) = CONVERT(date, GETDATE())`
+        );
+        kotNumber = Number(noRs.recordset[0]?.n || 1);
+      }
+
       // Insert new Master record
       const reqM = new mssql.Request(tx);
       reqM.input("kotMasterID", mssql.BigInt, kotMasterID);
-      reqM.input("KotStatus", mssql.VarChar(50), "SUBMIT");
+      reqM.input("KotNumber", mssql.BigInt, kotNumber);
+      reqM.input("KotPrefix", mssql.VarChar(50), kotPrefix);
+      reqM.input("CounterNo", mssql.VarChar(50), "1");
+      reqM.input("KotStatus", mssql.VarChar(50), "HOLD");
       reqM.input("Dummy", mssql.VarChar(50), "PENDING");
       reqM.input("Upload", mssql.VarChar(50), "PENDING");
       reqM.input("TableID", mssql.Int, tableId);
@@ -227,11 +292,11 @@ export async function saveKot(payload) {
       // Build INSERT statement with optional AreaID
       const areaIdField = areaId ? `${q("AreaID")},` : '';
       const areaIdValue = areaId ? '@AreaID,' : '';
-      
+
       const sqlM = `
        DECLARE @now DATETIME2(0) = SYSDATETIME();  -- one precise timestamp
         INSERT INTO ${T_KOTM} (
-          ${q("kotMasterID")},
+          ${q("kotMasterID")}, ${q("KotNumber")}, ${q("KotPrefix")}, ${q("CounterNo")},
           ${q("KotStatus")}, ${q("KotDate")}, ${q("KotTime")},
           ${q("CustomerID")}, ${q("DeliveryBoyId")}, ${q("Deliverytime")},
           ${q("TableID")}, ${q("ChairNo")}, ${areaIdField}${q("WaiterID")}, ${q(
@@ -248,10 +313,10 @@ export async function saveKot(payload) {
           ${q("RoundOffAdj")}, ${q("DummyBillPrintStatus")}
         )
         VALUES (
-          @kotMasterID,
+          @kotMasterID, @KotNumber, @KotPrefix, @CounterNo,
           @KotStatus,
-          @now,            
-          @now,               
+          @now,
+          @now,
           1,
           0,
           CONVERT(time(1), '00:00:00'),
@@ -266,6 +331,9 @@ export async function saveKot(payload) {
         )
       `;
       await reqM.query(sqlM);
+      // expose for response
+      payload.__kotNumber = kotNumber;
+      payload.__kotPrefix = kotPrefix;
     } else {
       // Update existing Master record - add to totals
       const reqM = new mssql.Request(tx);
@@ -358,7 +426,7 @@ export async function saveKot(payload) {
       reqC.input("PackQty", mssql.Decimal(18, 3), packQty);
       reqC.input("UnitCost", mssql.Decimal(18, 3), 0);
       reqC.input("UnitPrice", mssql.Decimal(18, 3), unitBase); // pre-tax
-      reqC.input("Amount", mssql.Decimal(18, 2), 0);
+      reqC.input("Amount", mssql.Decimal(18, 2), lineTotal); // tax-inclusive line value (matches POS)
       reqC.input("ItemDiscount", mssql.Decimal(18, 2), 0);
       reqC.input("SubTotalC", mssql.Decimal(18, 2), subTotal);
       reqC.input("Tax1AmountC", mssql.Decimal(18, 2), tax1Amount);
@@ -373,7 +441,7 @@ export async function saveKot(payload) {
       const modifierText = joinMods(line.mods, 200);
       reqC.input("Modifier", mssql.NVarChar(200), modifierText);
 
-      reqC.input("Androidprint", mssql.VarChar(50), "SUBMIT");
+      reqC.input("Androidprint", mssql.VarChar(50), "T");
       reqC.input("PrintCount", mssql.Int, 0);
       reqC.input("UploadStatusC", mssql.VarChar(50), "PENDING");
       reqC.input("CrBy", mssql.VarChar(50), "DIGIMENU");
@@ -422,6 +490,9 @@ export async function saveKot(payload) {
     return {
       ok: true,
       kotMasterID,
+      kotId: kotMasterID,
+      kotNumber: payload.__kotNumber ?? null,
+      kotPrefix: payload.__kotPrefix ?? null,
       tableId,
       totals: { subTotalM, tax1M, amountM },
       rows: items.length,

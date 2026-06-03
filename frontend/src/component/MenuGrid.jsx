@@ -3,7 +3,7 @@ import { useCart } from "../store/cartStore";
 import ItemCard from "./ItemCard";
 import PackageCard from "./PackageCard";
 
-export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPackageView = false, sections = null }) {
+export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPackageView = false, sections = null, canOrder = true }) {
   const add = useCart((s) => s.add);
 
   const handleQuickAdd = onQuickAdd ?? ((prod, selectedMods) => add(prod, selectedMods));
@@ -67,6 +67,7 @@ export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPac
                   showingPackages={showingPackages}
                   handleQuickAdd={handleQuickAdd}
                   onOpen={onOpen}
+                  canOrder={canOrder}
                 />
               </section>
             ))}
@@ -78,6 +79,7 @@ export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPac
             showingPackages={showingPackages}
             handleQuickAdd={handleQuickAdd}
             onOpen={onOpen}
+            canOrder={canOrder}
           />
         )}
     </div>
@@ -85,9 +87,9 @@ export default function MenuGrid({ items, onQuickAdd, onOpen, categoryKey, isPac
   );
 }
 
-function ProductGrid({ items, categoryKey, showingPackages, handleQuickAdd, onOpen }) {
+function ProductGrid({ items, categoryKey, showingPackages, handleQuickAdd, onOpen, canOrder = true }) {
   return (
-    <div className={`grid gap-3 sm:gap-4 md:gap-6 ${
+    <div className={`grid items-stretch gap-3 sm:gap-4 md:gap-6 ${
       showingPackages
         ? '[grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] md:[grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]'
         : '[grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--card-min,170px)),1fr))] [--card-min:170px] sm:[--card-min:200px] md:[--card-min:220px] lg:[--card-min:240px]'
@@ -105,11 +107,12 @@ function ProductGrid({ items, categoryKey, showingPackages, handleQuickAdd, onOp
         const CardComponent = isPackageItem ? PackageCard : ItemCard;
 
         return (
-          <div key={uniqueKey} data-product-id={productId}>
+          <div key={uniqueKey} data-product-id={productId} className="h-full">
             <CardComponent
               item={p}
               onQuickAdd={handleQuickAdd}
               onOpen={onOpen}
+              canOrder={canOrder}
             />
           </div>
         );

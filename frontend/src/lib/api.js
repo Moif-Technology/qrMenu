@@ -2,7 +2,7 @@ import axios from "axios";
 
 export const API = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "https://api.deynoqr.com/api",
-  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://192.168.1.144:5001/api",
+  // baseURL: import.meta.env.VITE_API_BASE_URL || "http://192.168.0.175:5001/api",
   timeout: 60000, // Increased to 60 seconds to handle complex queries with image processing
 });
 
