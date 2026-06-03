@@ -611,7 +611,9 @@ export default function ReportsPage() {
     let filtered = Array.isArray(reservations) ? [...reservations] : [];
     
     if (statusFilter === "all") {
-      filtered = filtered.filter(isActiveReservation);
+      // Show everything for the selected date, including completed
+      // (LEFT / NO_SHOW / CANCELLED). Past dates are mostly LEFT, so
+      // filtering to active-only made the list look empty.
     } else {
       const backendFilteredStatuses = ["confirmed", "arrived", "seated"];
       const isBackendFiltered = backendFilteredStatuses.includes(statusFilter);

@@ -3,7 +3,10 @@
     "allow": [
       "Bash(npm run *)",
       "Bash(awk '/useEffect\\\\\\(/ {found=1; buf=\"\"} found {buf=buf\"\\\\n\"$0; if\\(/\\\\}, \\\\[/\\) {print NR\": \"buf; found=0}}' frontend/src/pages/MenuPage.jsx)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(node scripts/gen-qr-103.js 200 \"RIGHT OUT DOOR\")",
+      "Bash(node scripts/gen-qr-test.js)",
+      "Bash(node scripts/tmp-resv-stats.js)"
     ]
   }
 }

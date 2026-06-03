@@ -28,7 +28,11 @@ export default function ModifierModal({
       .then((rows) => setMods(rows))
       .catch((e) => setErr(e.message || "Error loading modifiers"))
       .finally(() => setLoading(false));
-  }, [open, initialSelectedIds]);
+    // Reset selection only when the modal opens — NOT on every render.
+    // `initialSelectedIds` defaults to a fresh [] each render, so depending on
+    // it here re-ran this effect on every toggle and wiped the user's click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // reset when closed
   useEffect(() => {
