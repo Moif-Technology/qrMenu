@@ -7,7 +7,7 @@ import { useReservationStore } from "../store/reservationStore";
 import BottomNav from "../component/reservation/BottomNav";
 
 export default function TableActionPage() {
-  const navigate = useNavigate();
+  const navigate = useNavigate(); 
   const location = useLocation();
   const { 
     selectedTable,
