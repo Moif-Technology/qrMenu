@@ -516,7 +516,7 @@ export default function QRMenuManagement() {
 }
 
 // Products Tab Component
-function ProductsTab({
+export function ProductsTab({
   products,
   qrProductsMap,
   getQrProductInfo,
@@ -1130,7 +1130,7 @@ function sortMainGroups(groups) {
   return [...ordered, ...unordered];
 }
 
-function MainGroupsTab({ mainGroups, loading, onCreate, onEdit, onDelete }) {
+export function MainGroupsTab({ mainGroups, loading, onCreate, onEdit, onDelete }) {
   const sortedGroups = sortMainGroups(mainGroups || []);
 
   return (
@@ -1215,7 +1215,7 @@ function MainGroupsTab({ mainGroups, loading, onCreate, onEdit, onDelete }) {
 }
 
 // Groups Tab Component
-function GroupsTab({ groups, mainGroups, loading, onCreate, onEdit, onDelete }) {
+export function GroupsTab({ groups, mainGroups, loading, onCreate, onEdit, onDelete }) {
   const mainGroupNameById = new Map(
     (mainGroups || []).map((mainGroup) => [
       mainGroup.QrMainGroupID,
@@ -1309,7 +1309,7 @@ function GroupsTab({ groups, mainGroups, loading, onCreate, onEdit, onDelete }) 
 }
 
 // Subgroups Tab Component
-function SubgroupsTab({
+export function SubgroupsTab({
   subgroups,
   groups,
   loading,
@@ -1420,7 +1420,7 @@ function SubgroupsTab({
 }
 
 // Main Group Modal Component
-function MainGroupModal({ onClose, onSave, editingMainGroup }) {
+export function MainGroupModal({ onClose, onSave, editingMainGroup }) {
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     MainGroupID: null,
@@ -1569,7 +1569,7 @@ function MainGroupModal({ onClose, onSave, editingMainGroup }) {
 }
 
 // Group Modal Component
-function GroupModal({ onClose, onSave, editingGroup, normalGroups = [], mainGroups = [] }) {
+export function GroupModal({ onClose, onSave, editingGroup, normalGroups = [], mainGroups = [] }) {
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     QrMainGroupID: null,
@@ -1787,7 +1787,7 @@ function GroupModal({ onClose, onSave, editingGroup, normalGroups = [], mainGrou
 }
 
 // Subgroup Modal Component
-function SubgroupModal({ onClose, onSave, editingSubgroup, groups, selectedGroupId, normalSubgroups = [] }) {
+export function SubgroupModal({ onClose, onSave, editingSubgroup, groups, selectedGroupId, normalSubgroups = [] }) {
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     QrGroupID: selectedGroupId || null,
@@ -2007,7 +2007,7 @@ function SubgroupModal({ onClose, onSave, editingSubgroup, groups, selectedGroup
 }
 
 // Package Management Tab Component
-function PackageManagementTab({ groups, subgroups, loading }) {
+export function PackageManagementTab({ groups, subgroups, loading }) {
   const [selectedSubgroup, setSelectedSubgroup] = useState("");
   const [packageHeaders, setPackageHeaders] = useState([]);
   const [selectedPackage, setSelectedPackage] = useState(null);

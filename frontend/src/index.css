@@ -408,9 +408,72 @@ body.enhanced-texture{
   border-radius: 9999px; 
   background: rgba(112, 108, 102, .25);
 }
-.seat-v { 
-  width: 10px; 
-  height: 44px; 
-  border-radius: 9999px; 
+.seat-v {
+  width: 10px;
+  height: 44px;
+  border-radius: 9999px;
   background: rgba(112, 108, 102, .25);
 }
+
+/* =========================================================
+   ADMIN PORTAL — Editorial Luxury theme (scoped to .admin-root)
+   Warm ink + cream + brass. Fraunces display / Hanken Grotesk body.
+   ========================================================= */
+.admin-root{
+  /* Matches hostess / reservation UI — crimson rose */
+  --ink:        #2B141B;   /* deep wine-black for headings/text */
+  --ink-mid:    #7A0026;   /* dark wine */
+  --ink-soft:   #5A4A4E;   /* body text */
+  --ink-faint:  #9C8A90;   /* captions */
+  --cream:      #FBF6F7;   /* canvas (soft warm white) */
+  --cream-2:    #FBE6EC;   /* soft pink panel */
+  --paper:      #FFFFFF;   /* cards */
+  --line:       #F0DBE1;   /* pink hairline borders */
+  --brass:      #C91A4D;   /* crimson primary accent */
+  --brass-2:    #7A0026;   /* dark wine accent */
+  --brass-soft: #FBE6EC;   /* soft pink tint bg */
+  --forest:     #3F7A5C;   /* green for positive (seat) actions */
+  --danger:     #C0341F;
+
+  font-family: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background-color: var(--cream);
+  /* faint paper grain */
+  background-image:
+    radial-gradient(rgba(122,0,38,0.018) 1px, transparent 1px);
+  background-size: 4px 4px;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.005em;
+}
+.admin-root .font-display{
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+.admin-card{
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(33,27,20,0.02), 0 12px 30px -22px rgba(33,27,20,0.35);
+}
+.admin-eyebrow{
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass-2);
+}
+.admin-rule{ height:1px; background: var(--line); }
+.admin-btn-brass{
+  background: var(--ink);
+  color: var(--cream);
+  border-radius: 999px;
+  transition: transform .15s ease, background .2s ease;
+}
+.admin-btn-brass:hover{ background: var(--brass-2); }
+.admin-btn-brass:active{ transform: translateY(1px); }
+@keyframes adminRise{
+  from{ opacity:0; transform: translateY(10px); }
+  to{ opacity:1; transform: translateY(0); }
+}
+.admin-rise{ animation: adminRise .5s cubic-bezier(.2,.7,.2,1) both; }

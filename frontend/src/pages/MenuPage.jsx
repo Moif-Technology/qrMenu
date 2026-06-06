@@ -21,6 +21,7 @@ import { log, error as logError } from "../lib/logger";
 import { isOrderMode } from "../lib/orderMode";
 import { getImageMapping, getQrCategories, getQrMenuItems, getSingleProductImageBinary } from "../services/menu.service";
 import { getPackageHeaders } from "../services/package.service";
+import { getPublicSettings } from "../services/settings.service";
 import { checkTableOrders } from "../services/payment.service";
 
 // ————————————————————————————————————————————————
@@ -277,9 +278,22 @@ export default function MenuPage() {
   const lang = useUI((s) => s.lang);
   const linkDetailsLoggedRef = useRef(false);
 
-  // Ordering (add-to-cart + send-to-kitchen) only in test mode (?order=1).
-  // Customer links stay view-only: browse menu + view bill, no ordering.
-  const orderMode = useMemo(() => isOrderMode(), []);
+  // Ordering (add-to-cart + send-to-kitchen) is controlled by the admin setting
+  // (OrderingEnabled) and applies to ALL tables. The ?order=1 URL flag still
+  // works as a per-tab test override. When ordering is off, customers can only
+  // browse the menu + view their bill.
+  const [orderingEnabled, setOrderingEnabled] = useState(false);
+  const urlOrderOverride = useMemo(() => isOrderMode(), []);
+  const orderMode = orderingEnabled || urlOrderOverride;
+
+  // Fetch the admin ordering switch once on mount.
+  useEffect(() => {
+    let active = true;
+    getPublicSettings().then((s) => {
+      if (active) setOrderingEnabled(!!s.orderingEnabled);
+    });
+    return () => { active = false; };
+  }, []);
 
   // Dev: show full link details in console when this page is opened from generated link (menu view)
   useEffect(() => {

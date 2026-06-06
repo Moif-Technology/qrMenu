@@ -1,6 +1,7 @@
 // backend/services/kotSave.service.js
 import mssql from "mssql";
 import { connectToDb } from "../config/dbConfig.js";
+import { getSettings } from "./settings.service.js";
 
 const T_IDCTRL = "dbo.IDControlManager";
 const T_KOTM = "dbo.KOTMaster";
@@ -175,6 +176,19 @@ export async function saveKot(payload) {
   // Get ChairNo from header, default to 1
   const chairNo = toInt(header?.chairId || header?.chairNo || 1, 1);
 
+  // KOT routing (admin setting): "kitchen" -> HOLD (straight to kitchen),
+  // "counter" -> SUBMIT (goes to POS/counter for approval first).
+  // Androidprint: "T" prints to kitchen. In counter mode (SUBMIT) the counter
+  // approves first, so suppress kitchen print with "0".
+  let kotStatus = "HOLD";
+  try {
+    const settings = await getSettings();
+    kotStatus = settings.kotRouting === "counter" ? "SUBMIT" : "HOLD";
+  } catch (e) {
+    console.error("[KOT:SVC] settings read failed, defaulting KotStatus=HOLD:", e?.message || e);
+  }
+  const androidPrint = kotStatus === "SUBMIT" ? "0" : "T";
+
   const pool = await connectToDb();
   const tx = new mssql.Transaction(pool);
   await tx.begin();
@@ -281,7 +295,7 @@ export async function saveKot(payload) {
       reqM.input("KotNumber", mssql.BigInt, kotNumber);
       reqM.input("KotPrefix", mssql.VarChar(50), kotPrefix);
       reqM.input("CounterNo", mssql.VarChar(50), "1");
-      reqM.input("KotStatus", mssql.VarChar(50), "HOLD");
+      reqM.input("KotStatus", mssql.VarChar(50), kotStatus);
       reqM.input("Dummy", mssql.VarChar(50), "PENDING");
       reqM.input("Upload", mssql.VarChar(50), "PENDING");
       reqM.input("TableID", mssql.Int, tableId);
@@ -457,7 +471,7 @@ export async function saveKot(payload) {
       const modifierText = joinMods(line.mods, 200);
       reqC.input("Modifier", mssql.NVarChar(200), modifierText);
 
-      reqC.input("Androidprint", mssql.VarChar(50), "T");
+      reqC.input("Androidprint", mssql.VarChar(50), androidPrint);
       reqC.input("PrintCount", mssql.Int, 0);
       reqC.input("UploadStatusC", mssql.VarChar(50), "PENDING");
       reqC.input("CrBy", mssql.VarChar(50), "DIGIMENU");

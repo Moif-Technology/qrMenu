@@ -3,6 +3,7 @@ import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { closeDb, closePaymentDb, connectToDb, connectToPaymentDb, INVENTORY_DB_NAME, PAYMENT_DB_NAME, pingDb, pingPaymentDb } from "./config/dbConfig.js";
+import adminRoutes from "./routes/admin.routes.js";
 import floorLayoutRoutes from "./routes/floorLayout.routes.js";
 import kotSaveRoutes from "./routes/kotSave.routes.js";
 import menuRoutes from "./routes/menu.routes.js";
@@ -12,6 +13,7 @@ import paymentRoutes from "./routes/payment.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import qrMenuRoutes from "./routes/qrMenu.routes.js";
 import reservationRoutes from "./routes/reservation.routes.js";
+import settingsRoutes from "./routes/settings.routes.js";
 import tableRoutes from "./routes/table.routes.js";
 import waitlistRoutes from "./routes/waitlist.routes.js";
 import { getAutoMigrationStatus, startAutoMigration, stopAutoMigration } from "./services/imageAutoMigration.service.js";
@@ -227,6 +229,8 @@ app.get("/api/health/auto-migration", async (_req, res) => {
 });
 
 // API routes
+app.use("/api", adminRoutes);
+app.use("/api", settingsRoutes);
 app.use("/api/menu", menuRoutes);
 app.use("/api/qr-menu", qrMenuRoutes);
 app.use("/api/packages", packageRoutes);

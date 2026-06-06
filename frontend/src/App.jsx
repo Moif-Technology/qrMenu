@@ -4,6 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import OrderSuccess from "./component/OrderSuccess";
 import "./index.css";
+import { AdminAuthProvider } from "./context/AdminAuthContext";
+import RequireAdmin from "./component/admin/RequireAdmin";
 
 // Support both /opaia/ and root (/) so existing QR codes with /opaia/ keep working
 // and the app also works without /opaia (e.g. at root). No change to existing QR codes needed.
@@ -32,6 +34,17 @@ const WalkInSuccessPage = lazy(() => import("./pages/WalkInSuccessPage"));
 const ReservationSuccessPage = lazy(() => import("./pages/ReservationSuccessPage"));
 const GuestReservationPage = lazy(() => import("./pages/GuestReservationPage"));
 
+// Admin portal
+const AdminLayout = lazy(() => import("./component/admin/AdminLayout"));
+const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
+const AdminOverview = lazy(() => import("./pages/admin/AdminOverview"));
+const AdminReports = lazy(() => import("./pages/admin/AdminReports"));
+const AdminWaitlist = lazy(() => import("./pages/admin/AdminWaitlist"));
+const AdminCustomers = lazy(() => import("./pages/admin/AdminCustomers"));
+const AdminQRCodes = lazy(() => import("./pages/admin/AdminQRCodes"));
+const AdminMenu = lazy(() => import("./pages/admin/AdminMenu"));
+const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
+
 const PageLoader = () => (
   <div className="min-h-screen flex items-center justify-center bg-white">
     <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
@@ -41,6 +54,7 @@ const PageLoader = () => (
 export default function App() {
   return (
     <BrowserRouter basename={getBasename()}>
+      <AdminAuthProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<MenuPage />} />
@@ -60,10 +74,32 @@ export default function App() {
           <Route path="/walk-in-success" element={<WalkInSuccessPage />} />
           <Route path="/reservation-success" element={<ReservationSuccessPage />} />
           <Route path="/mt/opaiareservation" element={<GuestReservationPage />} />
+
+          {/* Admin portal */}
+          <Route path="/admin/login" element={<AdminLoginPage />} />
+          <Route
+            path="/admin"
+            element={
+              <RequireAdmin>
+                <AdminLayout />
+              </RequireAdmin>
+            }
+          >
+            <Route index element={<Navigate to="overview" replace />} />
+            <Route path="overview" element={<AdminOverview />} />
+            <Route path="waitlist" element={<AdminWaitlist />} />
+            <Route path="customers" element={<AdminCustomers />} />
+            <Route path="menu" element={<AdminMenu />} />
+            <Route path="qr-codes" element={<AdminQRCodes />} />
+            <Route path="reports" element={<AdminReports />} />
+            <Route path="settings" element={<AdminSettings />} />
+          </Route>
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <OrderSuccess />
       </Suspense>
+      </AdminAuthProvider>
     </BrowserRouter>
   );
 }
