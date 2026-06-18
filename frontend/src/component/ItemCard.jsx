@@ -38,6 +38,7 @@ function ItemCard({
 
   const [selectedMods, setSelectedMods] = useState([]);
   const [showMods, setShowMods] = useState(false);
+  const [modifierEditKey, setModifierEditKey] = useState(null);
 
   const itemId = useMemo(
     () =>
@@ -100,6 +101,7 @@ function ItemCard({
   useEffect(() => {
     setSelectedMods([]);
     setShowMods(false);
+    setModifierEditKey(null);
   }, [itemId]);
 
   const selectedIds = useMemo(
@@ -167,6 +169,16 @@ function ItemCard({
     const line = items.find((x) => x._k === lineKey);
     return line?.qty ?? 0;
   }, [items, lineKey]);
+  const itemCartLines = useMemo(() => {
+    if (itemId == null) return [];
+    const id = String(itemId);
+    return items.filter((line) => String(line?.id) === id && !line?.isExistingOrder);
+  }, [items, itemId]);
+  const modifiedCartLines = useMemo(
+    () => itemCartLines.filter((line) => Array.isArray(line?.mods) && line.mods.length > 0),
+    [itemCartLines]
+  );
+  const hasModifierInCart = modifiedCartLines.length > 0;
   const totalQtyInCart = useMemo(() => {
     if (itemId == null) return 0;
     const id = String(itemId);
@@ -187,6 +199,21 @@ function ItemCard({
     const r = e.currentTarget.getBoundingClientRect();
     e.currentTarget.style.setProperty("--x", `${e.clientX - r.left}px`);
     e.currentTarget.style.setProperty("--y", `${e.clientY - r.top}px`);
+  };
+  const openModifierEditor = () => {
+    const preferredLine =
+      items.find((line) => line._k === lineKey && !line?.isExistingOrder) ||
+      modifiedCartLines[0] ||
+      itemCartLines[0] ||
+      null;
+    const modsForEdit =
+      preferredLine && Array.isArray(preferredLine.mods)
+        ? preferredLine.mods
+        : selectedMods;
+
+    setSelectedMods(modsForEdit || []);
+    setModifierEditKey(preferredLine?._k ?? null);
+    setShowMods(true);
   };
 
   const liveRef = useRef(null);
@@ -461,14 +488,18 @@ function ItemCard({
                 onClick={(e) => {
                   setRipple(e);
                   vibrate(8);
-                  setShowMods(true);
+                  openModifierEditor();
                 }}
                 onPointerDown={setRipple}
-                className="relative inline-flex items-center gap-1.5 rounded-full border border-stone-200 px-3 py-1.5 text-[11px] font-medium text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.35)] hover:bg-[var(--grad-start-soft)] active:scale-95 sm:text-xs"
-                title="Customize"
+                className={`relative inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium transition active:scale-95 sm:text-xs ${
+                  hasModifierInCart
+                    ? "border-[rgba(201,26,77,0.35)] bg-[var(--grad-start-soft)] text-[var(--grad-end)]"
+                    : "border-stone-200 text-[var(--grad-end)] hover:border-[rgba(201,26,77,0.35)] hover:bg-[var(--grad-start-soft)]"
+                }`}
+                title={hasModifierInCart ? "Edit modifiers" : "Customize"}
               >
                 <Icon name="sliders" className="h-3.5 w-3.5" />
-                {t("menu.customize")}
+                {hasModifierInCart ? "Edit modifiers" : t("menu.customize")}
                 <span className="btn-ripple" aria-hidden />
               </button>
             </div>
@@ -492,11 +523,17 @@ function ItemCard({
         open={showMods}
         item={itemForCart}
         initialSelectedIds={selectedIds}
-        onClose={() => setShowMods(false)}
+        initialSelectedMods={selectedMods}
+        onClose={() => {
+          setShowMods(false);
+          setModifierEditKey(null);
+        }}
         onApply={(pickedMods) => {
-          const oldKey = JSON.stringify({ id: itemId, mods: selectedIds });
+          const oldKey =
+            modifierEditKey ?? JSON.stringify({ id: itemId, mods: selectedIds });
           useCart.getState().updateMods(oldKey, itemForCart, pickedMods || []);
           setSelectedMods(pickedMods || []);
+          setModifierEditKey(null);
           setShowMods(false);
         }}
       />

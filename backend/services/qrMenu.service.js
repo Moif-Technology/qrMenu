@@ -1470,10 +1470,10 @@ export async function getQrMenuItems({
       qpc.${q("Tax2Amount")} AS [pc.Tax2Amount],
       qpc.${q("PackQty")} AS [pc.PackQty],
       qpc.${q("StationID")} AS [pc.StationID],
-      -- OPTIMIZED: Removed Tax1Rate and UniqueMultiProductID lookups - not used by frontend
-      -- This eliminates slow ProductChild/ProductMaster lookups that were causing lag
+      -- OPTIMIZED: Removed Tax1Rate lookup - not used by frontend
       NULL AS [pc.Tax1Rate],
-      NULL AS [pc.UniqueMultiProductID],
+      -- UniqueMultiProductID looked up from dbo.ProductChild (QR table does not store it)
+      pcm.${q("UniqueMultiProductID")} AS [pc.UniqueMultiProductID],
       -- Calculate price (UnitPrice + Tax1Amount) from QrProductChild
       (ISNULL(qpc.${q("UnitPrice")}, 0) + ISNULL(qpc.${q("Tax1Amount")}, 0)) AS price${hasCloudinaryColumn ? `,
       -- Get Cloudinary URL from ImageMaster (latest) using OUTER APPLY (FAST)
@@ -1493,7 +1493,14 @@ export async function getQrMenuItems({
       FROM ${T_QR_PRODUCT_CHILD} qpc_inner WITH (NOLOCK)
       WHERE qpc_inner.${q("ProductID")} = qpm.${q("ProductID")}
       ORDER BY qpc_inner.${q("ModOn")} DESC, qpc_inner.${q("CrOn")} DESC
-    ) qpc${hasCloudinaryColumn ? `
+    ) qpc
+    -- Look up UniqueMultiProductID from the source ProductChild (not copied to QR table)
+    OUTER APPLY (
+      SELECT TOP 1 pcm_inner.${q("UniqueMultiProductID")} AS ${q("UniqueMultiProductID")}
+      FROM ${T_PRODUCT_CHILD} pcm_inner WITH (NOLOCK)
+      WHERE pcm_inner.${q("ProductID")} = qpm.${q("ProductID")}
+      ORDER BY pcm_inner.${q("ModOn")} DESC, pcm_inner.${q("CrOn")} DESC
+    ) pcm${hasCloudinaryColumn ? `
     -- Get Cloudinary URL from ImageMaster (latest) using OUTER APPLY (FAST)
     OUTER APPLY (
       SELECT TOP 1 

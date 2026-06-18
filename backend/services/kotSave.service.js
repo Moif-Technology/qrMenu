@@ -87,20 +87,20 @@ function computeLine(line) {
     toNum(line.product?.tax1Rate) ||
     0;
 
+  const FIXED_TAX_RATE = 5; // 5% VAT forced on every item
+
   let unitBase, taxPerUnit, tax1Rate;
 
   if (baseFromData > 0) {
-    // Most reliable: absolute amounts from the menu (tax may be 0 for exempt items)
     unitBase = baseFromData;
-    taxPerUnit = taxAmtFromData > 0 ? taxAmtFromData : 0;
-    tax1Rate = unitBase > 0 ? r2((taxPerUnit / unitBase) * 100) : 0;
-  } else if (tax1RateDirect > 0) {
-    // Derive from inclusive gross + percent rate
-    unitBase = gross / (1 + tax1RateDirect / 100);
-    taxPerUnit = gross - unitBase;
-    tax1Rate = tax1RateDirect;
+    taxPerUnit = r2(unitBase * (FIXED_TAX_RATE / 100));
+    tax1Rate = FIXED_TAX_RATE;
+  } else if (gross > 0) {
+    // Derive ex-tax base from inclusive gross using fixed 5%
+    unitBase = r2(gross / (1 + FIXED_TAX_RATE / 100));
+    taxPerUnit = r2(gross - unitBase);
+    tax1Rate = FIXED_TAX_RATE;
   } else {
-    // No tax info available → treat gross as ex-tax, no tax split
     unitBase = gross;
     taxPerUnit = 0;
     tax1Rate = 0;
@@ -179,7 +179,7 @@ export async function saveKot(payload) {
   // KOT routing (admin setting): "kitchen" -> HOLD (straight to kitchen),
   // "counter" -> SUBMIT (goes to POS/counter for approval first).
   // Androidprint: "T" prints to kitchen. In counter mode (SUBMIT) the counter
-  // approves first, so suppress kitchen print with "0".
+  // approves first, so the first KOT is marked "PENDING" (not printed yet).
   let kotStatus = "HOLD";
   try {
     const settings = await getSettings();
@@ -187,7 +187,9 @@ export async function saveKot(payload) {
   } catch (e) {
     console.error("[KOT:SVC] settings read failed, defaulting KotStatus=HOLD:", e?.message || e);
   }
-  const androidPrint = kotStatus === "SUBMIT" ? "0" : "T";
+  // Counter mode: first KOT waits for counter approval, so mark its children
+  // "PENDING" (not printed yet). Kitchen mode prints immediately with "T".
+  const androidPrint = kotStatus === "SUBMIT" ? "PENDING" : "T";
 
   const pool = await connectToDb();
   const tx = new mssql.Transaction(pool);
@@ -224,6 +226,11 @@ export async function saveKot(payload) {
       isExistingKot = false;
       console.log("[KOT:SVC] Creating new KOTMasterID =", kotMasterID);
     }
+
+    // Existing open KOT means the counter already accepted this order, so any
+    // newly added items should print straight to the kitchen (Androidprint "T")
+    // even in counter mode. Only a brand-new KOT honours the SUBMIT/"0" routing.
+    const childAndroidPrint = isExistingKot ? "S" : androidPrint;
 
     // Helper: an item already saved to KOTChild carries its KotChildID.
     // Mirrors Tablet Module saveKot — existing rows are never re-inserted or
@@ -294,7 +301,7 @@ export async function saveKot(payload) {
       reqM.input("kotMasterID", mssql.BigInt, kotMasterID);
       reqM.input("KotNumber", mssql.BigInt, kotNumber);
       reqM.input("KotPrefix", mssql.VarChar(50), kotPrefix);
-      reqM.input("CounterNo", mssql.VarChar(50), "1");
+      reqM.input("CounterNo", mssql.VarChar(50), "55");
       reqM.input("KotStatus", mssql.VarChar(50), kotStatus);
       reqM.input("Dummy", mssql.VarChar(50), "PENDING");
       reqM.input("Upload", mssql.VarChar(50), "PENDING");
@@ -471,7 +478,7 @@ export async function saveKot(payload) {
       const modifierText = joinMods(line.mods, 200);
       reqC.input("Modifier", mssql.NVarChar(200), modifierText);
 
-      reqC.input("Androidprint", mssql.VarChar(50), androidPrint);
+      reqC.input("Androidprint", mssql.VarChar(50), childAndroidPrint);
       reqC.input("PrintCount", mssql.Int, 0);
       reqC.input("UploadStatusC", mssql.VarChar(50), "PENDING");
       reqC.input("CrBy", mssql.VarChar(50), "DIGIMENU");

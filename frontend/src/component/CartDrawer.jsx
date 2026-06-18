@@ -6,13 +6,29 @@ import { useUI } from "../store/uiStore";
 import { formatAED } from "../utils/currency";
 import Icon from "./Icon";
 import { useTranslation } from "react-i18next";
+import ModifierModal from "./ModifierModal";
 
 export default function CartDrawer({ open, onClose }) {
   const { items, inc, dec, remove, subtotal, note, setNote, clear, tableId, tableAreaId } = useCart();
   const showSuccess = useUI((s) => s.showSuccess);
   const [sending, setSending] = useState(false);
+  const [editingLine, setEditingLine] = useState(null);
   const total = subtotal();
   const { t } = useTranslation();
+
+  const closeModifierEditor = () => setEditingLine(null);
+
+  const applyModifierEdit = (pickedMods) => {
+    if (!editingLine) return;
+    const product = {
+      ...(editingLine.product || {}),
+      id: editingLine.id,
+      name: editingLine.name,
+      price: editingLine.basePrice ?? editingLine.product?.price ?? editingLine.price,
+    };
+    useCart.getState().updateMods(editingLine._k, product, pickedMods || []);
+    setEditingLine(null);
+  };
 
   const orderPayload = useMemo(() => {
     const sendableItems = items.filter((x) => !x.isExistingOrder);
@@ -189,6 +205,19 @@ export default function CartDrawer({ open, onClose }) {
                           </div>
                         )}
 
+                        {!x.isExistingOrder && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingLine(x)}
+                            disabled={sending}
+                            className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-[rgba(201,26,77,0.22)] bg-[var(--grad-start-soft)] px-2 py-1 text-[11px] font-medium text-[var(--grad-end)] transition hover:border-[rgba(201,26,77,0.4)] disabled:cursor-not-allowed disabled:opacity-50"
+                            title={safeMods.length > 0 ? "Edit modifiers" : "Add modifiers"}
+                          >
+                            <Icon name="sliders" className="h-3.5 w-3.5" />
+                            {safeMods.length > 0 ? "Edit modifiers" : "Add modifiers"}
+                          </button>
+                        )}
+
                         <div className="text-xs text-gray-500">
                           {t("cart.each", { price: formatAED(x.price) })}
                         </div>
@@ -311,6 +340,26 @@ export default function CartDrawer({ open, onClose }) {
           </div>
         </div>
       </div>
+
+      <ModifierModal
+        open={!!editingLine}
+        item={
+          editingLine
+            ? {
+                ...(editingLine.product || {}),
+                id: editingLine.id,
+                name: editingLine.name,
+                price: editingLine.basePrice ?? editingLine.product?.price ?? editingLine.price,
+              }
+            : null
+        }
+        initialSelectedIds={
+          editingLine?.mods?.map((m) => m.id ?? m.ModifierID ?? m.name).filter(Boolean) || []
+        }
+        initialSelectedMods={editingLine?.mods || []}
+        onClose={closeModifierEditor}
+        onApply={applyModifierEdit}
+      />
     </div>
   );
 }
