@@ -6,7 +6,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useReservationStore } from "../store/reservationStore";
 import BottomNav from "../component/reservation/BottomNav";
 
-export default function TableActionPage() {
+export default function TableActionPage() { 
   const navigate = useNavigate(); 
   const location = useLocation();
   const { 
