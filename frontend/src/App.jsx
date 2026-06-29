@@ -20,7 +20,7 @@ const MenuPage = lazy(() => import("./pages/MenuPage"));
 const PackageDetailsPage = lazy(() => import("./pages/PackageDetailsPage"));
 const TableSummary = lazy(() => import("./pages/TableSummary"));
 const QRGenerator = lazy(() => import("./pages/QRGenerator"));
-const QRMenuManagement = lazy(() => import("./pages/QRMenuManagement")); 
+const QRMenuManagement = lazy(() => import("./pages/QRMenuManagement"));
 const ReservationPage = lazy(() => import("./pages/ReservationPage"));
 const WalkInPage = lazy(() => import("./pages/WalkInPage"));
 const ReservationFormPage = lazy(() => import("./pages/ReservationFormPage"));
