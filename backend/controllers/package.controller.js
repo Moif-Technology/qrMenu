@@ -9,6 +9,7 @@ import {
   markAsPackageHeader,
   removeProductFromPackage,
   updatePackageItemOrder,
+  updatePackageItemGroupLabel,
   uploadPackageImage,
 } from "../services/package.service.js";
 
@@ -157,18 +158,20 @@ export async function markAsPackageHeaderController(req, res, next) {
  */
 export async function addProductToPackageController(req, res, next) {
   try {
-    const { productId, packageProductId, displayOrder } = req.body;
-    
+    const { productId, packageProductId, displayOrder, groupLabel } = req.body;
+
     console.log("[PACKAGE][ADD-PRODUCT] Adding product to package:", {
       productId,
       packageProductId,
       displayOrder,
+      groupLabel,
     });
-    
+
     const result = await addProductToPackage(
       parseInt(productId),
       parseInt(packageProductId),
-      parseInt(displayOrder) || 0
+      parseInt(displayOrder) || 0,
+      groupLabel || null
     );
     
     // Clear cache
@@ -191,11 +194,11 @@ export async function addProductToPackageController(req, res, next) {
  */
 export async function removeProductFromPackageController(req, res, next) {
   try {
-    const { productId } = req.body;
-    
-    console.log("[PACKAGE][REMOVE-PRODUCT] Removing product from package:", productId);
-    
-    const result = await removeProductFromPackage(parseInt(productId));
+    const { productId, packageProductId } = req.body;
+
+    console.log("[PACKAGE][REMOVE-PRODUCT] Removing product from package:", { productId, packageProductId });
+
+    const result = await removeProductFromPackage(parseInt(productId), parseInt(packageProductId));
     
     // Clear cache
     packageCache.flushAll();
@@ -238,6 +241,40 @@ export async function updatePackageItemOrderController(req, res, next) {
     });
   } catch (error) {
     console.error("[PACKAGE][UPDATE-ORDER] Error:", error);
+    next(error);
+  }
+}
+
+/**
+ * POST /api/packages/update-item-group
+ * Update choice-group label of an item in a package
+ * Body: { productId, packageProductId, groupLabel }
+ */
+export async function updatePackageItemGroupLabelController(req, res, next) {
+  try {
+    const { productId, packageProductId, groupLabel } = req.body;
+
+    console.log("[PACKAGE][UPDATE-ITEM-GROUP] Updating item group label:", {
+      productId,
+      packageProductId,
+      groupLabel,
+    });
+
+    const result = await updatePackageItemGroupLabel(
+      parseInt(productId),
+      parseInt(packageProductId),
+      groupLabel || null
+    );
+
+    // Clear cache
+    packageCache.flushAll();
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[PACKAGE][UPDATE-ITEM-GROUP] Error:", error);
     next(error);
   }
 }

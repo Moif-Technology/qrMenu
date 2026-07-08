@@ -8,6 +8,7 @@ import {
   addProductToPackageController,
   removeProductFromPackageController,
   updatePackageItemOrderController,
+  updatePackageItemGroupLabelController,
   createPackageController,
   uploadPackageImageController,
 } from "../controllers/package.controller.js";
@@ -26,6 +27,7 @@ router.post("/mark-header", markAsPackageHeaderController);
 router.post("/add-product", addProductToPackageController);
 router.post("/remove-product", removeProductFromPackageController);
 router.post("/update-order", updatePackageItemOrderController);
+router.post("/update-item-group", updatePackageItemGroupLabelController);
 
 export default router;
 

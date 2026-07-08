@@ -93,11 +93,28 @@ export async function markAsPackageHeader(productId, isPackageHeader = true) {
  * @param {number} displayOrder - Display order (optional)
  * @returns {Promise<Object>} Result
  */
-export async function addProductToPackage(productId, packageProductId, displayOrder = 0) {
+export async function addProductToPackage(productId, packageProductId, displayOrder = 0, groupLabel = null) {
   const { data } = await API.post(`/packages/add-product`, {
     productId,
     packageProductId,
     displayOrder,
+    groupLabel,
+  });
+  return data;
+}
+
+/**
+ * Update choice-group label of an item inside a package (display only)
+ * @param {number} productId - Item Product ID
+ * @param {number} packageProductId - Package Product ID
+ * @param {string|null} groupLabel - Section label (e.g. "Choice of Drink") or null to clear
+ * @returns {Promise<Object>} Result
+ */
+export async function updatePackageItemGroupLabel(productId, packageProductId, groupLabel) {
+  const { data } = await API.post(`/packages/update-item-group`, {
+    productId,
+    packageProductId,
+    groupLabel,
   });
   return data;
 }
@@ -105,11 +122,13 @@ export async function addProductToPackage(productId, packageProductId, displayOr
 /**
  * Remove a product from a package
  * @param {number} productId - Product ID to remove
+ * @param {number} packageProductId - Package Product ID (item can be in multiple packages)
  * @returns {Promise<Object>} Result
  */
-export async function removeProductFromPackage(productId) {
+export async function removeProductFromPackage(productId, packageProductId) {
   const { data } = await API.post(`/packages/remove-product`, {
     productId,
+    packageProductId,
   });
   return data;
 }

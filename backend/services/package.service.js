@@ -81,6 +81,7 @@ export async function getPackageContents(packageProductId) {
       qpm.${q("ShortDescription")},
       qpm.${q("Specification")},
       pi.${q("DisplayOrder")},
+      pi.${q("GroupLabel")},
       -- Get product price from QrProductChild
       (
         SELECT TOP 1 (qpc.${q("UnitPrice")} + qpc.${q("Tax1Amount")})
@@ -248,7 +249,7 @@ export async function markAsPackageHeader(productId, isPackageHeader = true) {
  * Add a product to a package using junction table
  * Allows the same product to belong to multiple packages
  */
-export async function addProductToPackage(productId, packageProductId, displayOrder = 0) {
+export async function addProductToPackage(productId, packageProductId, displayOrder = 0, groupLabel = null) {
   const pool = await connectToDb();
   
   console.log("[PACKAGE][ADD] Adding product", productId, "to package", packageProductId);
@@ -378,18 +379,21 @@ export async function addProductToPackage(productId, packageProductId, displayOr
   insertJunctionRequest.input("packageProductId", mssql.BigInt, packageProductId);
   insertJunctionRequest.input("itemProductId", mssql.BigInt, productId);
   insertJunctionRequest.input("displayOrder", mssql.Int, displayOrder);
-  
+  insertJunctionRequest.input("groupLabel", mssql.NVarChar, groupLabel || null);
+
   try {
     await insertJunctionRequest.query(`
       INSERT INTO ${T_PACKAGE_ITEMS} (
         ${q("PackageProductID")},
         ${q("ItemProductID")},
-        ${q("DisplayOrder")}
+        ${q("DisplayOrder")},
+        ${q("GroupLabel")}
       )
       VALUES (
         @packageProductId,
         @itemProductId,
-        @displayOrder
+        @displayOrder,
+        @groupLabel
       )
     `);
     console.log("[PACKAGE][ADD] Added item to package via junction table");
@@ -399,7 +403,8 @@ export async function addProductToPackage(productId, packageProductId, displayOr
       console.log("[PACKAGE][ADD] Item already in package, updating display order");
       await insertJunctionRequest.query(`
         UPDATE ${T_PACKAGE_ITEMS}
-        SET ${q("DisplayOrder")} = @displayOrder
+        SET ${q("DisplayOrder")} = @displayOrder,
+            ${q("GroupLabel")} = @groupLabel
         WHERE ${q("PackageProductID")} = @packageProductId
           AND ${q("ItemProductID")} = @itemProductId
       `);
@@ -407,9 +412,30 @@ export async function addProductToPackage(productId, packageProductId, displayOr
       throw err;
     }
   }
-  
+
   console.log("[PACKAGE][ADD] Successfully added product to package");
-  return { success: true, productId, packageProductId, displayOrder };
+  return { success: true, productId, packageProductId, displayOrder, groupLabel };
+}
+
+/**
+ * Update the choice-group label of an item inside a package (display only)
+ */
+export async function updatePackageItemGroupLabel(productId, packageProductId, groupLabel) {
+  const pool = await connectToDb();
+  const request = pool.request();
+
+  request.input("productId", mssql.BigInt, productId);
+  request.input("packageProductId", mssql.BigInt, packageProductId);
+  request.input("groupLabel", mssql.NVarChar, groupLabel || null);
+
+  await request.query(`
+    UPDATE ${T_PACKAGE_ITEMS}
+    SET ${q("GroupLabel")} = @groupLabel
+    WHERE ${q("ItemProductID")} = @productId
+      AND ${q("PackageProductID")} = @packageProductId
+  `);
+
+  return { success: true, productId, packageProductId, groupLabel };
 }
 
 /**

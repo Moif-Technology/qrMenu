@@ -20,6 +20,7 @@ import {
   getPackageHeaders,
   getPackageItems,
   removeProductFromPackage,
+  updatePackageItemGroupLabel,
   uploadPackageImage
 } from "../services/package.service";
 import {
@@ -2006,6 +2007,86 @@ export function SubgroupModal({ onClose, onSave, editingSubgroup, groups, select
   );
 }
 
+// Inline editor for a package item's choice-group label
+function PackageItemGroupLabelEditor({ item, packageProductId, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(item.GroupLabel || "");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (saving) return;
+    try {
+      setSaving(true);
+      await updatePackageItemGroupLabel(
+        item.ProductID,
+        packageProductId,
+        label.trim() || null
+      );
+      setEditing(false);
+      onSaved?.();
+    } catch (err) {
+      console.error("[PACKAGE][GROUP-LABEL] Error saving label:", err);
+      alert("Error saving group label: " + (err.response?.data?.error || err.message));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="mt-1 flex items-center gap-2">
+        {item.GroupLabel ? (
+          <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+            {item.GroupLabel}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">No choice group</span>
+        )}
+        <button
+          onClick={() => {
+            setLabel(item.GroupLabel || "");
+            setEditing(true);
+          }}
+          className="text-xs text-blue-600 hover:underline"
+        >
+          {item.GroupLabel ? "Edit" : "Set group"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <input
+        type="text"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder='e.g. "Choice of Drink"'
+        className="input py-1 text-sm max-w-xs"
+        maxLength={100}
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSave();
+          if (e.key === "Escape") setEditing(false);
+        }}
+      />
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="text-xs font-medium text-green-600 hover:underline disabled:opacity-50"
+      >
+        {saving ? "Saving..." : "Save"}
+      </button>
+      <button
+        onClick={() => setEditing(false)}
+        className="text-xs text-gray-500 hover:underline"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 // Package Management Tab Component
 export function PackageManagementTab({ groups, subgroups, loading }) {
   const [selectedSubgroup, setSelectedSubgroup] = useState("");
@@ -2024,6 +2105,7 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
   const [normalSubgroups, setNormalSubgroups] = useState([]);
   const [selectedProductIds, setSelectedProductIds] = useState([]); // Multi-select state
   const [isAddingItems, setIsAddingItems] = useState(false); // Loading state for adding items
+  const [newItemsGroupLabel, setNewItemsGroupLabel] = useState(""); // Choice-group label applied to items being added
   const [newPackageForm, setNewPackageForm] = useState({
     name: "",
     nameArabic: "",
@@ -2240,7 +2322,7 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
   const handleRemoveItem = async (productId) => {
     if (!confirm("Remove this item from package?")) return;
     try {
-      await removeProductFromPackage(productId);
+      await removeProductFromPackage(productId, selectedPackage.ProductID);
       alert("Item removed!");
       loadPackageContents();
     } catch (err) {
@@ -2261,21 +2343,25 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
     
     try {
       const startOrder = packageContents.length + 1;
+      const groupLabel = newItemsGroupLabel.trim() || null;
       for (let i = 0; i < selectedProductIds.length; i++) {
         await addProductToPackage(
           selectedProductIds[i],
           selectedPackage.ProductID,
-          startOrder + i
+          startOrder + i,
+          groupLabel
         );
       }
       // Refresh package contents
       await loadPackageContents(selectedPackage.ProductID);
-      
+
       // Reset and close modal
+      const count = selectedProductIds.length;
       setSelectedProductIds([]);
+      setNewItemsGroupLabel("");
       setShowAddItemModal(false);
       setIsAddingItems(false);
-      
+
       alert(`✅ ${count} items added successfully!`);
     } catch (err) {
       console.error("Failed to add items to package:", err);
@@ -2433,6 +2519,7 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
             <button
               onClick={() => {
                 setSelectedProductIds([]); // Reset selection
+                setNewItemsGroupLabel("");
                 loadAllProductsList();
                 setShowAddItemModal(true);
               }}
@@ -2455,15 +2542,20 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
                   key={item.ProductID}
                   className="flex items-center justify-between bg-gray-50 rounded-lg p-4"
                 >
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-rose-600 text-white font-bold">
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-rose-600 text-white font-bold">
                       {index + 1}
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="font-semibold text-gray-900">{item.Description}</h4>
                       <p className="text-sm text-gray-600">
                         Product ID: {item.ProductID} | Order: {item.DisplayOrder}
                       </p>
+                      <PackageItemGroupLabelEditor
+                        item={item}
+                        packageProductId={selectedPackage.ProductID}
+                        onSaved={loadPackageContents}
+                      />
                     </div>
                   </div>
                   <button
@@ -2666,6 +2758,22 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
               
               {/* Footer with Add Button */}
               <div className="p-6 border-t border-gray-200 bg-gray-50">
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Choice Group Label (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newItemsGroupLabel}
+                    onChange={(e) => setNewItemsGroupLabel(e.target.value)}
+                    placeholder='e.g. "Choose Your Main", "Choice of Hummus or Moutabal", "Choice of Drink"'
+                    className="input w-full"
+                    maxLength={100}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Items with the same label are shown together as one section with "OR" between them on the menu. Leave empty for a plain included item.
+                  </p>
+                </div>
                 <div className="flex justify-between items-center">
                   <p className="text-sm text-gray-600">
                     {selectedProductIds.length} item(s) selected

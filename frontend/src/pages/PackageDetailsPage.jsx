@@ -1,7 +1,7 @@
 // frontend/src/pages/PackageDetailsPage.jsx
 // Page to show package contents when a package is clicked
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo, Fragment } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { getPackageDetails, getPackageContents } from "../services/package.service";
 import { getImageMapping } from "../services/menu.service";
@@ -23,6 +23,28 @@ export default function PackageDetailsPage() {
   
   // Check if we came from packages page
   const fromPackages = location.state?.fromPackages;
+
+  // Group items by GroupLabel (choice sections) keeping first-appearance order.
+  // Items without a label go to the plain "Included Items" list.
+  const grouped = useMemo(() => {
+    const sections = [];
+    const byLabel = new Map();
+    const ungrouped = [];
+    for (const item of packageContents) {
+      const label = (item.GroupLabel || "").trim();
+      if (!label) {
+        ungrouped.push(item);
+        continue;
+      }
+      if (!byLabel.has(label)) {
+        const section = { label, items: [] };
+        byLabel.set(label, section);
+        sections.push(section);
+      }
+      byLabel.get(label).items.push(item);
+    }
+    return { sections, ungrouped };
+  }, [packageContents]);
   
   // Load image mapping on mount (same as MenuPage)
   useEffect(() => {
@@ -176,19 +198,61 @@ export default function PackageDetailsPage() {
         </div>
       </div>
 
-      {/* Package Items Grid */}
+      {/* Package Items */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        <h2 className="text-lg font-bold text-gray-900 mb-4">
-          Included Items:
-        </h2>
-
-        {packageContents.length === 0 ? (
+        {packageContents.length === 0 && (
           <div className="bg-white rounded-lg border border-gray-200 p-6 text-center">
             <p className="text-gray-500">No items in this package yet.</p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-            {packageContents.map((item, index) => {
+        )}
+
+        {/* Choice Sections (poster style: label + items with OR between) */}
+        {grouped.sections.map((section) => (
+          <div key={section.label} className="mb-8">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px flex-1 bg-amber-300"></div>
+              <h2 className="text-center text-sm sm:text-base font-bold uppercase tracking-wide text-amber-800">
+                {section.label}
+              </h2>
+              <div className="h-px flex-1 bg-amber-300"></div>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {section.items.map((item, idx) => (
+                <Fragment key={item.ProductID || idx}>
+                  {idx > 0 && (
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-700 text-[10px] font-bold text-white shadow">
+                      OR
+                    </span>
+                  )}
+                  <div className="w-32 sm:w-40 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                    {item.cloudinaryUrl ? (
+                      <img
+                        src={item.thumbnailUrl || item.cloudinaryUrl}
+                        alt={item.Description}
+                        className="h-20 sm:h-24 w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : null}
+                    <div className="px-2 py-2 text-center">
+                      <p className="text-xs sm:text-sm font-semibold text-gray-900 leading-snug">
+                        {item.Description}
+                      </p>
+                    </div>
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {/* Plain included items (no choice group) */}
+        {grouped.ungrouped.length > 0 && (
+          <>
+            <h2 className="text-lg font-bold text-gray-900 mb-4">
+              Included Items:
+            </h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {grouped.ungrouped.map((item, index) => {
               // Transform the package item to match ItemCard's expected format
               const itemForCard = {
                 id: item.ProductID,
@@ -216,8 +280,9 @@ export default function PackageDetailsPage() {
                   qtyInCart={0}
                 />
               );
-            })}
-          </div>
+              })}
+            </div>
+          </>
         )}
       </div>
 
