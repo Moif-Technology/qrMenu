@@ -686,3 +686,85 @@
   .emojis-stay .modern-float.f2 { transform: translate(30px,  -44px) scale(1); }
   .emojis-stay .modern-float.f3 { transform: translate(0px,  -52px) scale(1); }
 }
+
+/* ===== LANDING PAGE ANIMATIONS ===== */
+@keyframes landing-fade-in-up {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes landing-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.landing-fade-in-up {
+  animation: landing-fade-in-up 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.landing-fade-in-up-delay-1 {
+  animation: landing-fade-in-up 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+}
+.landing-fade-in-up-delay-2 {
+  animation: landing-fade-in-up 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.24s both;
+}
+.landing-fade-in {
+  animation: landing-fade-in 0.8s ease 0.15s both;
+}
+
+/* ===== LANDING SCROLL REVEALS ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity  0.65s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-d1 { transition-delay: 0.09s; }
+.reveal-d2 { transition-delay: 0.18s; }
+.reveal-d3 { transition-delay: 0.27s; }
+
+/* ===== LANDING MARQUEE ===== */
+@keyframes lp-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.lp-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: lp-marquee 28s linear infinite;
+}
+.lp-marquee-track:hover { animation-play-state: paused; }
+
+/* ===== LANDING GRAIN NOISE OVERLAY ===== */
+.lp-noise {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.035;
+  background-repeat: repeat;
+  background-size: 200px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-fade-in-up,
+  .landing-fade-in-up-delay-1,
+  .landing-fade-in-up-delay-2,
+  .landing-fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .lp-marquee-track {
+    animation: none !important;
+  }
+}

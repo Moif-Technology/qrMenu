@@ -7,15 +7,43 @@ import "./index.css";
 import { AdminAuthProvider } from "./context/AdminAuthContext";
 import RequireAdmin from "./component/admin/RequireAdmin";
 
-// Support both /opaia/ and root (/) so existing QR codes with /opaia/ keep working
-// and the app also works without /opaia (e.g. at root). No change to existing QR codes needed.
+// Detect which context we're in at module-load time.
+// "/opaia" prefix  → Opaia restaurant context (entry + menu).
+// root (no prefix) → DeynoQR public landing page.
+// A full page reload is required to switch contexts, which is expected
+// when navigating between the landing page and a restaurant subdirectory.
 function getBasename() {
   const p = typeof window !== "undefined" ? window.location.pathname : "";
-  return p.startsWith("/opaia") ? "/opaia" : "";
+  if (p.startsWith("/opaia")) return "/opaia";
+  if (p.startsWith("/bonfood")) return "/bonfood";
+  return "";
 }
-export const RESTAURANT_BASE_PATH = "/opaia"; // for reference; router uses getBasename()
+export const RESTAURANT_BASE_PATH = "/opaia";
 
-// Lazy load pages for faster initial load
+const isOpaiaContext =
+  typeof window !== "undefined" &&
+  window.location.pathname.startsWith("/opaia");
+
+const isBonfoodContext =
+  typeof window !== "undefined" &&
+  window.location.pathname.startsWith("/bonfood");
+
+// app.deynoqr.com = LandingPage + OpaiaEntryPage
+// deynoqr.com     = QR menu app (entry + menu + admin)
+const isAppDomain =
+  typeof window !== "undefined" &&
+  window.location.hostname.startsWith("app.");
+
+// Public landing page
+const LandingPage = lazy(() => import("./pages/LandingPage"));
+
+// Opaia restaurant entry page
+const OpaiaEntryPage = lazy(() => import("./pages/OpaiaEntryPage"));
+
+// Coming soon page for restaurants not yet live
+const LaunchingSoonPage = lazy(() => import("./pages/LaunchingSoonPage"));
+
+// Existing restaurant pages
 const MenuPage = lazy(() => import("./pages/MenuPage"));
 const PackageDetailsPage = lazy(() => import("./pages/PackageDetailsPage"));
 const TableSummary = lazy(() => import("./pages/TableSummary"));
@@ -29,9 +57,13 @@ const ReservationListPage = lazy(() => import("./pages/ReservationListPage"));
 const WaitlistPage = lazy(() => import("./pages/WaitlistPage"));
 const CustomersPage = lazy(() => import("./pages/CustomersPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
-const ReservationDetailsPage = lazy(() => import("./pages/ReservationDetailsPage"));
+const ReservationDetailsPage = lazy(() =>
+  import("./pages/ReservationDetailsPage")
+);
 const WalkInSuccessPage = lazy(() => import("./pages/WalkInSuccessPage"));
-const ReservationSuccessPage = lazy(() => import("./pages/ReservationSuccessPage"));
+const ReservationSuccessPage = lazy(() =>
+  import("./pages/ReservationSuccessPage")
+);
 const GuestReservationPage = lazy(() => import("./pages/GuestReservationPage"));
 
 // Admin portal
@@ -55,50 +87,75 @@ export default function App() {
   return (
     <BrowserRouter basename={getBasename()}>
       <AdminAuthProvider>
-      <Suspense fallback={<PageLoader />}>
-        <Routes>
-          <Route path="/" element={<MenuPage />} />
-          <Route path="/package/:packageId" element={<PackageDetailsPage />} />
-          <Route path="/r/:token" element={<TableSummary />} />
-          <Route path="/qr-generator" element={<QRGenerator />} />
-          <Route path="/qr-menu-management" element={<QRMenuManagement />} />
-          <Route path="/reservation" element={<ReservationPage />} />
-          <Route path="/walk-in" element={<WalkInPage />} />
-          <Route path="/reservation-form" element={<ReservationFormPage />} />
-          <Route path="/table-action" element={<TableActionPage />} />
-          <Route path="/reservation-list" element={<ReservationListPage />} />
-          <Route path="/waitlist" element={<WaitlistPage />} />
-          <Route path="/customers" element={<CustomersPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/reservation-details" element={<ReservationDetailsPage />} />
-          <Route path="/walk-in-success" element={<WalkInSuccessPage />} />
-          <Route path="/reservation-success" element={<ReservationSuccessPage />} />
-          <Route path="/mt/opaiareservation" element={<GuestReservationPage />} />
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            {/* ── Root route differs by context ── */}
+            <Route
+              path="/"
+              element={
+                isOpaiaContext ? <OpaiaEntryPage /> :
+                isBonfoodContext ? <LaunchingSoonPage name="Bonfood" /> :
+                isAppDomain ? <LandingPage /> :
+                <OpaiaEntryPage />
+              }
+            />
 
-          {/* Admin portal */}
-          <Route path="/admin/login" element={<AdminLoginPage />} />
-          <Route
-            path="/admin"
-            element={
-              <RequireAdmin>
-                <AdminLayout />
-              </RequireAdmin>
-            }
-          >
-            <Route index element={<Navigate to="overview" replace />} />
-            <Route path="overview" element={<AdminOverview />} />
-            <Route path="waitlist" element={<AdminWaitlist />} />
-            <Route path="customers" element={<AdminCustomers />} />
-            <Route path="menu" element={<AdminMenu />} />
-            <Route path="qr-codes" element={<AdminQRCodes />} />
-            <Route path="reports" element={<AdminReports />} />
-            <Route path="settings" element={<AdminSettings />} />
-          </Route>
+            {/* ── Restaurant menu ──
+                In the opaia context: URL = /opaia/menu  → MenuPage
+                In root context: not linked (but renders if navigated to directly) */}
+            <Route path="/menu" element={<MenuPage />} />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-        <OrderSuccess />
-      </Suspense>
+            {/* ── Existing routes (unchanged) ── */}
+            <Route path="/package/:packageId" element={<PackageDetailsPage />} />
+            <Route path="/r/:token" element={<TableSummary />} />
+            <Route path="/qr-generator" element={<QRGenerator />} />
+            <Route path="/qr-menu-management" element={<QRMenuManagement />} />
+            <Route path="/reservation" element={<ReservationPage />} />
+            <Route path="/walk-in" element={<WalkInPage />} />
+            <Route path="/reservation-form" element={<ReservationFormPage />} />
+            <Route path="/table-action" element={<TableActionPage />} />
+            <Route path="/reservation-list" element={<ReservationListPage />} />
+            <Route path="/waitlist" element={<WaitlistPage />} />
+            <Route path="/customers" element={<CustomersPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
+            <Route
+              path="/reservation-details"
+              element={<ReservationDetailsPage />}
+            />
+            <Route path="/walk-in-success" element={<WalkInSuccessPage />} />
+            <Route
+              path="/reservation-success"
+              element={<ReservationSuccessPage />}
+            />
+            <Route
+              path="/mt/opaiareservation"
+              element={<GuestReservationPage />}
+            />
+
+            {/* ── Admin portal ── */}
+            <Route path="/admin/login" element={<AdminLoginPage />} />
+            <Route
+              path="/admin"
+              element={
+                <RequireAdmin>
+                  <AdminLayout />
+                </RequireAdmin>
+              }
+            >
+              <Route index element={<Navigate to="overview" replace />} />
+              <Route path="overview" element={<AdminOverview />} />
+              <Route path="waitlist" element={<AdminWaitlist />} />
+              <Route path="customers" element={<AdminCustomers />} />
+              <Route path="menu" element={<AdminMenu />} />
+              <Route path="qr-codes" element={<AdminQRCodes />} />
+              <Route path="reports" element={<AdminReports />} />
+              <Route path="settings" element={<AdminSettings />} />
+            </Route>
+
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+          <OrderSuccess />
+        </Suspense>
       </AdminAuthProvider>
     </BrowserRouter>
   );
