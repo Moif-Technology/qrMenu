@@ -10,6 +10,7 @@ import {
   updatePackageItemOrderController,
   updatePackageItemGroupLabelController,
   createPackageController,
+  updatePackageDetailsController,
   uploadPackageImageController,
 } from "../controllers/package.controller.js";
 
@@ -22,6 +23,7 @@ router.get("/:packageProductId/details", getPackageDetailsController);
 
 // POST routes (admin - for management)
 router.post("/create", createPackageController);
+router.post("/:packageProductId/update", updatePackageDetailsController);
 router.post("/:packageProductId/image", uploadPackageImageController);
 router.post("/mark-header", markAsPackageHeaderController);
 router.post("/add-product", addProductToPackageController);

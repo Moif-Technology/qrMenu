@@ -48,6 +48,17 @@ export async function createNewPackage(packageData) {
   return data;
 }
 
+/**
+ * Update a package's name, description and price
+ * @param {number} packageProductId - Package Product ID
+ * @param {Object} details - { description, descriptionArabic, shortDescription, price }
+ * @returns {Promise<Object>} Result
+ */
+export async function updatePackageDetails(packageProductId, details) {
+  const { data } = await API.post(`/packages/${packageProductId}/update`, details);
+  return data;
+}
+
 export async function uploadPackageImage(packageProductId, imageBase64) {
   const { data } = await API.post(`/packages/${packageProductId}/image`, {
     imageBase64,

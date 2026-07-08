@@ -8,6 +8,7 @@ import {
   getPackageHeaders,
   markAsPackageHeader,
   removeProductFromPackage,
+  updatePackageDetails,
   updatePackageItemOrder,
   updatePackageItemGroupLabel,
   uploadPackageImage,
@@ -275,6 +276,37 @@ export async function updatePackageItemGroupLabelController(req, res, next) {
     });
   } catch (error) {
     console.error("[PACKAGE][UPDATE-ITEM-GROUP] Error:", error);
+    next(error);
+  }
+}
+
+/**
+ * POST /api/packages/:packageProductId/update
+ * Update a package header's name, description and price
+ * Body: { description, descriptionArabic, shortDescription, price }
+ */
+export async function updatePackageDetailsController(req, res, next) {
+  try {
+    const { packageProductId } = req.params;
+    const { description, descriptionArabic, shortDescription, price } = req.body;
+
+    console.log("[PACKAGE][UPDATE-DETAILS] Updating package:", { packageProductId, description, price });
+
+    const result = await updatePackageDetails(parseInt(packageProductId), {
+      description,
+      descriptionArabic,
+      shortDescription,
+      price: price !== undefined && price !== "" ? parseFloat(price) : undefined,
+    });
+
+    packageCache.flushAll();
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[PACKAGE][UPDATE-DETAILS] Error:", error);
     next(error);
   }
 }

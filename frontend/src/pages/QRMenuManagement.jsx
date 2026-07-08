@@ -20,6 +20,7 @@ import {
   getPackageHeaders,
   getPackageItems,
   removeProductFromPackage,
+  updatePackageDetails,
   updatePackageItemGroupLabel,
   uploadPackageImage
 } from "../services/package.service";
@@ -2115,6 +2116,14 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
   const [newPackageImage, setNewPackageImage] = useState(null);
   const [newPackageImagePreview, setNewPackageImagePreview] = useState("");
   const [uploadingPackageImageId, setUploadingPackageImageId] = useState(null);
+  const [editingPackage, setEditingPackage] = useState(null); // Package being edited (name/desc/price)
+  const [editPackageForm, setEditPackageForm] = useState({
+    name: "",
+    nameArabic: "",
+    description: "",
+    price: "",
+  });
+  const [isSavingPackageEdit, setIsSavingPackageEdit] = useState(false);
 
   // Filter subgroups to only show "PACKAGES" subgroups
   const packageSubgroups = subgroups.filter(sg => 
@@ -2250,6 +2259,55 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
 
     setNewPackageImage(file);
     setNewPackageImagePreview(URL.createObjectURL(file));
+  };
+
+  const openEditPackageModal = (pkg) => {
+    setEditingPackage(pkg);
+    setEditPackageForm({
+      name: pkg.Description || "",
+      nameArabic: pkg.DescriptionArabic || "",
+      description: pkg.ShortDescription || pkg.Specification || "",
+      price: pkg.price != null ? String(pkg.price) : "",
+    });
+  };
+
+  const handleSaveEditPackage = async (e) => {
+    e.preventDefault();
+    if (!editingPackage) return;
+
+    if (!editPackageForm.name.trim()) {
+      alert("Please enter package name!");
+      return;
+    }
+    if (!editPackageForm.price || parseFloat(editPackageForm.price) <= 0) {
+      alert("Please enter a valid price!");
+      return;
+    }
+
+    try {
+      setIsSavingPackageEdit(true);
+      await updatePackageDetails(editingPackage.ProductID, {
+        description: editPackageForm.name,
+        descriptionArabic: editPackageForm.nameArabic || editPackageForm.name,
+        shortDescription: editPackageForm.description || editPackageForm.name,
+        price: parseFloat(editPackageForm.price),
+      });
+      alert("✅ Package updated successfully!");
+      setEditingPackage(null);
+      await loadPackageHeaders();
+      if (selectedPackage?.ProductID === editingPackage.ProductID) {
+        setSelectedPackage((prev) => prev ? {
+          ...prev,
+          Description: editPackageForm.name,
+          price: parseFloat(editPackageForm.price),
+        } : prev);
+      }
+    } catch (err) {
+      console.error("[EDIT-PACKAGE] Error:", err);
+      alert("❌ Error updating package: " + (err.response?.data?.error || err.message));
+    } finally {
+      setIsSavingPackageEdit(false);
+    }
   };
 
   const handleExistingPackageImageUpload = async (pkg, file) => {
@@ -2475,33 +2533,46 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
                   <p className="text-xs text-gray-500">
                     Product ID: {pkg.ProductID}
                   </p>
-                  <label
-                    className={`mt-3 inline-flex w-full items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition ${
-                      uploadingPackageImageId === pkg.ProductID
-                        ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
-                        : "cursor-pointer border-gray-300 text-gray-700 hover:bg-gray-50"
-                    }`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {uploadingPackageImageId === pkg.ProductID ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Uploading...
-                      </>
-                    ) : (
-                      "Upload Image"
-                    )}
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      disabled={uploadingPackageImageId === pkg.ProductID}
-                      onChange={(e) => {
-                        handleExistingPackageImageUpload(pkg, e.target.files?.[0]);
-                        e.target.value = "";
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditPackageModal(pkg);
                       }}
-                    />
-                  </label>
+                      className="inline-flex flex-1 items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+                    >
+                      <Edit2 className="w-4 h-4 mr-1.5" />
+                      Edit
+                    </button>
+                    <label
+                      className={`inline-flex flex-1 items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                        uploadingPackageImageId === pkg.ProductID
+                          ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
+                          : "cursor-pointer border-gray-300 text-gray-700 hover:bg-gray-50"
+                      }`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {uploadingPackageImageId === pkg.ProductID ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        "Upload Image"
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={uploadingPackageImageId === pkg.ProductID}
+                        onChange={(e) => {
+                          handleExistingPackageImageUpload(pkg, e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2947,6 +3018,128 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
                   <button type="submit" className="btn">
                     <Plus className="w-5 h-5 mr-2" />
                     Create Package
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Package Modal */}
+      {editingPackage && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditingPackage(null)} />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden">
+              <form onSubmit={handleSaveEditPackage}>
+                <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                  <h3 className="text-xl font-semibold">✏️ Edit Package</h3>
+                  <button
+                    type="button"
+                    onClick={() => setEditingPackage(null)}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Package Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editPackageForm.name}
+                      onChange={(e) => setEditPackageForm({ ...editPackageForm, name: e.target.value })}
+                      placeholder="e.g., Business Lunch — Daily Plate"
+                      className="input w-full"
+                      required
+                    />
+                    <p className="text-xs text-gray-500 mt-1">This will be shown to customers</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Package Name (Arabic)
+                    </label>
+                    <input
+                      type="text"
+                      value={editPackageForm.nameArabic}
+                      onChange={(e) => setEditPackageForm({ ...editPackageForm, nameArabic: e.target.value })}
+                      placeholder="اسم الحزمة بالعربية"
+                      className="input w-full"
+                      dir="rtl"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Description
+                    </label>
+                    <textarea
+                      value={editPackageForm.description}
+                      onChange={(e) => setEditPackageForm({ ...editPackageForm, description: e.target.value })}
+                      placeholder='Brief description of the package (e.g. "With shisha AED 135")...'
+                      className="input w-full"
+                      rows="3"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Price (AED) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editPackageForm.price}
+                      onChange={(e) => setEditPackageForm({ ...editPackageForm, price: e.target.value })}
+                      placeholder="90.00"
+                      className="input w-full"
+                      required
+                    />
+                  </div>
+
+                  {editPackageForm.name && (
+                    <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4">
+                      <p className="text-sm font-medium text-gray-700 mb-2">Preview:</p>
+                      <div className="bg-white rounded-lg p-4 shadow-sm">
+                        <h4 className="font-bold text-lg text-gray-900">{editPackageForm.name}</h4>
+                        {editPackageForm.description && (
+                          <p className="text-sm text-gray-600 mt-1">{editPackageForm.description}</p>
+                        )}
+                        {editPackageForm.price && (
+                          <p className="text-lg font-bold text-rose-600 mt-2">AED {parseFloat(editPackageForm.price).toFixed(2)}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingPackage(null)}
+                    className="btn-ghost"
+                    disabled={isSavingPackageEdit}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn disabled:opacity-50" disabled={isSavingPackageEdit}>
+                    {isSavingPackageEdit ? (
+                      <>
+                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-5 h-5 mr-2" />
+                        Save Changes
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

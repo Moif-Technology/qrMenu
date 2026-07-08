@@ -246,6 +246,80 @@ export async function markAsPackageHeader(productId, isPackageHeader = true) {
 }
 
 /**
+ * Update a package header's name, description and price
+ */
+export async function updatePackageDetails(packageProductId, {
+  description,
+  descriptionArabic,
+  shortDescription,
+  price,
+}) {
+  const pool = await connectToDb();
+  const transaction = pool.transaction();
+
+  try {
+    await transaction.begin();
+
+    const verifyRequest = new mssql.Request(transaction);
+    verifyRequest.input("packageProductId", mssql.BigInt, packageProductId);
+    const verify = await verifyRequest.query(`
+      SELECT ${q("IsPackageHeader")}
+      FROM ${T_QR_PRODUCT_MASTER}
+      WHERE ${q("ProductID")} = @packageProductId
+    `);
+
+    if (!verify.recordset[0]?.IsPackageHeader) {
+      throw new Error("Target product is not a package header");
+    }
+
+    const qpmRequest = new mssql.Request(transaction);
+    qpmRequest.input("packageProductId", mssql.BigInt, packageProductId);
+    qpmRequest.input("description", mssql.NVarChar, description);
+    qpmRequest.input("descriptionArabic", mssql.NVarChar, descriptionArabic || description);
+    qpmRequest.input("shortDescription", mssql.NVarChar, shortDescription || description);
+    await qpmRequest.query(`
+      UPDATE ${T_QR_PRODUCT_MASTER}
+      SET
+        ${q("Description")} = @description,
+        ${q("DescriptionArabic")} = @descriptionArabic,
+        ${q("ShortDescription")} = @shortDescription,
+        ${q("ModOn")} = GETDATE()
+      WHERE ${q("ProductID")} = @packageProductId
+    `);
+
+    const productRequest = new mssql.Request(transaction);
+    productRequest.input("packageProductId", mssql.BigInt, packageProductId);
+    productRequest.input("description", mssql.NVarChar, description);
+    productRequest.input("descriptionArabic", mssql.NVarChar, descriptionArabic || description);
+    await productRequest.query(`
+      UPDATE ${T_PRODUCT_MASTER}
+      SET
+        ${q("Description")} = @description,
+        ${q("DescriptionArabic")} = @descriptionArabic
+      WHERE ${q("ProductID")} = @packageProductId
+    `);
+
+    if (price !== undefined && price !== null && !Number.isNaN(Number(price))) {
+      const priceRequest = new mssql.Request(transaction);
+      priceRequest.input("packageProductId", mssql.BigInt, packageProductId);
+      priceRequest.input("price", mssql.Decimal(18, 2), price);
+      await priceRequest.query(`
+        UPDATE ${T_QR_PRODUCT_CHILD}
+        SET ${q("UnitPrice")} = @price
+        WHERE ${q("ProductID")} = @packageProductId
+      `);
+    }
+
+    await transaction.commit();
+
+    return { success: true, productId: packageProductId };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+/**
  * Add a product to a package using junction table
  * Allows the same product to belong to multiple packages
  */
