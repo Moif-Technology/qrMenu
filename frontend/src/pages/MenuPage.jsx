@@ -570,6 +570,13 @@ export default function MenuPage() {
         const mainGroupId = categoryId.replace('main_group_', '');
         const childGroups = buildGroupCategories(qrGroups, mainGroupId, lang);
 
+        // Single child group: skip this level, drill straight into it
+        if (childGroups.length === 1) {
+          setSelectedMainGroupId(mainGroupId);
+          handleCategoryChange(childGroups[0].id);
+          return;
+        }
+
         if (childGroups.length > 0) {
           setSelectedMainGroupId(mainGroupId);
           setSelectedGroupId(null);
@@ -594,8 +601,17 @@ export default function MenuPage() {
         if (subgroups.length > 0) {
           setSelectedGroupId(group?.groupId ?? parseInt(groupId));
           setCats(subgroups);
-          setActiveCat("");
-          setLoading(false);
+          // Single subgroup: auto-open it instead of showing a one-chip list
+          if (subgroups.length === 1) {
+            if (activeCat !== subgroups[0].id) {
+              setItems([]);
+            }
+            setActiveCat(subgroups[0].id);
+            setLoading(true);
+          } else {
+            setActiveCat("");
+            setLoading(false);
+          }
           return;
         }
 
@@ -687,7 +703,20 @@ export default function MenuPage() {
   // Handle back navigation - go back to groups
   const handleBackToGroups = useCallback(() => {
     if (USE_VERTICAL_CATEGORY_NAV && selectedMainGroupId !== null && (selectedGroupId !== null || activeCat)) {
-      setCats(buildGroupCategories(qrGroups, selectedMainGroupId, lang));
+      const parentGroups = buildGroupCategories(qrGroups, selectedMainGroupId, lang);
+      // Level was skipped on the way in (single child group) — skip it going back too
+      if (parentGroups.length === 1) {
+        setCats(buildTopLevelCategories(qrGroups, lang));
+        setSelectedMainGroupId(null);
+        setSelectedGroupId(null);
+        setActiveCat("");
+        setItems([]);
+        setIsPackageSubgroup(false);
+        setPackageHeaders([]);
+        setLoading(false);
+        return;
+      }
+      setCats(parentGroups);
       setSelectedGroupId(null);
       setActiveCat("");
       setItems([]);
