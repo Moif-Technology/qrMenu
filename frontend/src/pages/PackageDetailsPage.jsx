@@ -180,9 +180,9 @@ export default function PackageDetailsPage() {
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">
                 {packageDetails.Description}
               </h1>
-              {packageDetails.Specification && (
+              {(packageDetails.ShortDescription || packageDetails.Specification) && (
                 <p className="text-sm text-gray-600 mb-2">
-                  {packageDetails.Specification}
+                  {packageDetails.ShortDescription || packageDetails.Specification}
                 </p>
               )}
               <p className="text-sm text-gray-500">

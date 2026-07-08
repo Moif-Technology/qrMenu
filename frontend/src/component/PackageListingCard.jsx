@@ -15,6 +15,7 @@ export default function PackageListingCard({ packageData, onClick, placeholderIn
   const [imageError, setImageError] = useState(false);
 
   const name = packageData?.Description || "Package";
+  const description = packageData?.ShortDescription || packageData?.Specification || "";
   const price = packageData?.price || 0;
   const imageUrl = packageData?.cloudinaryUrl?.trim();
   const hasImage =
@@ -66,9 +67,14 @@ export default function PackageListingCard({ packageData, onClick, placeholderIn
 
       {/* Name + Price */}
       <div className="p-3 sm:p-4 flex flex-col flex-1 min-w-0">
-        <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-2 group-hover:text-rose-600 transition-colors line-clamp-2">
+        <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-1 group-hover:text-rose-600 transition-colors line-clamp-2">
           {name}
         </h3>
+        {description && (
+          <p className="text-xs sm:text-sm text-gray-500 mb-2 line-clamp-2">
+            {description}
+          </p>
+        )}
         <div className="flex items-baseline gap-2 mt-auto">
           <span className="text-xl sm:text-2xl font-black text-rose-600">
             {price.toFixed(0)}
