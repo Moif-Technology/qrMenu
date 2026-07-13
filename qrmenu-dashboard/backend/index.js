@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth.routes.js";
 import transactionsRoutes from "./routes/transactions.routes.js";
 import payoutsRoutes from "./routes/payouts.routes.js";
 import restaurantsRoutes from "./routes/restaurants.routes.js";
+import methodsRoutes from "./routes/methods.routes.js";
 import { connectToDb } from "./config/db.js";
 
 const app = express();
@@ -22,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/transactions", transactionsRoutes);
 app.use("/api/payouts", payoutsRoutes);
 app.use("/api/restaurants", restaurantsRoutes);
+app.use("/api/methods", methodsRoutes);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: "Not found" }));
 

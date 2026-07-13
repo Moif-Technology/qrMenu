@@ -1,9 +1,9 @@
-// qrmenu-dashboard/backend/routes/payouts.routes.js
-// Company-only payout actions: approve a payment for payout, then mark it
+﻿// qrmenu-dashboard/backend/routes/payouts.routes.js
+// Super-admin-only payout actions: approve a payment for payout, then mark it
 // transferred with a cheque / bank reference. Upserts into dbo.PayoutStatus.
 import express from "express";
 import { query, mssql } from "../config/db.js";
-import { requireAuth, requireCompany } from "../middleware/auth.js";
+import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -25,7 +25,7 @@ async function getPayoutRow(paymentId) {
 }
 
 /** POST /api/payouts/:paymentId/approve  { notes? } */
-router.post("/:paymentId/approve", requireAuth, requireCompany, async (req, res) => {
+router.post("/:paymentId/approve", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const paymentId = Number(req.params.paymentId);
     if (!Number.isFinite(paymentId) || paymentId <= 0) {
@@ -75,7 +75,7 @@ router.post("/:paymentId/approve", requireAuth, requireCompany, async (req, res)
 });
 
 /** POST /api/payouts/:paymentId/transfer  { transferRef, transferDate?, notes? } */
-router.post("/:paymentId/transfer", requireAuth, requireCompany, async (req, res) => {
+router.post("/:paymentId/transfer", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const paymentId = Number(req.params.paymentId);
     if (!Number.isFinite(paymentId) || paymentId <= 0) {
@@ -130,8 +130,8 @@ router.post("/:paymentId/transfer", requireAuth, requireCompany, async (req, res
   }
 });
 
-/** POST /api/payouts/:paymentId/reset — undo back to PENDING (company only). */
-router.post("/:paymentId/reset", requireAuth, requireCompany, async (req, res) => {
+/** POST /api/payouts/:paymentId/reset - undo back to PENDING (super admin only). */
+router.post("/:paymentId/reset", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const paymentId = Number(req.params.paymentId);
     if (!Number.isFinite(paymentId) || paymentId <= 0) {

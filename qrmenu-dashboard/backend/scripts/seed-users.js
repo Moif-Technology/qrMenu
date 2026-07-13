@@ -7,7 +7,7 @@
 //   npm run seed:users -- --reset -> also resets passwords of existing users
 //
 // Optional env overrides (if you want to choose the password yourself):
-//   SEED_COMPANY_PASSWORD / SEED_OPAIA_PASSWORD
+//   SEED_SUPERADMIN_PASSWORD / SEED_OPAIA_PASSWORD
 import "dotenv/config";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
@@ -22,11 +22,11 @@ function generatePassword() {
 
 const USERS = [
   {
-    username: "company",
-    password: process.env.SEED_COMPANY_PASSWORD || generatePassword(),
-    role: "company",
+    username: "superadmin",
+    password: process.env.SEED_SUPERADMIN_PASSWORD || generatePassword(),
+    role: "superadmin",
     shopId: null,
-    displayName: "DeynoQR Admin"
+    displayName: "DeynoQR Super Admin"
   },
   {
     username: "opaia",

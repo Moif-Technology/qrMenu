@@ -1,12 +1,12 @@
-// qrmenu-dashboard/backend/routes/restaurants.routes.js
+﻿// qrmenu-dashboard/backend/routes/restaurants.routes.js
 import express from "express";
 import { query, mssql } from "../config/db.js";
-import { requireAuth, requireCompany } from "../middleware/auth.js";
+import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
 
-/** GET /api/restaurants — company only, for the filter dropdown. */
-router.get("/", requireAuth, requireCompany, async (_req, res) => {
+/** GET /api/restaurants - super admin only, for the filter dropdown. */
+router.get("/", requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT RestaurantID, Slug, Name, ContactPerson, ContactPhone,
@@ -21,8 +21,8 @@ router.get("/", requireAuth, requireCompany, async (_req, res) => {
   }
 });
 
-/** POST /api/restaurants — register a new restaurant (company only). */
-router.post("/", requireAuth, requireCompany, async (req, res) => {
+/** POST /api/restaurants - register a new restaurant (super admin only). */
+router.post("/", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const { restaurantId, slug, name, contactPerson, contactPhone, bankName, bankAccount, bankIban } = req.body || {};
     const id = Number(restaurantId);

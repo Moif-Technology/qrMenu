@@ -136,11 +136,13 @@ function TransferModal({ txn, onClose, onDone }) {
   );
 }
 
-export default function CompanyDashboard() {
+export default function AdminDashboard() {
   const navigate = useNavigate();
   const user = getStoredUser();
-  const isCompany = user?.role === "company";
+  const isCompany = user?.role === "superadmin";
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [methods, setMethods] = useState([]);
+  const [methodBusy, setMethodBusy] = useState(null);
 
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -196,7 +198,26 @@ export default function CompanyDashboard() {
     api.get("/restaurants")
       .then(({ data }) => setRestaurants(data.restaurants || []))
       .catch(() => {});
+    api.get("/methods")
+      .then(({ data }) => setMethods(data.methods || []))
+      .catch(() => {});
   }, [isCompany]);
+
+  async function toggleMethod(m) {
+    setMethodBusy(m.paymentMethodId);
+    try {
+      const { data } = await api.post(`/methods/${m.paymentMethodId}/toggle`);
+      setMethods((prev) =>
+        prev.map((x) =>
+          x.paymentMethodId === m.paymentMethodId ? { ...x, blocked: data.blocked } : x
+        )
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to update method");
+    } finally {
+      setMethodBusy(null);
+    }
+  }
 
   function logout() {
     clearSession();
@@ -240,11 +261,9 @@ export default function CompanyDashboard() {
           <div className="flex items-center gap-2">
             <QrCode className="w-6 h-6 text-emerald-600" />
             <div>
-              <h1 className="font-bold text-gray-800 leading-tight">
-                {isCompany ? "DeynoQR — Company Payouts" : `${user?.displayName || "Restaurant"} — Transactions`}
-              </h1>
+              <h1 className="font-bold text-gray-800 leading-tight">DeynoQR — Super Admin</h1>
               <p className="text-xs text-gray-400">
-                {isCompany ? "All restaurants" : "Your restaurant only"} · signed in as {user?.username}
+                All restaurants · signed in as {user?.username}
               </p>
             </div>
           </div>
@@ -310,6 +329,51 @@ export default function CompanyDashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* Payment methods (controls what customers see in the QR menu) */}
+        {methods.length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-gray-700">Payment methods</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Blocked methods disappear from the customer payment screen in the QR menu.
+              </p>
+            </div>
+            <div className="p-4 flex flex-wrap gap-3">
+              {methods.map((m) => (
+                <div
+                  key={m.paymentMethodId}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 ${
+                    m.blocked ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"
+                  }`}
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">{m.name}</p>
+                    <p className={`text-xs ${m.blocked ? "text-red-500" : "text-emerald-600"}`}>
+                      {m.blocked ? "Blocked" : "Active"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => toggleMethod(m)}
+                    disabled={methodBusy === m.paymentMethodId}
+                    role="switch"
+                    aria-checked={!m.blocked}
+                    className={`relative w-10 h-5.5 rounded-full transition disabled:opacity-50 ${
+                      m.blocked ? "bg-gray-300" : "bg-emerald-500"
+                    }`}
+                    style={{ height: "22px" }}
+                    title={m.blocked ? "Unblock" : "Block"}
+                  >
+                    <span
+                      className="absolute top-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-all"
+                      style={{ left: m.blocked ? "2px" : "20px" }}
+                    />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}

@@ -19,10 +19,10 @@ export function requireAuth(req, res, next) {
   }
 }
 
-/** Company-only endpoints (approve / transfer payouts, cross-restaurant views). */
-export function requireCompany(req, res, next) {
-  if (req.user?.role !== "company") {
-    return res.status(403).json({ ok: false, error: "Company access only" });
+/** Super-admin-only endpoints (payouts, cross-restaurant views, payment methods). */
+export function requireSuperAdmin(req, res, next) {
+  if (req.user?.role !== "superadmin") {
+    return res.status(403).json({ ok: false, error: "Super admin access only" });
   }
   return next();
 }

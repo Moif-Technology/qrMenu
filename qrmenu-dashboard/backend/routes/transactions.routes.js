@@ -12,7 +12,7 @@ const METHOD_NAMES = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Cus
 function resolveShopScope(req) {
   // Restaurant users can only ever see their own shop.
   if (req.user.role === "restaurant") return req.user.shopId;
-  // Company users may filter by ?shopId= or see all.
+  // Super admin may filter by ?shopId= or see all.
   const q = req.query.shopId;
   return q !== undefined && q !== "" ? Number(q) : null;
 }
@@ -157,7 +157,7 @@ router.get("/summary", requireAuth, async (req, res) => {
     );
 
     let byRestaurant = [];
-    if (req.user.role === "company") {
+    if (req.user.role === "superadmin") {
       byRestaurant = await query(
         `
         SELECT
