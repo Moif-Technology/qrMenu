@@ -1,0 +1,86 @@
+# DeynoQR Payout Tracker (`qrmenu-dashboard`)
+
+Two dashboards on top of the existing `PaymentGateway` database:
+
+- **Company view** (`role: company`) — every transaction from every restaurant, per-restaurant "owed" rollup, and payout actions: **Approve → Transfer** (with cheque/bank reference).
+- **Restaurant view** (`role: restaurant`) — read-only list of that restaurant's own transactions and the payout status of each (pending / approved / transferred + reference).
+
+The main qrMenu app keeps writing payments exactly as before. This module only **reads** `dbo.Payment` and writes payout status into its own tables.
+
+## Structure
+
+```
+qrmenu-dashboard/
+  backend/     Express API (port 5002) — auth, transactions, payouts, restaurants
+  frontend/    React + Vite + Tailwind dashboard (dev port 5174)
+```
+
+## Setup
+
+### 1. Database (run once)
+
+Run [`database_scripts/11_Dashboard_Payout_Tables.sql`](../database_scripts/11_Dashboard_Payout_Tables.sql) against SQL Server (SSMS or `sqlcmd`). It creates in `PaymentGateway`:
+
+| Table | Purpose |
+|---|---|
+| `dbo.RestaurantMaster` | Restaurant registry — `RestaurantID` = `Payment.ShopID`. Seeded with Opaia (ID 1). |
+| `dbo.PayoutStatus` | One row per payment in the payout pipeline: `PENDING → APPROVED → TRANSFERRED`, cheque ref, dates, who did it. |
+| `dbo.DashboardUsers` | Dashboard logins (bcrypt hashes). |
+
+It also adds a `CreatedAt` column to `dbo.Payment` (existing rows stay NULL; new payments auto-stamp) so date filters work.
+
+### 2. Backend
+
+```bash
+cd qrmenu-dashboard/backend
+npm install
+copy .env.example .env    # then edit: DB password, JWT secret
+npm run seed:users        # creates company/company123 and opaia/opaia123
+npm run dev               # http://localhost:5002
+```
+
+**Change the seeded passwords before going live** (set `SEED_COMPANY_PASSWORD` / `SEED_OPAIA_PASSWORD` in `.env` before seeding, or update the rows).
+
+### 3. Frontend
+
+```bash
+cd qrmenu-dashboard/frontend
+npm install
+npm run dev               # http://localhost:5174 (proxies /api → :5002)
+```
+
+For production build: `npm run build`, host `dist/` anywhere, set `VITE_API_URL` env at build time to the API base URL (e.g. `https://api.deynoqr.com/dash/api`).
+
+## Logins (after seeding)
+
+| User | Password | Sees |
+|---|---|---|
+| `company` | `company123` | All restaurants + approve/transfer buttons |
+| `opaia` | `opaia123` | Only ShopID 1 transactions, read-only |
+
+## API
+
+All routes need `Authorization: Bearer <token>` except login.
+
+| Method | Route | Who | What |
+|---|---|---|---|
+| POST | `/api/auth/login` | — | `{username, password}` → JWT |
+| GET | `/api/transactions` | both | Filters: `shopId` (company), `status`, `payoutStatus` (`NONE/PENDING/APPROVED/TRANSFERRED`), `from`, `to`, `page`, `pageSize` |
+| GET | `/api/transactions/summary` | both | Totals; company also gets per-restaurant rollup |
+| POST | `/api/payouts/:paymentId/approve` | company | Mark payout APPROVED |
+| POST | `/api/payouts/:paymentId/transfer` | company | `{transferRef, transferDate?, notes?}` → TRANSFERRED |
+| POST | `/api/payouts/:paymentId/reset` | company | Back to PENDING |
+| GET | `/api/restaurants` | company | Registry list |
+| POST | `/api/restaurants` | company | Register new restaurant |
+
+## Adding a new restaurant later
+
+1. `POST /api/restaurants` (or insert into `RestaurantMaster`) with a new `RestaurantID`.
+2. Set `SHOP_ID=<that id>` in that restaurant's qrMenu backend deployment **once the ShopID-hardcode fix is applied in `backend/services/payment.service.js`** (currently the main app writes `ShopID = 1` everywhere).
+3. Create a `DashboardUsers` row with `Role='restaurant'`, `ShopID=<id>`.
+
+## Security notes
+
+- Restaurant users are scoped server-side: the JWT carries `shopId`, and the API ignores any `shopId` query param they send.
+- Payout actions require `role='company'`.
+- Set a strong `DASHBOARD_JWT_SECRET` and lock `DASHBOARD_CORS_ORIGIN` to the real dashboard domain in production.
