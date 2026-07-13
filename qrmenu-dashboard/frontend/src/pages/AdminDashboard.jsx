@@ -257,17 +257,17 @@ export default function AdminDashboard() {
     <div className="min-h-screen">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <QrCode className="w-6 h-6 text-emerald-600" />
-            <div>
-              <h1 className="font-bold text-gray-800 leading-tight">DeynoQR — Super Admin</h1>
-              <p className="text-xs text-gray-400">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <QrCode className="w-6 h-6 text-emerald-600 shrink-0" />
+            <div className="min-w-0">
+              <h1 className="font-bold text-gray-800 leading-tight truncate">DeynoQR — Super Admin</h1>
+              <p className="text-xs text-gray-400 truncate">
                 All restaurants · signed in as {user?.username}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={load}
               className="p-2 rounded-lg text-gray-500 hover:bg-gray-50 border border-gray-200"
@@ -284,9 +284,10 @@ export default function AdminDashboard() {
             </button>
             <button
               onClick={logout}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-50 border border-gray-200"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-50 border border-gray-200"
+              title="Logout"
             >
-              <LogOut className="w-4 h-4" /> Logout
+              <LogOut className="w-4 h-4" /> <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
         </div>
@@ -307,7 +308,7 @@ export default function AdminDashboard() {
               <h2 className="text-sm font-semibold text-gray-700">Owed per restaurant</h2>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[540px] text-sm">
                 <thead>
                   <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
                     <th className="px-4 py-2 font-medium">Restaurant</th>
@@ -346,7 +347,7 @@ export default function AdminDashboard() {
               {methods.map((m) => (
                 <div
                   key={m.paymentMethodId}
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 ${
+                  className={`flex items-center justify-between sm:justify-start gap-3 rounded-xl border px-4 py-2.5 w-full sm:w-auto ${
                     m.blocked ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"
                   }`}
                 >
@@ -379,14 +380,14 @@ export default function AdminDashboard() {
         )}
 
         {/* Filters */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-end gap-3">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 grid grid-cols-2 sm:flex sm:flex-wrap sm:items-end gap-3">
           {isCompany && (
             <div>
               <label className="block text-xs text-gray-400 mb-1">Restaurant</label>
               <select
                 value={filters.shopId}
                 onChange={(e) => setFilter("shopId", e.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+                className="w-full sm:w-auto rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
               >
                 <option value="">All</option>
                 {restaurants.map((r) => (
@@ -400,7 +401,7 @@ export default function AdminDashboard() {
             <select
               value={filters.status}
               onChange={(e) => setFilter("status", e.target.value)}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+              className="w-full sm:w-auto rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
             >
               <option value="">All</option>
               <option value="PAID">PAID</option>
@@ -412,7 +413,7 @@ export default function AdminDashboard() {
             <select
               value={filters.payoutStatus}
               onChange={(e) => setFilter("payoutStatus", e.target.value)}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+              className="w-full sm:w-auto rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
             >
               <option value="">All</option>
               <option value="NONE">Not started</option>
@@ -427,7 +428,7 @@ export default function AdminDashboard() {
               type="date"
               value={filters.from}
               onChange={(e) => setFilter("from", e.target.value)}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+              className="w-full sm:w-auto rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
             />
           </div>
           <div>
@@ -436,7 +437,7 @@ export default function AdminDashboard() {
               type="date"
               value={filters.to}
               onChange={(e) => setFilter("to", e.target.value)}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+              className="w-full sm:w-auto rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
             />
           </div>
           {(filters.shopId || filters.status || filters.payoutStatus || filters.from || filters.to) && (
@@ -445,7 +446,7 @@ export default function AdminDashboard() {
                 setPage(1);
                 setFilters({ shopId: "", status: "", payoutStatus: "", from: "", to: "" });
               }}
-              className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 underline"
+              className="col-span-2 sm:col-auto px-3 py-2 text-sm text-gray-500 hover:text-gray-700 underline text-left"
             >
               Clear filters
             </button>
@@ -477,8 +478,9 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          {/* Desktop table */}
+          <div className="overflow-x-auto hidden lg:block">
+            <table className="w-full min-w-[960px] text-sm">
               <thead>
                 <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
                   <th className="px-4 py-2 font-medium">#</th>
@@ -567,6 +569,75 @@ export default function AdminDashboard() {
                 })}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile / tablet card list */}
+          <div className="lg:hidden divide-y divide-gray-50">
+            {transactions.length === 0 && (
+              <div className="px-4 py-10 text-center text-gray-400">
+                {loading ? "Loading…" : "No transactions found"}
+              </div>
+            )}
+            {transactions.map((t) => {
+              const payoutStatus = t.payout?.status || "PENDING";
+              return (
+                <div key={t.paymentId} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">
+                        {t.restaurantName}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        #{t.paymentId} · KOT {t.kotMasterId}
+                        {t.tableId != null && ` · T${t.tableId}`} · {t.methodName}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-base font-semibold text-gray-800">{fmt(t.paidAmount)}</p>
+                      <p className="text-xs text-gray-400">of {fmt(t.billAmount)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${PAID_BADGE[t.paidStatus] || "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                      {t.paidStatus}
+                    </span>
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${PAYOUT_BADGE[payoutStatus] || "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                      {payoutStatus}
+                    </span>
+                    <span className="text-xs text-gray-400 ml-auto">{fmtDate(t.createdAt)}</span>
+                  </div>
+
+                  {t.payout?.transferRef && (
+                    <p className="text-xs text-gray-500">
+                      Ref {t.payout.transferRef}
+                      {t.payout.transferDate &&
+                        ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE")}`}
+                    </p>
+                  )}
+
+                  {isCompany && payoutStatus !== "TRANSFERRED" && (
+                    <div className="flex gap-2 pt-1">
+                      {payoutStatus === "PENDING" && (
+                        <button
+                          onClick={() => approve(t)}
+                          disabled={actionBusy === t.paymentId}
+                          className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                        >
+                          Approve
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setTransferTxn(t)}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                      >
+                        Transfer
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </main>

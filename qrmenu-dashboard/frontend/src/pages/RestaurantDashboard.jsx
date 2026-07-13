@@ -21,9 +21,9 @@ const fmtDate = (d) => {
 };
 
 const PAYOUT_LABEL = {
-  PENDING: { text: "Awaiting payout", cls: "bg-amber-400/10 text-amber-300 border-amber-400/30" },
-  APPROVED: { text: "Payout approved", cls: "bg-sky-400/10 text-sky-300 border-sky-400/30" },
-  TRANSFERRED: { text: "Paid to you", cls: "bg-emerald-400/10 text-emerald-300 border-emerald-400/30" }
+  PENDING: { text: "Awaiting payout", cls: "bg-amber-100 text-amber-800 border-amber-200" },
+  APPROVED: { text: "Payout approved", cls: "bg-sky-100 text-sky-800 border-sky-200" },
+  TRANSFERRED: { text: "Paid to you", cls: "bg-orange-100 text-orange-800 border-orange-200" }
 };
 
 const FILTER_CHIPS = [
@@ -90,37 +90,37 @@ export default function RestaurantDashboard() {
     : 0;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-[#faf6f0] text-stone-800">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-slate-950/80 backdrop-blur border-b border-slate-800">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-emerald-500/15 rounded-xl p-2">
-              <UtensilsCrossed className="w-5 h-5 text-emerald-400" />
+      <header className="sticky top-0 z-40 bg-[#faf6f0]/90 backdrop-blur border-b border-stone-200">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="bg-orange-100 rounded-xl p-2 shrink-0">
+              <UtensilsCrossed className="w-5 h-5 text-orange-600" />
             </div>
-            <div>
-              <h1 className="font-semibold leading-tight">{user?.displayName || "My Restaurant"}</h1>
-              <p className="text-xs text-slate-400">QR payments · powered by DeynoQR</p>
+            <div className="min-w-0">
+              <h1 className="font-semibold leading-tight truncate">{user?.displayName || "My Restaurant"}</h1>
+              <p className="text-xs text-stone-400 truncate">QR payments · powered by DeynoQR</p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => load(1, payoutFilter, false)}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              className="p-2 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100"
               title="Refresh"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             </button>
             <button
               onClick={() => setShowPasswordModal(true)}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              className="p-2 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100"
               title="Change password"
             >
               <KeyRound className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              className="p-2 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100"
               title="Logout"
             >
               <LogOut className="w-4 h-4" />
@@ -131,40 +131,40 @@ export default function RestaurantDashboard() {
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         {/* Earnings hero */}
-        <section className="rounded-3xl bg-gradient-to-br from-emerald-600 to-emerald-800 p-6 shadow-lg shadow-emerald-900/30">
-          <p className="text-emerald-100/80 text-sm">Collected through QR payments</p>
-          <p className="text-4xl font-bold tracking-tight mt-1">
+        <section className="rounded-3xl bg-gradient-to-br from-orange-500 to-amber-600 text-white p-5 sm:p-6 shadow-lg shadow-orange-200">
+          <p className="text-orange-50/90 text-sm">Collected through QR payments</p>
+          <p className="text-3xl sm:text-4xl font-bold tracking-tight mt-1">
             {CURRENCY} {fmt(summary?.totalCollected)}
           </p>
           <div className="grid grid-cols-2 gap-3 mt-5">
-            <div className="rounded-2xl bg-white/10 backdrop-blur px-4 py-3">
-              <div className="flex items-center gap-1.5 text-emerald-100/80 text-xs">
+            <div className="rounded-2xl bg-white/15 backdrop-blur px-3 sm:px-4 py-3">
+              <div className="flex items-center gap-1.5 text-orange-50/90 text-xs">
                 <Hourglass className="w-3.5 h-3.5" /> With DeynoQR
               </div>
-              <p className="text-lg font-semibold mt-0.5">{CURRENCY} {fmt(owed)}</p>
+              <p className="text-base sm:text-lg font-semibold mt-0.5">{CURRENCY} {fmt(owed)}</p>
             </div>
-            <div className="rounded-2xl bg-white/10 backdrop-blur px-4 py-3">
-              <div className="flex items-center gap-1.5 text-emerald-100/80 text-xs">
+            <div className="rounded-2xl bg-white/15 backdrop-blur px-3 sm:px-4 py-3">
+              <div className="flex items-center gap-1.5 text-orange-50/90 text-xs">
                 <Banknote className="w-3.5 h-3.5" /> Paid to you
               </div>
-              <p className="text-lg font-semibold mt-0.5">{CURRENCY} {fmt(summary?.totalTransferred)}</p>
+              <p className="text-base sm:text-lg font-semibold mt-0.5">{CURRENCY} {fmt(summary?.totalTransferred)}</p>
             </div>
           </div>
-          <p className="text-emerald-100/60 text-xs mt-4">
+          <p className="text-orange-50/70 text-xs mt-4">
             Payments are collected by DeynoQR and settled to your bank within ~2 working days.
           </p>
         </section>
 
         {/* Filter chips */}
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
           {FILTER_CHIPS.map((c) => (
             <button
               key={c.key}
               onClick={() => setPayoutFilter(c.key)}
               className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap border transition ${
                 payoutFilter === c.key
-                  ? "bg-emerald-500 text-slate-950 border-emerald-500 font-medium"
-                  : "border-slate-700 text-slate-300 hover:border-slate-500"
+                  ? "bg-orange-600 text-white border-orange-600 font-medium shadow-sm"
+                  : "border-stone-300 bg-white text-stone-600 hover:border-stone-400"
               }`}
             >
               {c.label}
@@ -174,13 +174,13 @@ export default function RestaurantDashboard() {
 
         {/* Transactions feed */}
         <section className="space-y-3">
-          <div className="flex items-center gap-2 text-slate-400 text-sm">
+          <div className="flex items-center gap-2 text-stone-500 text-sm">
             <ReceiptText className="w-4 h-4" />
             <span>{total} transaction{total === 1 ? "" : "s"}</span>
           </div>
 
           {transactions.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-slate-800 py-14 text-center text-slate-500">
+            <div className="rounded-2xl border border-dashed border-stone-300 bg-white/50 py-14 text-center text-stone-400">
               {loading ? "Loading…" : "No transactions here yet"}
             </div>
           )}
@@ -190,34 +190,34 @@ export default function RestaurantDashboard() {
             return (
               <article
                 key={t.paymentId}
-                className="rounded-2xl bg-slate-900 border border-slate-800 p-4"
+                className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-medium">
                       Order #{t.kotMasterId}
                       {t.tableId != null && (
-                        <span className="text-slate-500 font-normal"> · Table {t.tableId}</span>
+                        <span className="text-stone-400 font-normal"> · Table {t.tableId}</span>
                       )}
                     </p>
-                    <p className="text-xs text-slate-500 mt-0.5">
+                    <p className="text-xs text-stone-400 mt-0.5">
                       {t.methodName} · {fmtDate(t.createdAt)}
                     </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-lg font-semibold">{CURRENCY} {fmt(t.paidAmount)}</p>
+                  <div className="text-right shrink-0">
+                    <p className="text-lg font-semibold text-stone-900">{CURRENCY} {fmt(t.paidAmount)}</p>
                     {Number(t.balanceAmount) > 0 && (
-                      <p className="text-xs text-amber-400">balance {fmt(t.balanceAmount)}</p>
+                      <p className="text-xs text-amber-600">balance {fmt(t.balanceAmount)}</p>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-stone-100">
                   <span className={`inline-block px-2.5 py-1 rounded-full text-xs border ${payout.cls}`}>
                     {payout.text}
                   </span>
                   {t.payout?.transferRef && (
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs text-stone-400">
                       Ref {t.payout.transferRef}
                       {t.payout.transferDate &&
                         ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE")}`}
@@ -232,7 +232,7 @@ export default function RestaurantDashboard() {
             <button
               onClick={loadMore}
               disabled={loading}
-              className="w-full flex items-center justify-center gap-1.5 py-3 rounded-2xl border border-slate-800 text-slate-300 hover:bg-slate-900 disabled:opacity-50 text-sm"
+              className="w-full flex items-center justify-center gap-1.5 py-3 rounded-2xl border border-stone-300 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 text-sm"
             >
               <ChevronDown className="w-4 h-4" />
               {loading ? "Loading…" : "Load more"}
@@ -242,7 +242,7 @@ export default function RestaurantDashboard() {
       </main>
 
       {showPasswordModal && (
-        <ChangePasswordModal dark onClose={() => setShowPasswordModal(false)} />
+        <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
       )}
     </div>
   );
