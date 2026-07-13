@@ -1,42 +1,89 @@
 // qrmenu-dashboard/backend/scripts/seed-users.js
-// Creates the initial dashboard logins:
-//   company / company123     (role: company  — sees everything, marks payouts)
-//   opaia   / opaia123       (role: restaurant, ShopID 1 — read-only own data)
-// Change the passwords immediately after first login in production.
+// Creates (or resets) dashboard logins with RANDOM passwords.
+// No passwords are hardcoded anywhere: each run generates fresh ones and
+// prints them ONCE to the console — save them immediately.
+//
+//   npm run seed:users            -> creates missing users only
+//   npm run seed:users -- --reset -> also resets passwords of existing users
+//
+// Optional env overrides (if you want to choose the password yourself):
+//   SEED_COMPANY_PASSWORD / SEED_OPAIA_PASSWORD
 import "dotenv/config";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { query, mssql } from "../config/db.js";
 
+const RESET = process.argv.includes("--reset");
+
+// URL-safe random password, e.g. "xK3n-Vq9pT2m"
+function generatePassword() {
+  return crypto.randomBytes(9).toString("base64url");
+}
+
 const USERS = [
-  { username: "company", password: process.env.SEED_COMPANY_PASSWORD || "company123", role: "company", shopId: null, displayName: "DeynoQR Admin" },
-  { username: "opaia", password: process.env.SEED_OPAIA_PASSWORD || "opaia123", role: "restaurant", shopId: 1, displayName: "Opaia Restaurant" }
+  {
+    username: "company",
+    password: process.env.SEED_COMPANY_PASSWORD || generatePassword(),
+    role: "company",
+    shopId: null,
+    displayName: "DeynoQR Admin"
+  },
+  {
+    username: "opaia",
+    password: process.env.SEED_OPAIA_PASSWORD || generatePassword(),
+    role: "restaurant",
+    shopId: 1,
+    displayName: "Opaia Restaurant"
+  }
 ];
 
 async function main() {
+  const created = [];
+
   for (const u of USERS) {
     const existing = await query(
       `SELECT UserID FROM dbo.DashboardUsers WHERE Username = @username`,
       { username: u.username }
     );
-    if (existing.length) {
-      console.log(`[SEED] User '${u.username}' already exists — skipping.`);
-      continue;
-    }
     const hash = await bcrypt.hash(u.password, 10);
-    await query(
-      `INSERT INTO dbo.DashboardUsers (Username, PasswordHash, Role, ShopID, DisplayName)
-       VALUES (@username, @hash, @role, @shopId, @displayName)`,
-      {
-        username: u.username,
-        hash,
-        role: u.role,
-        shopId: u.shopId != null ? { type: mssql.BigInt, value: u.shopId } : { type: mssql.BigInt, value: null },
-        displayName: u.displayName
+
+    if (existing.length) {
+      if (!RESET) {
+        console.log(`[SEED] User '${u.username}' already exists — skipping (use --reset to regenerate password).`);
+        continue;
       }
-    );
-    console.log(`[SEED] Created user '${u.username}' (${u.role}${u.shopId != null ? `, shop ${u.shopId}` : ""}).`);
+      await query(
+        `UPDATE dbo.DashboardUsers SET PasswordHash = @hash WHERE Username = @username`,
+        { username: u.username, hash }
+      );
+      created.push(u);
+      console.log(`[SEED] Reset password for '${u.username}'.`);
+    } else {
+      await query(
+        `INSERT INTO dbo.DashboardUsers (Username, PasswordHash, Role, ShopID, DisplayName)
+         VALUES (@username, @hash, @role, @shopId, @displayName)`,
+        {
+          username: u.username,
+          hash,
+          role: u.role,
+          shopId: { type: mssql.BigInt, value: u.shopId },
+          displayName: u.displayName
+        }
+      );
+      created.push(u);
+      console.log(`[SEED] Created user '${u.username}' (${u.role}${u.shopId != null ? `, shop ${u.shopId}` : ""}).`);
+    }
   }
-  console.log("[SEED] Done.");
+
+  if (created.length) {
+    console.log("\n================= CREDENTIALS (shown once — save now) =================");
+    for (const u of created) {
+      console.log(`  ${u.username.padEnd(12)} ${u.password}`);
+    }
+    console.log("=======================================================================\n");
+  }
+
+  console.log("[SEED] Done. Users can change their own password from the dashboard.");
   process.exit(0);
 }
 

@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   QrCode, LogOut, RefreshCw, CheckCircle2, Banknote, Clock3, Wallet,
-  ChevronLeft, ChevronRight, X
+  ChevronLeft, ChevronRight, X, KeyRound
 } from "lucide-react";
 import api, { getStoredUser, clearSession } from "../api.js";
+import ChangePasswordModal from "../components/ChangePasswordModal.jsx";
 
 const CURRENCY = "AED";
 
@@ -135,10 +136,11 @@ function TransferModal({ txn, onClose, onDone }) {
   );
 }
 
-export default function Dashboard() {
+export default function CompanyDashboard() {
   const navigate = useNavigate();
   const user = getStoredUser();
   const isCompany = user?.role === "company";
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -253,6 +255,13 @@ export default function Dashboard() {
               title="Refresh"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              className="p-2 rounded-lg text-gray-500 hover:bg-gray-50 border border-gray-200"
+              title="Change password"
+            >
+              <KeyRound className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
@@ -507,6 +516,10 @@ export default function Dashboard() {
             load();
           }}
         />
+      )}
+
+      {showPasswordModal && (
+        <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
       )}
     </div>
   );

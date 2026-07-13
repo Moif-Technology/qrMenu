@@ -2,9 +2,14 @@
 // Connects to the same PaymentGateway database the main qrMenu backend writes to.
 import mssql from "mssql";
 
+if (!process.env.DB_PASSWORD) {
+  console.error("[DASH:DB] DB_PASSWORD is not set. Copy .env.example to .env and fill it in.");
+  process.exit(1);
+}
+
 const baseConfig = {
   user: process.env.DB_USER || "sa",
-  password: process.env.DB_PASSWORD || "motech",
+  password: process.env.DB_PASSWORD,
   server: process.env.DB_SERVER || "MOIF\\SQLEXPRESS",
   port: process.env.DB_PORT ? Number(process.env.DB_PORT) : undefined,
   database: process.env.DB_NAME || "PaymentGateway",

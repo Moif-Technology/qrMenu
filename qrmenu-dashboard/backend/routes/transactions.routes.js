@@ -43,6 +43,9 @@ router.get("/", requireAuth, async (req, res) => {
     }
     if (payoutStatus === "NONE") {
       conditions.push("ps.PayoutID IS NULL");
+    } else if (payoutStatus === "PENDING") {
+      // Payments with no payout row yet are also pending.
+      conditions.push("(ps.PayoutID IS NULL OR ps.Status = 'PENDING')");
     } else if (payoutStatus) {
       conditions.push("ps.Status = @payoutStatus");
       params.payoutStatus = { type: mssql.VarChar(20), value: String(payoutStatus) };
