@@ -20,6 +20,7 @@ function getBasename() {
 }
 export const RESTAURANT_BASE_PATH = "/opaia";
 
+
 const isOpaiaContext =
   typeof window !== "undefined" &&
   window.location.pathname.startsWith("/opaia");
