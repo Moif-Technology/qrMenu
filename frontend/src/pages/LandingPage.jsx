@@ -192,7 +192,7 @@ export default function LandingPage() {
           <div className="hidden md:block w-px h-5 bg-zinc-700/60 mx-0.5" />
 
           <a
-            href="mailto:sabeeh@moiftech.com"
+            href="mailto:info@deynotech.com"
             className="flex-none inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-[13px] font-semibold active:scale-95 transition-all duration-200"
             style={{ background: "#780829" }}
             onMouseEnter={(e) => { e.currentTarget.style.background = "#85203e"; }}
@@ -243,7 +243,7 @@ export default function LandingPage() {
 
               <div className="flex flex-wrap gap-3 mt-8">
                 <a
-                  href="mailto:sabeeh@moiftech.com"
+                  href="mailto:info@deynotech.com"
                   className="inline-flex items-center gap-2.5 px-6 py-3 rounded-full text-white font-semibold text-sm active:scale-[0.97] transition-all duration-200 group"
                   style={{ background: "#780829", boxShadow: "0 6px 20px rgba(120,8,41,0.28)" }}
                   onMouseEnter={(e) => { e.currentTarget.style.background = "#85203e"; }}
@@ -632,7 +632,7 @@ export default function LandingPage() {
                 DeynoQR is built to deploy fast. Most restaurants go live the same day.
               </p>
               <a
-                href="mailto:sabeeh@moiftech.com"
+                href="mailto:info@deynotech.com"
                 className="inline-flex items-center gap-2.5 mt-8 px-6 py-3 rounded-full text-white font-semibold text-sm active:scale-[0.97] transition-all duration-200 group"
                 style={{ background: "#780829" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#85203e"; }}
@@ -799,6 +799,30 @@ export default function LandingPage() {
               ))}
             </div>
           </div>
+
+          {/* Accepted cards + confirmation */}
+          <div className="mt-10 pt-10 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 reveal" style={{ borderColor: "#f1e6e9" }}>
+            <div>
+              <p className="text-[11px] font-semibold tracking-[0.14em] text-zinc-400 uppercase mb-4">
+                Accepted cards
+              </p>
+              <div className="flex items-center gap-2.5">
+                {["Visa", "Mastercard"].map((card) => (
+                  <span
+                    key={card}
+                    className="inline-flex items-center px-3.5 py-2 rounded-lg border text-xs font-bold tracking-wide text-zinc-700"
+                    style={{ borderColor: "#e4cdd4", background: "white" }}
+                  >
+                    {card}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <p className="text-sm text-zinc-500 max-w-sm leading-relaxed">
+              Every order is confirmed instantly on-screen, with a receipt sent by email
+              immediately after payment is completed.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -833,7 +857,7 @@ export default function LandingPage() {
             Contact us to set up DeynoQR for your business. Quick setup, no hardware required.
           </p>
           <a
-            href="mailto:sabeeh@moiftech.com"
+            href="mailto:info@deynotech.com"
             className="inline-flex items-center gap-3 px-8 py-4 rounded-full font-semibold text-sm active:scale-[0.97] transition-all duration-200 group reveal"
             style={{ background: "white", color: "#780829", boxShadow: "0 8px 28px rgba(0,0,0,0.2)" }}
             onMouseEnter={(e) => { e.currentTarget.style.background = "#f1e6e9"; }}
@@ -854,26 +878,43 @@ export default function LandingPage() {
           FOOTER
       ══════════════════════════════════════ */}
       <footer className="py-10 border-t" style={{ background: "#3d0416", borderColor: "rgba(120,8,41,0.4)" }}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-5">
-          <a href="/" className="flex items-center gap-2 group">
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center group-hover:opacity-85 transition-opacity"
-              style={{ background: "#780829", border: "1px solid rgba(255,255,255,0.15)" }}
-            >
-              <QrCode className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-white text-sm">DeynoQR</span>
-          </a>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-5">
+            <a href="/" className="flex items-center gap-2 group">
+              <div
+                className="w-7 h-7 rounded-lg flex items-center justify-center group-hover:opacity-85 transition-opacity"
+                style={{ background: "#780829", border: "1px solid rgba(255,255,255,0.15)" }}
+              >
+                <QrCode className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
+              </div>
+              <span className="font-bold text-white text-sm">DeynoQR</span>
+            </a>
 
-          <nav className="flex items-center gap-5 text-xs" style={{ color: "#c99ca9" }}>
-            <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <a href="#clients" className="hover:text-white transition-colors">Clients</a>
-            <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
-            <a href="#payments" className="hover:text-white transition-colors">Billing</a>
-            <a href="mailto:sabeeh@moiftech.com" className="hover:text-white transition-colors">Contact</a>
-          </nav>
+            <nav className="flex flex-wrap items-center justify-center gap-5 text-xs" style={{ color: "#c99ca9" }}>
+              <a href="#features" className="hover:text-white transition-colors">Features</a>
+              <a href="#clients" className="hover:text-white transition-colors">Clients</a>
+              <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
+              <a href="#payments" className="hover:text-white transition-colors">Billing</a>
+              <a href="/about" className="hover:text-white transition-colors">About Us</a>
+              <a href="/terms" className="hover:text-white transition-colors">Terms</a>
+              <a href="/privacy-policy" className="hover:text-white transition-colors">Privacy</a>
+              <a href="/refund-policy" className="hover:text-white transition-colors">Refund &amp; Cancellation</a>
+              <a href="mailto:info@deynotech.com" className="hover:text-white transition-colors">Contact</a>
+            </nav>
+          </div>
 
-          <p className="text-xs" style={{ color: "#933953" }}>2026 DeynoQR. All rights reserved.</p>
+          <div
+            className="mt-8 pt-6 border-t flex flex-col sm:flex-row items-center justify-between gap-3 text-xs"
+            style={{ borderColor: "rgba(120,8,41,0.4)", color: "#933953" }}
+          >
+            <p>
+              DEYNO TECHNOLOGIES FZE &middot; Sharjah, United Arab Emirates &middot;{" "}
+              <a href="mailto:info@deynotech.com" className="hover:text-white transition-colors">info@deynotech.com</a>
+              {" "}&middot;{" "}
+              <a href="tel:+971542578600" className="hover:text-white transition-colors">+971 54 257 8600</a>
+            </p>
+            <p>2026 DeynoQR. All rights reserved.</p>
+          </div>
         </div>
       </footer>
 
