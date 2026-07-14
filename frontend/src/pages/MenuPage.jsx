@@ -4,7 +4,6 @@ import CartDrawer from "../component/CartDrawer";
 import CategoryTabs from "../component/CategoryTabs";
 import FilterBar from "../component/FilterBar";
 import FloatingCartButton from "../component/FloatingCartButton";
-import ItemCard from "../component/ItemCard";
 import ItemModal from "../component/ItemModal";
 import MenuGrid from "../component/MenuGrid";
 import MenuGroupList from "../component/MenuGroupList";
@@ -167,14 +166,120 @@ function mapRowToItem(row, lang = "en") {
 }
 
 /**
- * Chef's Special of the Week — dark spotlight banner shown above the menu.
- * Config comes from admin settings (title/tagline/dates). The dishes render as
- * standard ItemCards, so ordering (quantity stepper, modifiers, cart) works
- * exactly like anywhere else on the menu.
+ * One featured dish: light card on the paper background, round dish photo
+ * "popping out" above it. Order controls write the same cart lines as the
+ * normal grid cards (same line key), so quantities stay in sync everywhere.
+ */
+function ChefSpecialDishCard({ item, canOrder, lang, onOpen }) {
+  const cartItems = useCart((s) => s.items);
+  const add = useCart((s) => s.add);
+  const inc = useCart((s) => s.inc);
+  const dec = useCart((s) => s.dec);
+  const remove = useCart((s) => s.remove);
+
+  // Same key the cart store builds for a no-modifier line (see cartStore._buildKey)
+  const lineKey = useMemo(() => JSON.stringify({ id: item.id, mods: [] }), [item.id]);
+  const qty = useMemo(
+    () => cartItems.find((x) => x._k === lineKey)?.qty ?? 0,
+    [cartItems, lineKey]
+  );
+
+  const vibrate = (ms = 10) => {
+    if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
+  };
+
+  return (
+    <div className="relative w-[200px] shrink-0 rounded-[22px] border border-[#C9A45C]/35 bg-white/95 px-4 pb-5 pt-[70px] text-center shadow-[0_18px_38px_rgba(58,46,46,0.12)] sm:w-[220px]">
+      {/* dish photo pops out above the card */}
+      <button
+        type="button"
+        onClick={() => onOpen(item)}
+        className="absolute -top-12 left-1/2 -translate-x-1/2"
+        aria-label={`View details for ${item.name}`}
+      >
+        {item.img ? (
+          <img
+            src={item.img}
+            alt={item.name}
+            className="h-28 w-28 rounded-full object-cover shadow-[0_14px_28px_rgba(58,46,46,0.28)] ring-[3px] ring-[#C9A45C]/80 transition-transform duration-200 hover:scale-105"
+            loading="lazy"
+          />
+        ) : (
+          <span className="grid h-28 w-28 place-items-center rounded-full bg-[#F4EDE2] shadow-[0_14px_28px_rgba(58,46,46,0.2)] ring-[3px] ring-[#C9A45C]/60">
+            <Icon name="star" className="h-8 w-8 text-[#C9A45C]" />
+          </span>
+        )}
+        <span className="absolute -bottom-1 -right-1 grid h-8 w-8 place-items-center rounded-full bg-[#17130f] ring-2 ring-white" aria-hidden>
+          <Icon name="star" className="h-4 w-4 text-[#C9A45C]" />
+        </span>
+      </button>
+
+      <button type="button" onClick={() => onOpen(item)} className="block w-full">
+        <h3 className="line-clamp-2 min-h-[2.6em] text-[15px] font-semibold leading-snug text-slate-900">
+          {item.name}
+        </h3>
+      </button>
+      <p className="mt-1 text-[15px] font-bold text-[#8B6F47]">
+        AED {Number(item.price || 0).toFixed(2)}
+      </p>
+
+      {canOrder &&
+        (qty <= 0 ? (
+          <button
+            type="button"
+            onClick={() => {
+              vibrate(12);
+              add(item, []);
+            }}
+            className="mt-3 inline-flex min-h-[40px] w-full touch-manipulation items-center justify-center gap-2 rounded-full bg-[#17130f] px-4 text-[13.5px] font-semibold text-[#C9A45C] shadow-sm transition active:scale-[0.97]"
+          >
+            <Icon name="plus" className="h-4 w-4" strokeWidth={2.25} />
+            {lang === "ar" ? "أضِف إلى الطلب" : "Add to order"}
+          </button>
+        ) : (
+          <div
+            className="mt-3 flex h-[40px] items-stretch overflow-hidden rounded-full border border-stone-200 bg-white shadow-sm"
+            role="group"
+            aria-label={`Quantity controls for ${item.name}`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                vibrate(8);
+                if (qty <= 1) remove(lineKey);
+                else dec(lineKey);
+              }}
+              className="grid flex-1 touch-manipulation place-items-center text-stone-600 transition hover:bg-stone-50 active:bg-stone-100"
+              aria-label={qty <= 1 ? "Remove from cart" : "Decrease quantity"}
+            >
+              <Icon name={qty <= 1 ? "trash" : "minus"} className="h-4 w-4" strokeWidth={2.25} />
+            </button>
+            <span className="flex flex-1 items-center justify-center border-x border-stone-200 text-sm font-semibold tabular-nums text-stone-900">
+              {qty}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                vibrate(8);
+                inc(lineKey);
+              }}
+              className="grid flex-1 touch-manipulation place-items-center text-stone-600 transition hover:bg-stone-50 active:bg-stone-100"
+              aria-label="Increase quantity"
+            >
+              <Icon name="plus" className="h-4 w-4" strokeWidth={2.25} />
+            </button>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/**
+ * Chef's Special of the Week — light, airy spotlight above the menu that sits
+ * directly on the paper background. Config comes from admin settings
+ * (title/tagline/dates); tapping a dish opens the standard ItemModal.
  */
 function ChefSpecialBanner({ items, config, lang, canOrder, onOpen }) {
-  // Same quick-add wiring as MenuGrid, so the cards order identically
-  const add = useCart((s) => s.add);
   if (!items?.length || !config) return null;
   const title = lang === "ar" && config.titleAr ? config.titleAr : config.title;
   const tagline =
@@ -183,38 +288,33 @@ function ChefSpecialBanner({ items, config, lang, canOrder, onOpen }) {
 
   return (
     <section className="mx-auto max-w-6xl px-4 sm:px-6">
-      <div
-        className="relative overflow-hidden rounded-[24px] shadow-[0_18px_40px_rgba(23,19,15,0.35)]"
-        style={{ background: "linear-gradient(135deg, #17130f 0%, #241b12 55%, #17130f 100%)" }}
-      >
-        {/* thin gold frame, echoes the poster look */}
-        <div className="pointer-events-none absolute inset-[10px] z-30 rounded-[16px] border border-[#C9A45C]/35" />
-
-        <div className="relative z-20 px-5 pt-6 sm:px-8 sm:pt-7">
-          <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.28em] text-[#C9A45C] sm:text-[11px]">
+      <div className="text-center">
+        <div className="flex items-center justify-center gap-4">
+          <span className="h-px w-10 bg-gradient-to-r from-transparent to-[#C9A45C]/70 sm:w-16" aria-hidden />
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.3em] text-[#A98230]">
             <Icon name="star" className="h-3.5 w-3.5" />
             {title}
           </p>
-          {tagline && (
-            <p className="mt-1.5 text-[13px] leading-relaxed text-white/65 line-clamp-2 sm:text-sm">
-              {tagline}
-            </p>
-          )}
+          <span className="h-px w-10 bg-gradient-to-l from-transparent to-[#C9A45C]/70 sm:w-16" aria-hidden />
         </div>
+        {tagline && (
+          <p className="mx-auto mt-2 max-w-xl text-[13px] leading-relaxed text-stone-500 line-clamp-2 sm:text-sm">
+            {tagline}
+          </p>
+        )}
+      </div>
 
-        <div className="relative z-20 flex gap-3 overflow-x-auto px-5 pb-6 pt-4 sm:gap-4 sm:px-8 sm:pb-7 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* pt leaves room for the popped-out photos; w-max centers few, scrolls many */}
+      <div className="overflow-x-auto pb-2 pt-16 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="mx-auto flex w-max gap-6 px-2 sm:gap-8">
           {items.map((item) => (
-            <div
+            <ChefSpecialDishCard
               key={item.id}
-              className={`${items.length === 1 ? "w-[270px] sm:w-[310px]" : "w-[235px] sm:w-[265px]"} shrink-0`}
-            >
-              <ItemCard
-                item={item}
-                onOpen={onOpen}
-                onQuickAdd={(prod, selectedMods) => add(prod, selectedMods)}
-                canOrder={canOrder}
-              />
-            </div>
+              item={item}
+              canOrder={canOrder}
+              lang={lang}
+              onOpen={onOpen}
+            />
           ))}
         </div>
       </div>
