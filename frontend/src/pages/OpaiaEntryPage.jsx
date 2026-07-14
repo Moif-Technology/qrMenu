@@ -77,12 +77,10 @@ export default function OpaiaEntryPage() {
 
     try {
       const url = new URL(text);
-      // Same origin — use react-router navigate
-      if (url.origin === window.location.origin) {
-        navigate(url.pathname + url.search + url.hash);
-      } else {
-        window.location.href = text;
-      }
+      // Always do a full page load: the router basename ("/opaia" vs root)
+      // is fixed at module load, so a client-side navigate to a URL from a
+      // different context misses every route and the token is lost.
+      window.location.href = url.href;
     } catch {
       // Not a URL — treat as table token path
       navigate(`/r/${text}`);
