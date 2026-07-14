@@ -1047,7 +1047,7 @@ export default function TableSummaryPremium() {
           setToken(token);
         }
         navigatingAwayRef.current = true;
-        navigate("/");
+        navigate("/menu");
         return;
       }
       // If there are orders, show the payment page (even if not accepted yet)
@@ -1180,7 +1180,7 @@ export default function TableSummaryPremium() {
                                      finalBalanceData.paidStatus === "PAID" &&
                                      !finalIsOnPaymentRoute;
           if (shouldRedirectFinal && !finalBalanceData.hasUnpaidKots && (resolvedLines.length === 0 || allItemsPaidCheck)) {
-            navigate("/");
+            navigate("/menu");
             return;
           }
         } catch (err) {
@@ -1336,7 +1336,7 @@ export default function TableSummaryPremium() {
               </div>
             </div>
             <button
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/menu")}
               className="btn-pill-outline h-9 px-4"
             >
               Menu
