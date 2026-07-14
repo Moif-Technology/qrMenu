@@ -21,7 +21,7 @@ import { log, error as logError } from "../lib/logger";
 import { isOrderMode } from "../lib/orderMode";
 import { getImageMapping, getQrCategories, getQrMenuItems, getSingleProductImageBinary } from "../services/menu.service";
 import { getPackageHeaders } from "../services/package.service";
-import { getPublicSettings } from "../services/settings.service";
+import { getPublicSettings, isChefSpecialActive } from "../services/settings.service";
 import { checkTableOrders } from "../services/payment.service";
 
 // ————————————————————————————————————————————————
@@ -165,6 +165,72 @@ function mapRowToItem(row, lang = "en") {
   };
 }
 
+/**
+ * Chef's Special of the Week — hero banner shown above the menu.
+ * Config comes from admin settings (title/tagline/dates); the dish itself is a
+ * normal menu item, so tapping the banner opens the standard ItemModal.
+ */
+function ChefSpecialBanner({ item, config, lang, onOpen }) {
+  if (!item || !config) return null;
+  const title = lang === "ar" && config.titleAr ? config.titleAr : config.title;
+  const tagline =
+    (lang === "ar" && config.subtitleAr ? config.subtitleAr : config.subtitle) || item.desc || "";
+
+  return (
+    <section className="mx-auto max-w-6xl px-4 sm:px-6">
+      <button
+        type="button"
+        onClick={() => onOpen(item)}
+        className="group relative block w-full overflow-hidden rounded-[24px] text-left shadow-[0_18px_40px_rgba(23,19,15,0.35)] transition-transform active:scale-[0.99]"
+        style={{ background: "linear-gradient(135deg, #17130f 0%, #241b12 55%, #17130f 100%)" }}
+        aria-label={`${title}: ${item.name}`}
+      >
+        {/* thin gold frame, echoes the poster look */}
+        <div className="pointer-events-none absolute inset-[10px] z-10 rounded-[16px] border border-[#C9A45C]/35" />
+
+        <div className="relative flex items-stretch">
+          <div className="relative z-10 flex-1 px-5 py-6 sm:px-8 sm:py-8">
+            <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.28em] text-[#C9A45C] sm:text-[11px]">
+              <Icon name="star" className="h-3.5 w-3.5" />
+              {title}
+            </p>
+            <h3 className="mt-2 text-xl font-semibold leading-tight text-white sm:text-2xl">
+              {item.name}
+            </h3>
+            {tagline && (
+              <p className="mt-2 text-[13px] leading-relaxed text-white/65 line-clamp-2 sm:text-sm">
+                {tagline}
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              {item.price > 0 && (
+                <span className="rounded-full bg-[#C9A45C] px-3.5 py-1.5 text-[13px] font-bold text-[#17130f]">
+                  AED {item.price.toFixed(2)}
+                </span>
+              )}
+              <span className="text-[12px] font-semibold uppercase tracking-[0.18em] text-white/50 transition-colors group-hover:text-white/85">
+                {lang === "ar" ? "اعرض الطبق" : "View dish"}
+              </span>
+            </div>
+          </div>
+
+          {item.img && (
+            <div className="relative min-h-[160px] w-[38%] sm:w-[32%]">
+              <img
+                src={item.img}
+                alt={item.name}
+                className="absolute inset-0 h-full w-full object-cover"
+                loading="lazy"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-[#17130f] via-[#17130f]/35 to-transparent" />
+            </div>
+          )}
+        </div>
+      </button>
+    </section>
+  );
+}
+
 // Map your UI sort keys → API sort keys
 function toApiSort(uiSort) {
   switch (uiSort) {
@@ -286,14 +352,34 @@ export default function MenuPage() {
   const urlOrderOverride = useMemo(() => isOrderMode(), []);
   const orderMode = orderingEnabled || urlOrderOverride;
 
-  // Fetch the admin ordering switch once on mount.
+  // Chef's Special of the Week (admin-configured featured dish)
+  const [chefSpecial, setChefSpecial] = useState(null);      // active config or null
+  const [chefSpecialRow, setChefSpecialRow] = useState(null); // raw dish row from API
+
+  // Fetch the admin settings once on mount (ordering switch + chef's special).
   useEffect(() => {
     let active = true;
     getPublicSettings().then((s) => {
-      if (active) setOrderingEnabled(!!s.orderingEnabled);
+      if (!active) return;
+      setOrderingEnabled(!!s.orderingEnabled);
+      setChefSpecial(isChefSpecialActive(s.chefSpecial) ? s.chefSpecial : null);
     });
     return () => { active = false; };
   }, []);
+
+  // Load the featured dish row (single item). If the dish is no longer on the
+  // menu, the banner simply doesn't render.
+  useEffect(() => {
+    let active = true;
+    if (!chefSpecial?.productId) {
+      setChefSpecialRow(null);
+      return;
+    }
+    getQrMenuItems({ productId: chefSpecial.productId, pageSize: 1 })
+      .then((res) => { if (active) setChefSpecialRow(res?.data?.[0] || null); })
+      .catch(() => { if (active) setChefSpecialRow(null); });
+    return () => { active = false; };
+  }, [chefSpecial?.productId]);
 
   // Dev: show full link details in console when this page is opened from generated link (menu view)
   useEffect(() => {
@@ -347,6 +433,22 @@ export default function MenuPage() {
   const loadingCategoriesRef = useRef(false); // Prevent duplicate getCategories calls
 
   const topLevelCats = useMemo(() => buildTopLevelCategories(qrGroups, lang), [qrGroups, lang]);
+
+  // Mapped Chef's Special item (same shape as grid items, so ItemModal works as-is)
+  const chefSpecialItem = useMemo(
+    () => (chefSpecialRow ? mapRowToItem(chefSpecialRow, lang) : null),
+    [chefSpecialRow, lang]
+  );
+
+  // Tag the featured dish inside the normal grid so its card shows a badge too
+  const displayItems = useMemo(() => {
+    if (!chefSpecial?.productId) return items;
+    const specialId = String(chefSpecial.productId);
+    const badgeTitle = lang === "ar" && chefSpecial.titleAr ? chefSpecial.titleAr : chefSpecial.title;
+    return items.map((it) =>
+      String(it.id) === specialId ? { ...it, isChefSpecial: true, chefSpecialTitle: badgeTitle } : it
+    );
+  }, [items, chefSpecial, lang]);
 
   // Check for ongoing orders when token/tableId is available
   const checkOrders = useCallback(async () => {
@@ -1782,12 +1884,12 @@ export default function MenuPage() {
   );
 
   const groupedSections = useMemo(() => {
-    if (!activeCat?.startsWith("main_group_") || items.length === 0) {
+    if (!activeCat?.startsWith("main_group_") || displayItems.length === 0) {
       return null;
     }
 
     const sectionMap = new Map();
-    items.forEach((item) => {
+    displayItems.forEach((item) => {
       const raw = item._raw || {};
       const groupId = raw["pm.QrGroupID"] || raw["pm_QrGroupID"] || raw.QrGroupID || "ungrouped";
       const groupName = (lang === "ar" && raw["pm.QrGroupDescriptionArabic"])
@@ -1810,7 +1912,7 @@ export default function MenuPage() {
       if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
       return String(a.title).localeCompare(String(b.title));
     });
-  }, [activeCat, items, lang]);
+  }, [activeCat, displayItems, lang]);
 
   const handleGoToPayment = () => {
     if (token) {
@@ -1885,6 +1987,16 @@ export default function MenuPage() {
       )}
 
       <main className="relative pb-24 pt-6">
+        {/* Chef's Special of the Week — featured dish banner */}
+        {chefSpecialItem && search.trim().length === 0 && (
+          <ChefSpecialBanner
+            item={chefSpecialItem}
+            config={chefSpecial}
+            lang={lang}
+            onOpen={openModal}
+          />
+        )}
+
         {/* Search section hidden */}
         {/* <section className="relative overflow-hidden pt-6 pb-8">
           <div
@@ -2056,7 +2168,7 @@ export default function MenuPage() {
         </section>
       ) : items.length > 0 ? (
         <MenuGrid
-          items={items}
+          items={displayItems}
           onQuickAdd={undefined}
           onOpen={openModal}
           categoryKey={activeCat}

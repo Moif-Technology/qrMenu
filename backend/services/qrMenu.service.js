@@ -1381,6 +1381,7 @@ export async function getQrMenuItems({
   qrMainGroupId = null,
   qrGroupId = null,
   qrSubgroupId = null,
+  productId = null,
   sort = "new",
 }) {
   const pool = await connectToDb();
@@ -1418,7 +1419,13 @@ export async function getQrMenuItems({
     whereClause += ` AND qpm.${q("QrSubgroupID")} = @qrSubgroupId`;
     request.input("qrSubgroupId", mssql.BigInt, qrSubgroupId);
   }
-  
+
+  if (productId) {
+    // Fetch a single dish by ProductID (used by the Chef's Special banner)
+    whereClause += ` AND qpm.${q("ProductID")} = @productId`;
+    request.input("productId", mssql.BigInt, productId);
+  }
+
   // Determine ORDER BY
   let orderBy = `qpm.${q("ModOn")} DESC, qpm.${q("CrOn")} DESC`;
   if (qrMainGroupId && sort === "new") {

@@ -12,11 +12,13 @@ const T_SETTINGS = "dbo.QrAppSettings";
 const KEYS = {
   ORDERING_ENABLED: "OrderingEnabled",
   KOT_ROUTING: "KotRouting",
+  CHEF_SPECIAL: "ChefSpecial",
 };
 
 const DEFAULTS = {
   orderingEnabled: false,
   kotRouting: "kitchen", // direct-to-kitchen by default (existing behaviour)
+  chefSpecial: null,
 };
 
 let tableReady = false;
@@ -31,12 +33,51 @@ async function ensureTable() {
         SettingValue NVARCHAR(500) NULL
       );
     END
+    ELSE IF EXISTS (
+      SELECT 1 FROM sys.columns
+      WHERE object_id = OBJECT_ID('${T_SETTINGS}') AND name = 'SettingValue' AND max_length <> -1
+    )
+    BEGIN
+      -- Widen value column so JSON settings (e.g. ChefSpecial) fit comfortably.
+      ALTER TABLE ${T_SETTINGS} ALTER COLUMN SettingValue NVARCHAR(MAX) NULL;
+    END
   `);
   tableReady = true;
 }
 
 function normalizeKotRouting(v) {
   return String(v || "").trim().toLowerCase() === "counter" ? "counter" : "kitchen";
+}
+
+/**
+ * Chef's Special of the Week — featured-dish spotlight stored as one JSON value.
+ * Shape: { productId, title, titleAr, subtitle, subtitleAr, from, until }
+ * `null` (or missing/invalid) means the feature is off.
+ */
+function normalizeChefSpecial(v) {
+  if (v == null) return null;
+  const src = typeof v === "string" ? (() => { try { return JSON.parse(v); } catch { return null; } })() : v;
+  if (!src || typeof src !== "object") return null;
+
+  const productId = Number(src.productId);
+  if (!Number.isFinite(productId) || productId <= 0) return null;
+
+  const str = (x, max = 200) => {
+    const s = String(x ?? "").trim();
+    return s ? s.slice(0, max) : "";
+  };
+  // Dates kept as YYYY-MM-DD strings; empty means open-ended.
+  const date = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x ?? "").trim()) ? String(x).trim() : "");
+
+  return {
+    productId,
+    title: str(src.title) || "Chef's Special of the Week",
+    titleAr: str(src.titleAr),
+    subtitle: str(src.subtitle, 300),
+    subtitleAr: str(src.subtitleAr, 300),
+    from: date(src.from),
+    until: date(src.until),
+  };
 }
 
 /** Returns parsed settings with safe defaults applied. */
@@ -47,10 +88,12 @@ export async function getSettings() {
 
   const orderingRaw = map.get(KEYS.ORDERING_ENABLED);
   const kotRaw = map.get(KEYS.KOT_ROUTING);
+  const chefSpecialRaw = map.get(KEYS.CHEF_SPECIAL);
 
   return {
     orderingEnabled: orderingRaw == null ? DEFAULTS.orderingEnabled : String(orderingRaw) === "1",
     kotRouting: kotRaw == null ? DEFAULTS.kotRouting : normalizeKotRouting(kotRaw),
+    chefSpecial: chefSpecialRaw == null ? DEFAULTS.chefSpecial : normalizeChefSpecial(chefSpecialRaw),
   };
 }
 
@@ -76,6 +119,11 @@ export async function updateSettings(patch = {}) {
   }
   if (patch.kotRouting !== undefined) {
     await upsert(KEYS.KOT_ROUTING, normalizeKotRouting(patch.kotRouting));
+  }
+  if (patch.chefSpecial !== undefined) {
+    // null clears the feature; otherwise store the sanitized JSON.
+    const normalized = normalizeChefSpecial(patch.chefSpecial);
+    await upsert(KEYS.CHEF_SPECIAL, normalized ? JSON.stringify(normalized) : null);
   }
 
   return getSettings();

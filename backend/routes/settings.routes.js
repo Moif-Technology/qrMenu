@@ -21,12 +21,16 @@ router.get("/settings", async (_req, res) => {
 
 /**
  * PUT /api/settings  (admin only)
- * Body: { orderingEnabled?: boolean, kotRouting?: "kitchen" | "counter" }
+ * Body: {
+ *   orderingEnabled?: boolean,
+ *   kotRouting?: "kitchen" | "counter",
+ *   chefSpecial?: { productId, title?, titleAr?, subtitle?, subtitleAr?, from?, until? } | null
+ * }
  */
 router.put("/settings", requireAdmin, async (req, res) => {
   try {
-    const { orderingEnabled, kotRouting } = req.body || {};
-    const settings = await updateSettings({ orderingEnabled, kotRouting });
+    const { orderingEnabled, kotRouting, chefSpecial } = req.body || {};
+    const settings = await updateSettings({ orderingEnabled, kotRouting, chefSpecial });
     res.json({ ok: true, settings });
   } catch (e) {
     console.error("[/settings PUT] ERROR", e?.message || e);

@@ -109,6 +109,7 @@ export async function getQrCategories() {
  * @param {number} params.qrMainGroupId
  * @param {number} params.qrGroupId
  * @param {number} params.qrSubgroupId
+ * @param {number} params.productId - fetch a single dish by ProductID (Chef's Special banner)
  * @param {"new"|"name"|"id_desc"|"id_asc"} params.sort
  */
 export async function getQrMenuItems(params = {}) {
@@ -119,6 +120,7 @@ export async function getQrMenuItems(params = {}) {
     qrMainGroupId,
     qrGroupId,
     qrSubgroupId,
+    productId,
     sort = "new"
   } = params;
 
@@ -130,6 +132,7 @@ export async function getQrMenuItems(params = {}) {
       qrMainGroupId,
       qrGroupId,
       qrSubgroupId,
+      productId,
       sort
     }
   });
