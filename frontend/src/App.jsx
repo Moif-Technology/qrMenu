@@ -43,6 +43,10 @@ const OpaiaEntryPage = lazy(() => import("./pages/OpaiaEntryPage"));
 // Coming soon page for restaurants not yet live
 const LaunchingSoonPage = lazy(() => import("./pages/LaunchingSoonPage"));
 
+// Company info / legal pages
+const AboutUsPage = lazy(() => import("./pages/AboutUsPage"));
+const RefundPolicyPage = lazy(() => import("./pages/RefundPolicyPage"));
+
 // Existing restaurant pages
 const MenuPage = lazy(() => import("./pages/MenuPage"));
 const PackageDetailsPage = lazy(() => import("./pages/PackageDetailsPage"));
@@ -99,6 +103,10 @@ export default function App() {
                 <OpaiaEntryPage />
               }
             />
+
+            {/* ── Company info / legal (public, unprefixed) ── */}
+            <Route path="/about" element={<AboutUsPage />} />
+            <Route path="/refund-policy" element={<RefundPolicyPage />} />
 
             {/* ── Restaurant menu ──
                 In the opaia context: URL = /opaia/menu  → MenuPage
