@@ -357,13 +357,14 @@ function ItemCard({
 
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[rgba(17,24,39,0.55)] via-transparent to-transparent" />
 
+        {/* z-20 keeps the badge above the dish photo (image renders with z-10) */}
         {item.isChefSpecial ? (
-            <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full border border-[#C9A45C]/70 bg-[#17130f]/90 px-3 py-1 text-[11px] font-bold text-[#C9A45C] shadow">
+            <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full border border-[#C9A45C]/70 bg-[#17130f]/90 px-3 py-1 text-[11px] font-bold text-[#C9A45C] shadow">
               <Icon name="star" className="h-3 w-3" />
               <span className="max-w-[160px] truncate">{item.chefSpecialTitle || "Chef's Special"}</span>
             </div>
         ) : groupDesc && (
-            <div className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-3 py-1 text-[11px] font-medium shadow" style={{ color: 'var(--text-primary)' }}>
+            <div className="absolute left-3 top-3 z-20 rounded-full border border-white/50 bg-white/80 px-3 py-1 text-[11px] font-medium shadow" style={{ color: 'var(--text-primary)' }}>
             {groupDesc}
           </div>
         )}
