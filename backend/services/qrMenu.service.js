@@ -1382,6 +1382,7 @@ export async function getQrMenuItems({
   qrGroupId = null,
   qrSubgroupId = null,
   productId = null,
+  productIds = null,
   sort = "new",
 }) {
   const pool = await connectToDb();
@@ -1426,6 +1427,13 @@ export async function getQrMenuItems({
     // Fetch a single dish by ProductID (used by the Chef's Special banner)
     whereClause += ` AND qpm.${q("ProductID")} = @productId`;
     request.input("productId", mssql.BigInt, productId);
+  }
+
+  if (Array.isArray(productIds) && productIds.length > 0) {
+    // Fetch a specific set of dishes (Chef's Special with multiple picks)
+    const placeholders = productIds.map((_, i) => `@productIdIn${i}`);
+    whereClause += ` AND qpm.${q("ProductID")} IN (${placeholders.join(", ")})`;
+    productIds.forEach((id, i) => request.input(`productIdIn${i}`, mssql.BigInt, id));
   }
 
   // Determine ORDER BY
@@ -1612,21 +1620,34 @@ export async function getQrMenuItems({
     countWhereClause += ` AND (
       qpm.${q("Description")} LIKE @search OR
       qpm.${q("DescriptionArabic")} LIKE @search OR
+      qpm.${q("ShortDescription")} LIKE @search OR
+      qpm.${q("BarCode")} LIKE @search OR
       CAST(qpm.${q("ProductID")} AS NVARCHAR(50)) LIKE @search
     )`;
     countRequest.input("search", mssql.NVarChar, `%${search}%`);
   }
-  
+
   if (qrGroupId) {
     countWhereClause += ` AND qpm.${q("QrGroupID")} = @qrGroupId`;
     countRequest.input("qrGroupId", mssql.BigInt, qrGroupId);
   }
-  
+
   if (qrSubgroupId) {
     countWhereClause += ` AND qpm.${q("QrSubgroupID")} = @qrSubgroupId`;
     countRequest.input("qrSubgroupId", mssql.BigInt, qrSubgroupId);
   }
-  
+
+  if (productId) {
+    countWhereClause += ` AND qpm.${q("ProductID")} = @productId`;
+    countRequest.input("productId", mssql.BigInt, productId);
+  }
+
+  if (Array.isArray(productIds) && productIds.length > 0) {
+    const placeholders = productIds.map((_, i) => `@productIdIn${i}`);
+    countWhereClause += ` AND qpm.${q("ProductID")} IN (${placeholders.join(", ")})`;
+    productIds.forEach((id, i) => countRequest.input(`productIdIn${i}`, mssql.BigInt, id));
+  }
+
   const countSql = `
     SELECT COUNT(*) AS total
     FROM ${T_QR_PRODUCT_MASTER} qpm WITH (NOLOCK)

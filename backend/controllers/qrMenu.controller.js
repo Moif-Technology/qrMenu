@@ -338,7 +338,13 @@ export async function getQrCategories(req, res, next) {
  */
 export async function getQrMenuItemsController(req, res, next) {
   try {
-    const { page = 1, pageSize = 24, search = "", qrMainGroupId, qrGroupId, qrSubgroupId, productId, sort = "new", _t } = req.query;
+    const { page = 1, pageSize = 24, search = "", qrMainGroupId, qrGroupId, qrSubgroupId, productId, productIds, sort = "new", _t } = req.query;
+
+    // productIds: comma-separated ProductID list (Chef's Special multi-pick)
+    const productIdList = String(productIds || "")
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
 
     // If cache-busting timestamp is provided, skip cache
     const skipCache = _t !== undefined;
@@ -347,7 +353,7 @@ export async function getQrMenuItemsController(req, res, next) {
     const hasSearch = search && search.trim().length > 0;
     const cacheKey = (hasSearch || skipCache)
       ? null // Don't cache search results or when cache-busting
-      : `qr-menu-items:${qrMainGroupId || 'all'}:${qrGroupId || 'all'}:${qrSubgroupId || 'all'}:${productId || 'all'}:${page}:${pageSize}:${sort}`;
+      : `qr-menu-items:${qrMainGroupId || 'all'}:${qrGroupId || 'all'}:${qrSubgroupId || 'all'}:${productId || 'all'}:${productIdList.join('_') || 'all'}:${page}:${pageSize}:${sort}`;
     
     // Check cache first (only if not skipping cache)
     let result = (!skipCache && cacheKey) ? qrMenuCache.get(cacheKey) : null;
@@ -368,6 +374,7 @@ export async function getQrMenuItemsController(req, res, next) {
         qrGroupId: qrGroupId ? Number(qrGroupId) : null,
         qrSubgroupId: qrSubgroupId ? Number(qrSubgroupId) : null,
         productId: productId ? Number(productId) : null,
+        productIds: productIdList.length > 0 ? productIdList : null,
         sort
       });
       

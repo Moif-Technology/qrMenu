@@ -3,12 +3,19 @@ import { API } from "../lib/api";
 
 const DEFAULTS = { orderingEnabled: false, kotRouting: "kitchen", chefSpecial: null };
 
+/** Normalized ProductID list from a chefSpecial config (handles legacy single productId). */
+export function chefSpecialIds(cs) {
+  if (!cs) return [];
+  if (Array.isArray(cs.productIds)) return cs.productIds.filter(Boolean);
+  return cs.productId ? [cs.productId] : [];
+}
+
 /**
  * True when the Chef's Special config is currently live (within its date range).
- * cs: { productId, title, titleAr, subtitle, subtitleAr, from, until } | null
+ * cs: { productIds: number[], title, titleAr, subtitle, subtitleAr, from, until } | null
  */
 export function isChefSpecialActive(cs, now = new Date()) {
-  if (!cs || !cs.productId) return false;
+  if (chefSpecialIds(cs).length === 0) return false;
   const today = now.toISOString().slice(0, 10); // YYYY-MM-DD, matches stored format
   if (cs.from && today < cs.from) return false;
   if (cs.until && today > cs.until) return false;

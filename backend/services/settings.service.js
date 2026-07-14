@@ -51,7 +51,8 @@ function normalizeKotRouting(v) {
 
 /**
  * Chef's Special of the Week — featured-dish spotlight stored as one JSON value.
- * Shape: { productId, title, titleAr, subtitle, subtitleAr, from, until }
+ * Shape: { productIds: number[], title, titleAr, subtitle, subtitleAr, from, until }
+ * Legacy single `productId` values are upgraded to a one-element array.
  * `null` (or missing/invalid) means the feature is off.
  */
 function normalizeChefSpecial(v) {
@@ -59,8 +60,15 @@ function normalizeChefSpecial(v) {
   const src = typeof v === "string" ? (() => { try { return JSON.parse(v); } catch { return null; } })() : v;
   if (!src || typeof src !== "object") return null;
 
-  const productId = Number(src.productId);
-  if (!Number.isFinite(productId) || productId <= 0) return null;
+  const rawIds = Array.isArray(src.productIds)
+    ? src.productIds
+    : src.productId != null
+    ? [src.productId]
+    : [];
+  const productIds = [...new Set(
+    rawIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
+  )].slice(0, 8); // hard cap so the banner stays a spotlight, not a category
+  if (productIds.length === 0) return null;
 
   const str = (x, max = 200) => {
     const s = String(x ?? "").trim();
@@ -70,7 +78,7 @@ function normalizeChefSpecial(v) {
   const date = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x ?? "").trim()) ? String(x).trim() : "");
 
   return {
-    productId,
+    productIds,
     title: str(src.title) || "Chef's Special of the Week",
     titleAr: str(src.titleAr),
     subtitle: str(src.subtitle, 300),
