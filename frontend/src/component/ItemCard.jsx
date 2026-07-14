@@ -569,7 +569,12 @@ export default memo(ItemCard, (prevProps, nextProps) => {
   if (prevName !== nextName) return false;
   if (prevDesc !== nextDesc) return false;
   if (prevPrice !== nextPrice) return false;
-  
+  // Chef's Special flag arrives async (settings load after items render)
+  if (prevProps.item?.isChefSpecial !== nextProps.item?.isChefSpecial) return false;
+  if (prevProps.item?.chefSpecialTitle !== nextProps.item?.chefSpecialTitle) return false;
+  // Ordering switch also loads async from settings
+  if (prevProps.canOrder !== nextProps.canOrder) return false;
+
   // No changes - skip re-render
   return true;
 });
