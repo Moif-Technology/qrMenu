@@ -1400,6 +1400,8 @@ export async function getQrMenuItems({
     whereClause += ` AND (
       qpm.${q("Description")} LIKE @search OR
       qpm.${q("DescriptionArabic")} LIKE @search OR
+      qpm.${q("ShortDescription")} LIKE @search OR
+      qpm.${q("BarCode")} LIKE @search OR
       CAST(qpm.${q("ProductID")} AS NVARCHAR(50)) LIKE @search
     )`;
     request.input("search", mssql.NVarChar, `%${search}%`);

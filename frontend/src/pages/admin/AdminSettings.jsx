@@ -330,11 +330,16 @@ function ChefSpecialEditor({ value, saving, disabled, onSave }) {
                   placeholder="Search menu dishes…"
                   className={`${inputCls} pl-9`}
                 />
-                {(searching || results.length > 0) && (
+                {(searching || query.trim().length >= 2) && (
                   <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-[var(--line)] bg-white shadow-lg">
                     {searching && (
                       <div className="flex items-center gap-2 px-3 py-2.5 text-[13px] text-[var(--ink-faint)]">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching…
+                      </div>
+                    )}
+                    {!searching && results.length === 0 && (
+                      <div className="px-3 py-2.5 text-[13px] text-[var(--ink-faint)]">
+                        No dishes found for “{query.trim()}” — try the name as it appears on the menu.
                       </div>
                     )}
                     {!searching &&
