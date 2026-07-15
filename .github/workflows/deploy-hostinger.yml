@@ -27,7 +27,7 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Deploy to Hostinger via FTP
+      - name: Deploy to Hostinger via FTP (root domain)
         uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:
           server: ${{ secrets.FTP_SERVER }}
@@ -36,5 +36,12 @@ jobs:
           local-dir: frontend/dist/
           server-dir: /public_html/
           dangerous-clean-slate: true
-          exclude: |
-            /app/**
+
+      - name: Deploy to Hostinger via FTP (app subdomain)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: frontend/dist/
+          server-dir: /public_html/app/
