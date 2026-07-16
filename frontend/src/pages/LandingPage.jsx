@@ -928,16 +928,39 @@ export default function LandingPage() {
             </nav>
           </div>
 
+          {/* Contact / office addresses (bank website requirement: complete office address) */}
+          <div
+            className="mt-8 pt-6 border-t grid sm:grid-cols-2 lg:grid-cols-3 gap-6 text-xs leading-relaxed"
+            style={{ borderColor: "rgba(120,8,41,0.4)", color: "#c99ca9" }}
+          >
+            <div>
+              <p className="font-semibold text-white mb-1.5">Sharjah (Registered Office)</p>
+              <p>DEYNO TECHNOLOGIES FZE</p>
+              <p>Office No. 08, Business Center</p>
+              <p>Sharjah Publishing City Free Zone (SPCFZ)</p>
+              <p>P.O. Box 502449, Sharjah, United Arab Emirates</p>
+            </div>
+            <div>
+              <p className="font-semibold text-white mb-1.5">Abu Dhabi Office</p>
+              <p>Office 83, Al Hashim Building</p>
+              <p>Al Kawakib Street, Musaffah M39</p>
+              <p>Abu Dhabi 20319, United Arab Emirates</p>
+            </div>
+            <div>
+              <p className="font-semibold text-white mb-1.5">Contact</p>
+              <p>
+                <a href="mailto:info@deynotech.com" className="hover:text-white transition-colors">info@deynotech.com</a>
+              </p>
+              <p>
+                <a href="tel:+971542578600" className="hover:text-white transition-colors">+971 54 257 8600</a>
+              </p>
+            </div>
+          </div>
+
           <div
             className="mt-8 pt-6 border-t flex flex-col sm:flex-row items-center justify-between gap-3 text-xs"
             style={{ borderColor: "rgba(120,8,41,0.4)", color: "#933953" }}
           >
-            <p>
-              DEYNO TECHNOLOGIES FZE &middot; Sharjah, United Arab Emirates &middot;{" "}
-              <a href="mailto:info@deynotech.com" className="hover:text-white transition-colors">info@deynotech.com</a>
-              {" "}&middot;{" "}
-              <a href="tel:+971542578600" className="hover:text-white transition-colors">+971 54 257 8600</a>
-            </p>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center justify-center h-8 px-2.5 rounded-md bg-white" aria-label="Visa">

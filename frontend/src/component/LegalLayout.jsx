@@ -77,21 +77,40 @@ export function LegalSection({ id, title, children }) {
 
 export function ContactCard() {
   return (
-    <div className="rounded-2xl border p-5 space-y-1.5" style={{ borderColor: "rgba(120,8,41,0.2)", background: "#f1e6e9" }}>
+    <div className="rounded-2xl border p-5 space-y-4" style={{ borderColor: "rgba(120,8,41,0.2)", background: "#f1e6e9" }}>
       <p className="font-semibold text-zinc-900">DEYNO TECHNOLOGIES FZE</p>
-      <p>Sharjah, United Arab Emirates</p>
-      <p>
-        Email:{" "}
-        <a href="mailto:info@deynotech.com" className="font-medium hover:underline" style={{ color: "#780829" }}>
-          info@deynotech.com
-        </a>
-      </p>
-      <p>
-        Phone:{" "}
-        <a href="tel:+971542578600" className="font-medium hover:underline" style={{ color: "#780829" }}>
-          +971 54 257 8600
-        </a>
-      </p>
+
+      <div className="grid sm:grid-cols-2 gap-4">
+        <div className="space-y-0.5">
+          <p className="font-medium text-zinc-900">Sharjah (Registered Office)</p>
+          <p>Office No. 08, Business Center</p>
+          <p>Sharjah Publishing City Free Zone (SPCFZ)</p>
+          <p>P.O. Box 502449, Sharjah</p>
+          <p>United Arab Emirates</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="font-medium text-zinc-900">Abu Dhabi Office</p>
+          <p>Office 83, Al Hashim Building</p>
+          <p>Al Kawakib Street, Musaffah M39</p>
+          <p>Abu Dhabi 20319</p>
+          <p>United Arab Emirates</p>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <p>
+          Email:{" "}
+          <a href="mailto:info@deynotech.com" className="font-medium hover:underline" style={{ color: "#780829" }}>
+            info@deynotech.com
+          </a>
+        </p>
+        <p>
+          Phone:{" "}
+          <a href="tel:+971542578600" className="font-medium hover:underline" style={{ color: "#780829" }}>
+            +971 54 257 8600
+          </a>
+        </p>
+      </div>
     </div>
   );
 }
