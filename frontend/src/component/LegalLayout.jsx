@@ -60,6 +60,17 @@ export default function LegalLayout({ title, toc, children, pageTitle }) {
       </main>
 
       <footer className="py-8 border-t text-center text-xs" style={{ background: "#3d0416", borderColor: "rgba(120,8,41,0.4)", color: "#933953" }}>
+        <div className="flex items-center justify-center gap-2 mb-4">
+          {[
+            { src: "/visacard.svg", alt: "Visa" },
+            { src: "/mastercard.svg", alt: "Mastercard" },
+            { src: "/americanexpress.svg", alt: "American Express" },
+          ].map(({ src, alt }) => (
+            <span key={alt} className="inline-flex items-center justify-center h-8 px-2 rounded-md bg-white">
+              <img src={src} alt={alt} className="h-5 w-auto" loading="lazy" />
+            </span>
+          ))}
+        </div>
         2026 DeynoQR. All rights reserved.
       </footer>
     </div>
