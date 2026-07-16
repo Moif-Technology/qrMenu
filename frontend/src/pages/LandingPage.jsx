@@ -145,6 +145,26 @@ const smallFeatures = [
   },
 ];
 
+/* Card scheme acceptance marks (Telr/bank website requirement:
+   accepted card logos must be visible on the home page) */
+function VisaLogo({ className }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Visa" fill="#1A1F71">
+      <path d="M9.112 8.262 5.97 15.758H3.92L2.374 9.775c-.094-.368-.175-.503-.461-.658C1.447 8.864.677 8.627 0 8.479l.046-.217h3.3a.904.904 0 0 1 .894.764l.817 4.338 2.018-5.102h2.037zm8.033 5.049c.008-1.979-2.736-2.088-2.717-2.972.006-.269.262-.555.822-.628a3.66 3.66 0 0 1 1.913.336l.34-1.59a5.207 5.207 0 0 0-1.814-.333c-1.917 0-3.266 1.02-3.278 2.479-.012 1.079.963 1.68 1.698 2.04.756.367 1.01.603 1.006.931-.005.504-.602.725-1.16.734-.975.015-1.54-.263-1.992-.473l-.351 1.642c.453.208 1.289.39 2.156.398 2.037 0 3.37-1.006 3.377-2.564m5.061 2.447H24l-1.565-7.496h-1.656a.883.883 0 0 0-.826.55l-2.909 6.946h2.036l.405-1.12h2.488zm-2.163-2.656 1.02-2.815.588 2.815zm-8.16-4.84-1.603 7.496H8.34l1.605-7.496z" />
+    </svg>
+  );
+}
+
+function MastercardLogo({ className }) {
+  return (
+    <svg viewBox="0 0 48 30" className={className} role="img" aria-label="Mastercard">
+      <circle cx="19" cy="15" r="14" fill="#EB001B" />
+      <circle cx="29" cy="15" r="14" fill="#F79E1B" />
+      <path d="M24 1.92 A14 14 0 0 1 24 28.08 A14 14 0 0 1 24 1.92 Z" fill="#FF5F00" />
+    </svg>
+  );
+}
+
 export default function LandingPage() {
   useScrollSmooth();
   useReveal();
@@ -804,23 +824,28 @@ export default function LandingPage() {
           <div className="mt-10 pt-10 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 reveal" style={{ borderColor: "#f1e6e9" }}>
             <div>
               <p className="text-[11px] font-semibold tracking-[0.14em] text-zinc-400 uppercase mb-4">
-                Accepted cards
+                We accept
               </p>
               <div className="flex items-center gap-2.5">
-                {["Visa", "Mastercard"].map((card) => (
-                  <span
-                    key={card}
-                    className="inline-flex items-center px-3.5 py-2 rounded-lg border text-xs font-bold tracking-wide text-zinc-700"
-                    style={{ borderColor: "#e4cdd4", background: "white" }}
-                  >
-                    {card}
-                  </span>
-                ))}
+                <span
+                  className="inline-flex items-center justify-center h-11 px-4 rounded-lg border"
+                  style={{ borderColor: "#e4cdd4", background: "white" }}
+                  aria-label="Visa"
+                >
+                  <VisaLogo className="h-4 w-auto" />
+                </span>
+                <span
+                  className="inline-flex items-center justify-center h-11 px-4 rounded-lg border"
+                  style={{ borderColor: "#e4cdd4", background: "white" }}
+                  aria-label="Mastercard"
+                >
+                  <MastercardLogo className="h-6 w-auto" />
+                </span>
               </div>
             </div>
             <p className="text-sm text-zinc-500 max-w-sm leading-relaxed">
-              Every order is confirmed instantly on-screen, with a receipt sent by email
-              immediately after payment is completed.
+              Every order is confirmed instantly on-screen, and a payment confirmation
+              is sent to the customer by email within 24 hours of payment.
             </p>
           </div>
         </div>
@@ -913,7 +938,17 @@ export default function LandingPage() {
               {" "}&middot;{" "}
               <a href="tel:+971542578600" className="hover:text-white transition-colors">+971 54 257 8600</a>
             </p>
-            <p>2026 DeynoQR. All rights reserved.</p>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center h-8 px-2.5 rounded-md bg-white" aria-label="Visa">
+                  <VisaLogo className="h-3 w-auto" />
+                </span>
+                <span className="inline-flex items-center justify-center h-8 px-2.5 rounded-md bg-white" aria-label="Mastercard">
+                  <MastercardLogo className="h-4 w-auto" />
+                </span>
+              </div>
+              <p>2026 DeynoQR. All rights reserved.</p>
+            </div>
           </div>
         </div>
       </footer>

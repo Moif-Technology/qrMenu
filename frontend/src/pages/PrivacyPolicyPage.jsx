@@ -14,10 +14,13 @@ export default function PrivacyPolicyPage() {
     <LegalLayout title="Privacy Policy" toc={toc} pageTitle="Privacy Policy - DeynoQR">
       <LegalSection id="card-data" title="Card data">
         <p>
-          DeynoQR does not store credit or debit card details on its own servers, nor does it
-          share card details with third parties. All card payments are processed directly through
-          our approved third-party payment gateway and acquiring bank, in accordance with
-          applicable payment security standards.
+          All credit/debit cards&apos; details and personally identifiable information will NOT
+          be stored, sold, shared, rented or leased to any third parties.
+        </p>
+        <p>
+          DeynoQR does not store credit or debit card details on its own servers. All card
+          payments are processed directly through our approved third-party payment gateway and
+          acquiring bank, in accordance with applicable payment security standards.
         </p>
       </LegalSection>
 

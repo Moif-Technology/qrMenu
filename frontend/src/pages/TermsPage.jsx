@@ -6,6 +6,7 @@ const toc = [
   { id: "payments", label: "Payment methods and currency" },
   { id: "eligibility", label: "Eligibility" },
   { id: "cardholder", label: "Cardholder obligations" },
+  { id: "confirmation", label: "Payment confirmation" },
   { id: "account", label: "Account and confidentiality" },
   { id: "pricing", label: "Pricing and checkout" },
   { id: "ownership", label: "Company and ownership" },
@@ -20,6 +21,11 @@ export default function TermsPage() {
           United Arab Emirates is our country of domicile. These Terms and Conditions, and any
           use of the DeynoQR platform, are governed by and construed in accordance with the laws
           of the United Arab Emirates.
+        </p>
+        <p>
+          Any purchase, dispute or claim arising out of or in connection with this website shall
+          be governed and construed in accordance with the laws of the United Arab Emirates
+          (UAE).
         </p>
       </LegalSection>
 
@@ -56,9 +62,24 @@ export default function TermsPage() {
 
       <LegalSection id="cardholder" title="Cardholder obligations">
         <p>
+          The cardholder must retain a copy of transaction records and{" "}
+          <a href="https://deynoqr.com/" className="font-medium hover:underline" style={{ color: "#780829" }}>
+            https://deynoqr.com/
+          </a>{" "}
+          policies and rules.
+        </p>
+        <p>
           Cardholders are responsible for maintaining their own records of transactions made
           through the DeynoQR platform, including order confirmations and payment receipts, for
           their reference and in the event of a dispute.
+        </p>
+      </LegalSection>
+
+      <LegalSection id="confirmation" title="Payment confirmation">
+        <p>
+          Once the payment is made, the confirmation notice will be sent to the customer via
+          email within 24 hours of receipt of payment. In addition, an on-screen confirmation is
+          displayed on the DeynoQR platform immediately after a successful transaction.
         </p>
       </LegalSection>
 
