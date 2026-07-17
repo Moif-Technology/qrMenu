@@ -23,6 +23,13 @@ import { useCart } from "../store/cartStore";
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
+// TEMP: when false, all payment UI (split sheets, pay buttons, payment methods
+// sheet) stays fully browsable, but the final Telr gateway redirect is blocked.
+const TELR_REDIRECT_ENABLED = false;
+
+// Customer convenience/service fee rate (Terms → Pricing and description: up to 3.5%)
+const SERVICE_FEE_RATE = 0.035;
+
 /* ── Item row ─────────────────────────────────────────── */
 function ItemRow({ item, currency = "AED", paidKotChildIds = [] }) {
   const qty = Number(item.Qty || 0);
@@ -368,6 +375,10 @@ export default function TableSummaryPremium() {
   const [showEqualSheet, setShowEqualSheet] = useState(false);
   const [showPickItems, setShowPickItems] = useState(false);
   const [showCustomSheet, setShowCustomSheet] = useState(false);
+
+  // Tip: preset amount (AED) or custom entry
+  const [tipPreset, setTipPreset] = useState(null); // number | "custom" | null
+  const [customTip, setCustomTip] = useState("");
   const [showEqualSplitModal, setShowEqualSplitModal] = useState(false);
   const [showPaymentComplete, setShowPaymentComplete] = useState(false);
   const [paymentCompleteData, setPaymentCompleteData] = useState(null);
@@ -431,6 +442,15 @@ export default function TableSummaryPremium() {
   const startTelrSession = useCallback(
     async (payload) => {
       if (!payload) return;
+
+      // TEMP: Telr redirect disabled — full payment UI is browsable, but no
+      // gateway session is created. Set TELR_REDIRECT_ENABLED to true to restore.
+      if (!TELR_REDIRECT_ENABLED) {
+        showToast("Online payment is temporarily unavailable. Please ask staff for assistance.", "info", "Payment Preview");
+        setShowPaymentMethodsSheet(false);
+        setPaymentSheetData(null);
+        return;
+      }
 
       const {
         amount,
@@ -1269,9 +1289,35 @@ export default function TableSummaryPremium() {
   // 3. Otherwise, use full grand total
   const hasItemSplitInProgress = paidKotChildIds.length > 0;
   const hasEqualSplitInProgress = equalSplitInfo !== null && remainingBalance !== null && remainingBalance > 0;
-  const grand = remainingBalance !== null 
-    ? remainingBalance 
+  const grand = remainingBalance !== null
+    ? remainingBalance
     : (hasItemSplitInProgress ? unpaidGrand : fullGrand);
+
+  // Customer convenience/service fee (see Terms → Pricing and description: up to 3.5%)
+  const serviceFee = grand * SERVICE_FEE_RATE;
+
+  // Round-off tip: brings bill+fee up to the next multiple of 5 AED
+  // (93 → 95, 98 → 100; if already exactly on a multiple of 5, next one: 95 → 100)
+  const baseDue = grand + serviceFee;
+  const roundUpRemainder = Math.ceil(baseDue / 5) * 5 - baseDue;
+  const roundUpTip = roundUpRemainder < 0.01 ? 5 : roundUpRemainder;
+
+  // Tip (not subject to service fee)
+  const tipAmount = tipPreset === "custom"
+    ? Math.max(0, Number(customTip) || 0)
+    : tipPreset === "roundup"
+      ? roundUpTip
+      : Number(tipPreset) || 0;
+
+  const grandWithFee = baseDue + tipAmount;
+
+  // Tiered message under pay buttons, based on displayed total (bill + fee, excl. tip)
+  const tierMessage =
+    baseDue >= 500
+      ? { icon:null, text: "Premium Guests Pay the Premium Way.", premium: true }
+      : baseDue >= 200
+        ? { icon: null, text: "Skip the Wait. Pay Smart. Leave Happy.", premium: false }
+        : { icon: null, text: "Your Table. Your Time. Your Way.", premium: false };
 
   const cardButtonLabel = isPaymentProcessing
     ? paymentSheetData?.mode === "pay-full"
@@ -1319,41 +1365,24 @@ export default function TableSummaryPremium() {
         className="border-b flex-shrink-0"
         style={{ borderColor: "var(--grad-end-soft)" }}
       >
-        <div className="mx-auto max-w-md px-6 py-6">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <div className="text-[12px] text-gray-500">{meta.brand}</div>
-              <div
-                className="mt-2 inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-medium"
-                style={{
-                  background: "var(--grad-start-soft)",
-                  color: "var(--text-rose)",
-                  borderColor: "var(--grad-end-soft)",
-                }}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                Active table
-              </div>
-            </div>
-            <button
-              onClick={() => navigate("/menu")}
-              className="btn-pill-outline h-9 px-4"
-            >
-              Menu
-            </button>
-          </div>
-
-          <div className="text-center">
-            <div className="text-[11px] text-gray-500 tracking-[.18em] mb-1">
-              TABLE
-            </div>
-            <h1 className="text-[40px] leading-none font-light text-gray-900 tracking-tight">
-              #{meta.tableNo}
+        <div className="mx-auto max-w-md px-6 py-3.5 flex items-center justify-between">
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-[0.14em]">Order summary</div>
+            <h1 className="text-[24px] leading-tight font-light text-gray-900 tracking-tight">
+              Table #{meta.tableNo}
             </h1>
-            <p className="text-[13px] text-gray-600 mt-2">
-              {lines.length} items • {canPay ? "Ready for payment" : "Waiting for order acceptance"}
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              {lines.length} items{TELR_REDIRECT_ENABLED && (
+                <> • {canPay ? "Ready for payment" : "Waiting for order acceptance"}</>
+              )}
             </p>
           </div>
+          <button
+            onClick={() => navigate("/menu")}
+            className="btn-pill-outline h-9 px-4"
+          >
+            Menu
+          </button>
         </div>
       </header>
 
@@ -1409,24 +1438,21 @@ export default function TableSummaryPremium() {
         <div className="max-w-md mx-auto px-6 py-4">
           {/* Totals (clean, one block) */}
           <div className="text-center">
-            <div className="text-[11px] text-gray-500 mb-1 tracking-wide">
+            <div className="text-[11px] text-gray-500 tracking-wide">
               {(remainingBalance !== null || hasItemSplitInProgress || hasEqualSplitInProgress) ? "REMAINING BALANCE" : "TOTAL AMOUNT"}
             </div>
-            <div className="text-[38px] font-light text-gray-900">
-              {fmt(grand)}
+            <div className="flex items-baseline justify-center gap-1.5 mt-0.5">
+              <span className="text-[32px] font-light text-gray-900 leading-tight">
+                {fmt(grandWithFee)}
+              </span>
+              <span className="text-[13px] text-gray-500">AED</span>
             </div>
-            <div className="text-[12px] text-gray-500">AED</div>
-            {(remainingBalance !== null || hasItemSplitInProgress || hasEqualSplitInProgress) && (
-              <div className="text-[10px] text-red-600 mt-1 font-medium space-y-0.5">
-                <div>Total bill amount: {fmt(fullGrand)} AED</div>
-                {(hasEqualSplitInProgress || (remainingBalance !== null && fullGrand != null && remainingBalance < fullGrand && !hasEqualSplitInProgress && !hasItemSplitInProgress)) && fullGrand > grand && (
-                  <div>Already paid from bill: {fmt(fullGrand - grand)} AED</div>
-                )}
+            {tipAmount > 0 && (
+              <div className="mt-0.5 text-[11px] text-gray-500">
+                Includes {fmt(tipAmount)} AED tip
               </div>
             )}
-          </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+            <div className="mt-3 grid grid-cols-3 gap-3 text-center">
               <div
                 className="rounded-xl p-3 border"
                 style={{ borderColor: "var(--grad-end-soft)" }}
@@ -1449,12 +1475,125 @@ export default function TableSummaryPremium() {
                 className="rounded-xl p-3 border"
                 style={{ borderColor: "var(--grad-end-soft)" }}
               >
-                <div className="text-[11px] text-gray-500 mb-1">Service</div>
+                <div className="text-[11px] text-gray-500 mb-1">Service fee</div>
                 <div className="text-sm font-semibold text-gray-900">
-                  {fmt(totals.svc)}
+                  {fmt(serviceFee)}
                 </div>
               </div>
             </div>
+            {(remainingBalance !== null || hasItemSplitInProgress || hasEqualSplitInProgress) && (
+              <div className="text-[10px] text-red-600 mt-1 font-medium space-y-0.5">
+                <div>Total bill amount: {fmt(fullGrand)} AED</div>
+                {(hasEqualSplitInProgress || (remainingBalance !== null && fullGrand != null && remainingBalance < fullGrand && !hasEqualSplitInProgress && !hasItemSplitInProgress)) && fullGrand > grand && (
+                  <div>Already paid from bill: {fmt(fullGrand - grand)} AED</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Tip */}
+          <div className="mt-4">
+            <div className="flex items-baseline justify-between mb-1.5 px-1">
+              <span className="text-[11px] font-medium tracking-wide" style={{ color: "var(--text-primary)" }}>
+                Add a tip
+              </span>
+              {tipAmount > 0 ? (
+                <button
+                  onClick={() => { setTipPreset(null); setCustomTip(""); }}
+                  className="text-[11px] text-gray-400 hover:text-gray-600 transition-colors duration-200"
+                >
+                  Remove
+                </button>
+              ) : (
+                <span className="text-[11px] text-gray-400">Optional</span>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                onClick={() => setTipPreset(tipPreset === "roundup" ? null : "roundup")}
+                aria-pressed={tipPreset === "roundup"}
+                className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
+                  tipPreset === "roundup"
+                    ? "font-semibold text-white shadow-md border border-transparent"
+                    : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
+                }`}
+                style={
+                  tipPreset === "roundup"
+                    ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
+                    : { borderColor: "rgba(139,111,71,0.3)" }
+                }
+              >
+                <span className="block leading-tight">Quick tip</span>
+                <span className={`block text-[10px] leading-tight ${tipPreset === "roundup" ? "text-white/70" : "text-gray-400"}`}>
+                  +{fmt(roundUpTip)}
+                </span>
+              </button>
+              {[5, 10].map((amt) => {
+                const active = tipPreset === amt;
+                return (
+                  <button
+                    key={amt}
+                    onClick={() => setTipPreset(active ? null : amt)}
+                    aria-pressed={active}
+                    className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
+                      active
+                        ? "font-semibold text-white shadow-md border border-transparent"
+                        : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
+                    }`}
+                    style={
+                      active
+                        ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
+                        : { borderColor: "rgba(139,111,71,0.3)" }
+                    }
+                  >
+                    {amt}
+                    <span className={`ml-1 text-[10px] ${active ? "text-white/70" : "text-gray-400"}`}>AED</span>
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
+                aria-pressed={tipPreset === "custom"}
+                className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
+                  tipPreset === "custom"
+                    ? "font-semibold text-white shadow-md border border-transparent"
+                    : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
+                }`}
+                style={
+                  tipPreset === "custom"
+                    ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
+                    : { borderColor: "rgba(139,111,71,0.3)" }
+                }
+              >
+                Custom
+              </button>
+            </div>
+
+            {tipPreset === "custom" && (
+              <div
+                className="mt-2 flex items-center rounded-xl border bg-white pl-4 pr-2 h-9 shadow-sm"
+                style={{ borderColor: "rgba(139,111,71,0.3)" }}
+              >
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  autoFocus
+                  value={customTip}
+                  onChange={(e) => setCustomTip(e.target.value)}
+                  placeholder="Tip amount"
+                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 outline-none"
+                />
+                <span
+                  className="text-[11px] font-semibold px-3 py-1.5 rounded-full shrink-0"
+                  style={{ background: "var(--grad-start-soft)", color: "var(--text-primary)" }}
+                >
+                  AED
+                </span>
+              </div>
+            )}
+          </div>
 
           {/* Payment Status Banner - Show when order is not yet accepted */}
           {/* {!canPay && lines.length > 0 && (
@@ -1486,21 +1625,21 @@ export default function TableSummaryPremium() {
             </div>
           )} */}
 
-          {/* Actions - Payment buttons hidden
+          {/* Actions */}
           <div className="mt-4 flex gap-3">
             {showSplitBill && (
               <button
                 onClick={() => setShowSplitOptions(true)}
-                disabled={grand <= 0 || !canPay}
+                disabled={grand <= 0 || (!canPay && TELR_REDIRECT_ENABLED)}
                 className="flex-1 btn-pill-outline h-12 disabled:opacity-50"
-                title={!canPay ? "Payment disabled - Order not yet accepted" : ""}
+                title={!canPay && TELR_REDIRECT_ENABLED ? "Payment disabled - Order not yet accepted" : ""}
               >
                 Split bill
               </button>
             )}
             {showPayFull && (
-              <PayFullButton 
-                grandTotal={grand} 
+              <PayFullButton
+                grandTotal={grand}
                 tableId={meta.tableId}
                 kotMasterID={kotMasterID}
                 token={token}
@@ -1509,7 +1648,7 @@ export default function TableSummaryPremium() {
                 paidKotChildIds={paidKotChildIds}
                 lines={lines}
                 equalSplitInfo={equalSplitInfo}
-                disabled={grand <= 0 || !canPay}
+                disabled={grand <= 0 || (!canPay && TELR_REDIRECT_ENABLED)}
                 className={`flex-1 btn-pill h-12 disabled:opacity-50 ${!showSplitBill ? 'w-full' : ''}`}
                 onPaymentComplete={handlePaymentComplete}
                 brand={meta.brand}
@@ -1518,13 +1657,21 @@ export default function TableSummaryPremium() {
               />
             )}
           </div>
-          */}
 
-          <div className="mt-3 text-center text-[12px] text-gray-500">
-            {canPay 
-              ? "Pay your bill now in 10 seconds. No need to call the waiter!"
-              : "Please wait for your order to be accepted before making payment."
-            }
+          <div className="mt-3 text-center">
+            {(canPay || !TELR_REDIRECT_ENABLED) ? (
+              <div
+                className="text-[11px] tracking-[0.08em] uppercase"
+                style={{ color: tierMessage.premium ? "#a8842e" : "var(--text-secondary)" }}
+              >
+                {tierMessage.icon && <span aria-hidden="true" className="mr-1 normal-case">{tierMessage.icon}</span>}
+                {tierMessage.text}
+              </div>
+            ) : (
+              <div className="text-[12px] text-gray-500">
+                Please wait for your order to be accepted before making payment.
+              </div>
+            )}
           </div>
         </div>
         <div className="h-2 safe-bottom" />
