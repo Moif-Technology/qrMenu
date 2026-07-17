@@ -8,6 +8,7 @@ const toc = [
   { id: "cardholder", label: "Cardholder obligations" },
   { id: "confirmation", label: "Payment confirmation" },
   { id: "account", label: "Account and confidentiality" },
+  { id: "pricing-description", label: "Pricing and description" },
   { id: "pricing", label: "Pricing and checkout" },
   { id: "ownership", label: "Company and ownership" },
   { id: "contact", label: "Contact" },
@@ -89,6 +90,55 @@ export default function TermsPage() {
           for maintaining the confidentiality of their login credentials and for all activity
           that occurs under their account. Restaurants and staff accounts must not share admin
           credentials with unauthorised parties.
+        </p>
+      </LegalSection>
+
+      <LegalSection id="pricing-description" title="Pricing and description">
+        <p>
+          <strong>Deyno QR Payment</strong> enables customers to securely pay for their
+          restaurant bills by scanning a QR code and completing the payment online.
+        </p>
+
+        <div className="grid sm:grid-cols-2 gap-3 !mt-4">
+          <div
+            className="rounded-2xl border p-5"
+            style={{ borderColor: "rgba(120,8,41,0.2)", background: "#f1e6e9" }}
+          >
+            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#933953" }}>
+              Customer service fee
+            </p>
+            <p className="text-2xl font-bold text-zinc-900 mb-2">Up to 3.5%</p>
+            <p className="text-sm">
+              A convenience/service fee of up to 3.5% may be charged to customers for payments
+              made through the Deyno QR Payment platform. The applicable fee will be clearly
+              displayed on the checkout page before the customer confirms the payment.
+            </p>
+          </div>
+
+          <div
+            className="rounded-2xl border p-5"
+            style={{ borderColor: "rgba(120,8,41,0.2)", background: "#f1e6e9" }}
+          >
+            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#933953" }}>
+              Restaurant charges
+            </p>
+            <p className="text-2xl font-bold text-zinc-900 mb-2">AED 0.50</p>
+            <p className="text-sm">
+              Restaurants using the Deyno QR Payment platform are charged AED 0.50 per
+              successful payment transaction.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <strong>One-time setup fee.</strong> Restaurants subscribing to the Deyno QR Menu
+          service may be subject to a one-time setup fee, as agreed in the merchant agreement.
+        </p>
+        <p>
+          <strong>Payment processing.</strong> Customers who choose to pay online will be
+          redirected to our secure payment checkout page to complete the transaction using
+          supported payment methods. The final payable amount, including any applicable service
+          fee, will be displayed before payment confirmation.
         </p>
       </LegalSection>
 
