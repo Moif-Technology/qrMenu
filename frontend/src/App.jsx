@@ -35,6 +35,26 @@ const isAppDomain =
   typeof window !== "undefined" &&
   window.location.hostname.startsWith("app.");
 
+// Guest-facing routes must show the restaurant name in the URL
+// (deynoqr.com/opaia/menu, not deynoqr.com/menu). Printed QR codes and old
+// links still point at the unprefixed paths, so redirect them into the
+// /opaia context before the router mounts. Admin, legal, and reservation
+// staff pages stay unprefixed.
+const GUEST_ROUTE_RE = /^\/(menu$|r\/|package\/)/;
+if (
+  typeof window !== "undefined" &&
+  !isAppDomain &&
+  getBasename() === "" &&
+  GUEST_ROUTE_RE.test(window.location.pathname)
+) {
+  window.location.replace(
+    RESTAURANT_BASE_PATH +
+      window.location.pathname +
+      window.location.search +
+      window.location.hash
+  );
+}
+
 // Public landing page
 const LandingPage = lazy(() => import("./pages/LandingPage"));
 

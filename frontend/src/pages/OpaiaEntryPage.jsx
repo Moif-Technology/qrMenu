@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { QrCode, ChevronRight, Utensils, Clock, X, ScanLine } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 
@@ -9,12 +8,13 @@ const isAppDomain =
   typeof window !== "undefined" &&
   window.location.hostname.startsWith("app.");
 
+// Plain <a> href — full page load, which is required to switch the router
+// basename into the /opaia context (see App.jsx getBasename).
 const MENU_URL = isAppDomain
   ? "https://deynoqr.com/opaia/menu"
-  : "/menu";
+  : "/opaia/menu";
 
 export default function OpaiaEntryPage() {
-  const navigate = useNavigate();
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState("");
   const scannerRef = useRef(null);
@@ -82,8 +82,9 @@ export default function OpaiaEntryPage() {
       // different context misses every route and the token is lost.
       window.location.href = url.href;
     } catch {
-      // Not a URL — treat as table token path
-      navigate(`/r/${text}`);
+      // Not a URL — treat as table token path. Full load so the /opaia
+      // basename applies regardless of the current context.
+      window.location.href = `/opaia/r/${text}`;
     }
   }
 
