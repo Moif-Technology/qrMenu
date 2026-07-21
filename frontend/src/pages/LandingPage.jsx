@@ -13,6 +13,7 @@ import {
   Globe,
   Wallet,
   ArrowRight,
+  ArrowUpRight,
   GitFork,
   Receipt,
   Scissors,
@@ -377,59 +378,36 @@ export default function LandingPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {clients.map((client) => (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {clients.map((client, i) => (
               <a
                 key={client.id}
                 href={client.entryPath}
-                className="group bg-white border rounded-2xl hover:-translate-y-1.5 transition-all duration-300 block reveal"
-                style={{ borderColor: "#e4cdd4", boxShadow: "0 1px 3px rgba(120,8,41,0.04), 0 4px 12px rgba(120,8,41,0.05)" }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#c99ca9";
-                  e.currentTarget.style.boxShadow = "0 8px 32px rgba(120,8,41,0.12), 0 2px 8px rgba(120,8,41,0.08)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#e4cdd4";
-                  e.currentTarget.style.boxShadow = "0 1px 3px rgba(120,8,41,0.04), 0 4px 12px rgba(120,8,41,0.05)";
-                }}
+                className={`group block reveal${i > 0 ? ` reveal-d${Math.min(i, 3)}` : ""}`}
               >
-                {/* Cover image with centered logo overlay */}
-                <div className="h-52 overflow-hidden rounded-t-2xl relative">
+                <div className="relative overflow-hidden rounded-2xl h-[280px] sm:h-[360px] bg-zinc-100">
                   <img
                     src={client.imageUrl}
                     alt={`${client.name} dining area`}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.04]"
                     loading="lazy"
                     onError={(e) => { e.currentTarget.style.display = "none"; }}
                   />
-                  <div className="absolute inset-0 bg-zinc-950/50" />
-                  {client.status === "live" && (
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-white/90 backdrop-blur-sm rounded-full px-2.5 py-1 border border-zinc-200/60">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] font-semibold text-zinc-700">Live</span>
-                    </div>
-                  )}
                   {client.status === "coming_soon" && (
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-white/90 backdrop-blur-sm rounded-full px-2.5 py-1 border border-zinc-200/60">
-                      <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                      <span className="text-[10px] font-semibold text-zinc-700">Launching Soon</span>
-                    </div>
+                    <span className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm text-[11px] font-medium text-zinc-700 rounded-full px-3 py-1">
+                      Launching soon
+                    </span>
                   )}
                 </div>
-                <div className="p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-bold text-zinc-900 text-lg">{client.name}</h3>
-                    <span className="text-[11px] text-zinc-400 border border-zinc-200 rounded-full px-2.5 py-0.5">
-                      {client.category}
-                    </span>
+                <div className="flex items-start justify-between gap-4 mt-5">
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-semibold tracking-tight text-zinc-900">{client.name}</h3>
+                    <p className="text-sm text-zinc-500 mt-1">{client.tagline}</p>
                   </div>
-                  <p className="text-zinc-500 text-sm mb-5 line-clamp-2">{client.description}</p>
-                  {client.status !== "coming_soon" && (
-                    <div className="flex items-center gap-1.5 text-sm font-semibold transition-colors group-hover:opacity-80" style={{ color: "#780829" }}>
-                      View menu
-                      <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" strokeWidth={2.5} />
-                    </div>
-                  )}
+                  <ArrowUpRight
+                    className="w-5 h-5 mt-1 flex-shrink-0 text-zinc-400 transition-all duration-300 group-hover:text-[#780829] group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                    strokeWidth={2}
+                  />
                 </div>
               </a>
             ))}

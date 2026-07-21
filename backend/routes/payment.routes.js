@@ -1,8 +1,11 @@
 // backend/routes/payment.routes.js
 import { Router } from "express";
-import { getPaymentMethods, getPaymentMethod, processPayFull, processEqualSplit, processCustomSplit, processItemSplit, getPaidItemsEndpoint, getBalance } from "../controllers/payment.controller.js";
+import { getPaymentMethods, getPaymentMethod, processPayFull, processEqualSplit, processCustomSplit, processItemSplit, getPaidItemsEndpoint, getBalance, getServiceFeeRate } from "../controllers/payment.controller.js";
 
 const router = Router();
+
+// GET /api/payment/service-fee-rate - Company-controlled service fee % (set in qrmenu-dashboard)
+router.get("/payment/service-fee-rate", getServiceFeeRate);
 
 // GET /api/payment/methods - Get all active payment methods
 router.get("/payment/methods", getPaymentMethods);

@@ -2,7 +2,8 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import express from "express";
 import axios from "axios";
-import { savePayFullPayment } from "./services/payment.service.js";
+import { savePayFullPayment, getServiceFeeRatePercent } from "./services/payment.service.js";
+import { queryPaymentDb } from "./config/dbConfig.js";
 import {
   storeSession,
   getSessionByOrderRef,
@@ -246,6 +247,9 @@ router.post("/api/telr/create", async (req, res) => {
       tableId = null,
       kotMasterID = null,
       token = null,
+      billAmount = null,
+      serviceFeeAmount = 0,
+      tipAmount = 0,
     } = req.body ?? {};
 
     if (!amount || !cartId || !description) {
@@ -259,6 +263,25 @@ router.post("/api/telr/create", async (req, res) => {
 
     const mode = req.body?.mode || "pay-full";
 
+    // Service fee is company-controlled (qrmenu-dashboard admin) and must never
+    // be trusted from the client — recompute it here from the current DB rate.
+    // Applies to every mode, always on the amount actually being charged in
+    // THIS leg (full bill for pay-full, per-person share for equal split,
+    // items subtotal for item split, typed amount for custom split) — not the
+    // original full bill amount, so split legs each carry their own
+    // proportional share of the fee.
+    let effectiveBillAmount = billAmount != null ? Number(billAmount) : Number(amount);
+    const legBaseAmount = Number(amount);
+    let effectiveServiceFeeAmount = 0;
+    let effectiveAmount = legBaseAmount;
+    const requestedTip = Number(tipAmount) || 0;
+
+    if (legBaseAmount > 0) {
+      const ratePercent = await getServiceFeeRatePercent();
+      effectiveServiceFeeAmount = Math.round(legBaseAmount * (ratePercent / 100) * 100) / 100;
+      effectiveAmount = Math.round((legBaseAmount + effectiveServiceFeeAmount + requestedTip) * 100) / 100;
+    }
+
     // Keep return URL short: Telr validates return URLs and may reject long ones.
     // We store token, tableId, kotMasterID, cartId, mode in session (by order_ref/sessionKey);
     // when Telr redirects back we look up by order_ref (Telr adds it) or sessionKey.
@@ -271,7 +294,7 @@ router.post("/api/telr/create", async (req, res) => {
       ivp_store: sanitizedStoreId,
       ivp_authkey: sanitizedAuthKey,
       ivp_test: isTestMode ? "1" : "0",
-      ivp_amount: Number(amount).toFixed(2),
+      ivp_amount: effectiveAmount.toFixed(2),
       ivp_currency: currency,
       ivp_desc: description,
       ivp_cart: String(cartId),
@@ -318,7 +341,7 @@ router.post("/api/telr/create", async (req, res) => {
     }
 
     rememberTelrSession(data.order.ref, {
-      amount: Number(amount),
+      amount: effectiveAmount,
       currency,
       description,
       cartId: String(cartId),
@@ -327,9 +350,18 @@ router.post("/api/telr/create", async (req, res) => {
       token,
       sessionKey,
       mode,
+      billAmount: effectiveBillAmount,
+      serviceFeeAmount: effectiveServiceFeeAmount,
+      tipAmount: requestedTip,
     });
 
-    return res.json({ url: data.order.url, orderRef: data.order.ref, sessionKey });
+    return res.json({
+      url: data.order.url,
+      orderRef: data.order.ref,
+      sessionKey,
+      amount: effectiveAmount,
+      serviceFeeAmount: effectiveServiceFeeAmount,
+    });
   } catch (e) {
     console.error("[Telr] create: request failed", {
       message: e?.message,
@@ -341,6 +373,37 @@ router.post("/api/telr/create", async (req, res) => {
       .json({ error: "create failed", detail: e?.response?.data || e.message });
   }
 });
+
+/**
+ * Record a Telr checkout that did NOT complete (declined or cancelled) so the
+ * payout dashboard can show it as FAILED. Fire-and-forget: a logging failure
+ * must never break the customer redirect.
+ */
+async function recordFailedAttempt(status, sessionMeta, fallbackMeta, orderRef) {
+  try {
+    const amount = Number(sessionMeta?.amount ?? fallbackMeta?.amount ?? 0) || null;
+    const transId = Number(sessionMeta?.kotMasterID ?? 0) || null;
+    const tableId = Number(sessionMeta?.tableId ?? fallbackMeta?.tableId ?? 0) || null;
+    const mode = String(sessionMeta?.mode || "pay-full").slice(0, 30);
+    const finalStatus = status === "CANCEL" ? "CANCELLED" : "DECLINED";
+
+    await queryPaymentDb(
+      `INSERT INTO dbo.PaymentAttempts (ShopID, TransID, TableID, Amount, Mode, Status, OrderRef)
+       VALUES (1, @transId, @tableId, @amount, @mode, @status, @orderRef)`,
+      {
+        transId,
+        tableId,
+        amount,
+        mode,
+        status: finalStatus,
+        orderRef: orderRef ? String(orderRef).slice(0, 100) : null
+      }
+    );
+    console.log(`[Telr] Recorded failed attempt: ${finalStatus} ref=${orderRef || "-"} amount=${amount ?? "-"}`);
+  } catch (err) {
+    console.error("[Telr] Could not record failed attempt:", err.message);
+  }
+}
 
 async function handleReturn(req, res, status) {
   res.set("Content-Type", "text/html; charset=utf-8");
@@ -381,6 +444,7 @@ async function handleReturn(req, res, status) {
       if (!authorised) {
         finalStatus = "DECLINED";
         message = "Payment could not be verified. Please try again or contact support.";
+        await recordFailedAttempt("DECLINED", sessionMeta, fallbackMeta, effectiveOrderRef);
       } else {
         // Determine payment mode — split modes are handled by the frontend after redirect
         // Priority: URL query param → stored session meta → default pay-full
@@ -395,20 +459,25 @@ async function handleReturn(req, res, status) {
         if (isPayFull) {
           const metaForSave = {
             amount: sessionMeta?.amount ?? fallbackMeta.amount,
+            billAmount: sessionMeta?.billAmount ?? sessionMeta?.amount ?? fallbackMeta.amount,
             tableId: sessionMeta?.tableId ?? fallbackMeta.tableId,
             kotMasterID:
               sessionMeta?.kotMasterID ??
               req.query?.kotMasterID ??
               req.query?.kotMasterId ??
               null,
+            serviceFeeAmount: sessionMeta?.serviceFeeAmount ?? 0,
+            tipAmount: sessionMeta?.tipAmount ?? 0,
           };
 
           if (metaForSave.amount && (metaForSave.tableId || metaForSave.kotMasterID)) {
             try {
               paymentResult = await savePayFullPayment({
-                billAmount: metaForSave.amount,
+                billAmount: metaForSave.billAmount,
                 tableId: metaForSave.tableId,
                 kotMasterID: metaForSave.kotMasterID,
+                serviceFeeAmount: metaForSave.serviceFeeAmount,
+                tipAmount: metaForSave.tipAmount,
               });
               if (sessionMeta) sessionMeta.processed = true;
             } catch (err) {
@@ -446,8 +515,10 @@ async function handleReturn(req, res, status) {
     }
   } else if (status === "CANCEL") {
     message = "Payment was cancelled. You can close this window.";
+    await recordFailedAttempt("CANCEL", sessionMeta, fallbackMeta, effectiveOrderRef);
   } else if (status === "DECLINED") {
     message = "Payment was declined. Please try another method.";
+    await recordFailedAttempt("DECLINED", sessionMeta, fallbackMeta, effectiveOrderRef);
   }
 
   redirectUrl = buildRedirectUrl(
@@ -588,12 +659,14 @@ router.post("/api/telr/webhook", async (req, res) => {
     if (!mode || mode === "pay-full") {
       // Pay Full — the redirect did not process it (browser closed), so we do it here
       const metaForSave = {
-        amount:      session.amount,
+        billAmount:  session.billAmount ?? session.amount,
         tableId:     session.tableId,
         kotMasterID: session.kotMasterID,
+        serviceFeeAmount: session.serviceFeeAmount ?? 0,
+        tipAmount:   session.tipAmount ?? 0,
       };
 
-      if (metaForSave.amount && (metaForSave.tableId || metaForSave.kotMasterID)) {
+      if (metaForSave.billAmount && (metaForSave.tableId || metaForSave.kotMasterID)) {
         await savePayFullPayment(metaForSave);
         console.log("[Telr:Webhook] Pay Full settled via webhook. orderRef:", orderRef);
       } else {

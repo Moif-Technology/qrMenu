@@ -1,0 +1,42 @@
+/* frontend/src/pages/payout/payout.css
+   DeynoQR Payout Console - light ledger theme.
+   Only imported by PayoutRouter.jsx (its own lazy chunk), so this never
+   loads outside the /payout context and never touches the main app's
+   Tailwind theme tokens or global body styles.
+   Light surfaces everywhere; dark "ink" panels are reserved for the money
+   summary moments (admin stat band, restaurant earnings hero, brand chip).
+   One accent: emerald. Amber is reserved for money still awaiting transfer.
+*/
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+
+  /* Dark ink panels (used sparingly) */
+  --color-ink-950: #0b0f0e;
+  --color-ink-900: #111615;
+  --color-ink-800: #171d1c;
+  --color-ink-700: #232b29;
+}
+
+.payout-app {
+  font-family: var(--font-sans);
+  background-color: #f6f7f7;
+  color: #18181b;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+.payout-app ::selection {
+  background: rgba(16, 185, 129, 0.2);
+}
+
+/* Numbers always tabular so ledger columns line up */
+.payout-app .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}

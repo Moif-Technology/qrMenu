@@ -3,10 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { List } from "react-window";
 
-import applePayIcon from "../assets/payment/apple-pay.png";
-import cardIcon from "../assets/payment/card.png";
-import googlePayIcon from "../assets/payment/google-pay.png";
-import samsungPayIcon from "../assets/payment/samsung-pay.png";
 import ConfirmModal from "../component/ConfirmModal";
 import PaymentSuccess from "../component/PaymentSuccess";
 import SplitCustomAmountSheet from "../component/SplitCustomAmountSheet";
@@ -25,10 +21,12 @@ const fmt = (n) => Number(n || 0).toFixed(2);
 
 // TEMP: when false, all payment UI (split sheets, pay buttons, payment methods
 // sheet) stays fully browsable, but the final Telr gateway redirect is blocked.
-const TELR_REDIRECT_ENABLED = false;
+const TELR_REDIRECT_ENABLED = true;
 
-// Customer convenience/service fee rate (Terms → Pricing and description: up to 3.5%)
-const SERVICE_FEE_RATE = 0.035;
+// Customer convenience/service fee rate (Terms → Pricing and description: up to 3.1%).
+// Fallback only — the live rate is company-controlled via qrmenu-dashboard and
+// fetched from the backend at runtime (GET /payment/service-fee-rate).
+const DEFAULT_SERVICE_FEE_RATE = 0.031;
 
 /* ── Item row ─────────────────────────────────────────── */
 function ItemRow({ item, currency = "AED", paidKotChildIds = [] }) {
@@ -126,6 +124,8 @@ function PayFullButton({
   equalSplitInfo = null,
   onCardPay,
   onRefreshData,
+  serviceFeeAmount = 0,
+  tipAmount = 0,
 }) {
   const [processing, setProcessing] = useState(false);
   
@@ -313,8 +313,13 @@ function PayFullButton({
         { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
       );
     } else {
+      const feeAmt = Number(serviceFeeAmount) || 0;
+      const tip = Number(tipAmount) || 0;
       onCardPay?.({
-        amount: Number(grandTotal),
+        amount: Number(grandTotal) + feeAmt + tip,
+        billAmount: Number(grandTotal),
+        serviceFeeAmount: feeAmt,
+        tipAmount: tip,
         tableId,
         kotMasterID,
         token,
@@ -384,6 +389,16 @@ export default function TableSummaryPremium() {
   const [paymentCompleteData, setPaymentCompleteData] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
   const [toast, setToast] = useState(null);
+  const [serviceFeeRate, setServiceFeeRate] = useState(DEFAULT_SERVICE_FEE_RATE);
+
+  useEffect(() => {
+    API.get("/payment/service-fee-rate")
+      .then(({ data }) => {
+        const pct = Number(data?.ratePercent);
+        if (Number.isFinite(pct) && pct >= 0) setServiceFeeRate(pct / 100);
+      })
+      .catch(() => {}); // keep DEFAULT_SERVICE_FEE_RATE on failure
+  }, []);
 
   const showToast = useCallback((message, variant = "info", title = null) => {
     setToast({ message, variant, title });
@@ -399,8 +414,6 @@ export default function TableSummaryPremium() {
   const isTelrAuthParam = searchParams.get("telrStatus") === "AUTH";
   const telrHandledKeyRef = useRef(null);
   const isProcessingTelrSplitRef = useRef(false); // Track if we're processing a Telr split payment
-  const [showPaymentMethodsSheet, setShowPaymentMethodsSheet] = useState(false);
-  const [paymentSheetData, setPaymentSheetData] = useState(null);
   const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const loadOrderDataRef = useRef(null);
@@ -413,47 +426,22 @@ export default function TableSummaryPremium() {
     setShowEqualSplitModal(false);
   }, []);
 
-  const handleAlternativeMethod = useCallback((method) => {
-    setShowPaymentMethodsSheet(false);
-    setPaymentSheetData(null);
-    showToast(`${method} is coming soon. Please ask staff for assistance.`, "info");
-  }, [showToast]);
-
-  const handlePayFullRequest = useCallback((payload) => {
-    // Check if this is an equal split continuation
-    if (payload.mode === "split-equal" && payload.splitPayload) {
-      setPaymentSheetData({
-        ...payload,
-        mode: "split-equal",
-        // Normalise: triggerCardPay reads paymentSheetData.payload
-        payload: payload.splitPayload,
-        note: `Equal split · ${payload.splitPayload.numberOfPeople} ${payload.splitPayload.numberOfPeople === 1 ? "person" : "people"}`,
-      });
-    } else {
-    setPaymentSheetData({
-      ...payload,
-      mode: "pay-full",
-      note: "Secured via Telr",
-    });
-    }
-    setShowPaymentMethodsSheet(true);
-  }, []);
-
   const startTelrSession = useCallback(
     async (payload) => {
-      if (!payload) return;
+      if (!payload || isPaymentProcessing) return;
 
       // TEMP: Telr redirect disabled — full payment UI is browsable, but no
       // gateway session is created. Set TELR_REDIRECT_ENABLED to true to restore.
       if (!TELR_REDIRECT_ENABLED) {
         showToast("Online payment is temporarily unavailable. Please ask staff for assistance.", "info", "Payment Preview");
-        setShowPaymentMethodsSheet(false);
-        setPaymentSheetData(null);
         return;
       }
 
       const {
         amount,
+        billAmount = null,
+        serviceFeeAmount = 0,
+        tipAmount = 0,
         tableId,
         kotMasterID,
         token: payloadToken,
@@ -479,6 +467,9 @@ export default function TableSummaryPremium() {
 
         const telrPayload = {
           amount: Number(amount),
+          billAmount: billAmount != null ? Number(billAmount) : Number(amount),
+          serviceFeeAmount: Number(serviceFeeAmount) || 0,
+          tipAmount: Number(tipAmount) || 0,
           currency: "AED",
           cartId,
           description,
@@ -508,6 +499,14 @@ export default function TableSummaryPremium() {
           orderRef: session.orderRef,
           sessionKey: session.sessionKey || null, // fallback if URL param is lost
           amount: Number(amount),
+          // Server-recomputed fee for THIS leg (proportional to the amount
+          // actually charged, same for every mode) - carried through so the
+          // post-return save call can record it against this payment leg.
+          serviceFeeAmount: Number(session.serviceFeeAmount) || 0,
+          // Tip the guest chose for this leg - already part of what Telr
+          // charged (see telrPayload.tipAmount above), carried through so
+          // the post-return save call can record it too.
+          tipAmount: Number(tipAmount) || 0,
           tableId,
           kotMasterID,
           token: payloadToken,
@@ -524,15 +523,23 @@ export default function TableSummaryPremium() {
         showToast(errorMsg, "error", "Payment Failed");
       } finally {
         setIsPaymentProcessing(false);
-        setShowPaymentMethodsSheet(false);
-        setPaymentSheetData(null);
       }
     },
-    [],
+    [isPaymentProcessing],
   );
 
+  // "Pay fully" goes straight to the Telr-hosted checkout — no in-app payment
+  // method picker, since Card is the only working option today.
+  const handlePayFullRequest = useCallback((payload) => {
+    if (payload.mode === "split-equal" && payload.splitPayload) {
+      startTelrSession({ ...payload, mode: "split-equal" });
+    } else {
+      startTelrSession({ ...payload, mode: "pay-full", splitPayload: null });
+    }
+  }, [startTelrSession]);
+
   const completeSplitPaymentFromTelr = useCallback(
-    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey }) => {
+    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, serviceFeeAmount = 0, tipAmount = 0 }) => {
       if (!mode || mode === "pay-full") return false;
       if (!splitPayload) return false;
 
@@ -550,7 +557,7 @@ export default function TableSummaryPremium() {
             numberOfPeople
           });
           // Include sessionKey so backend can verify paidAmount vs Telr-verified amount
-          const result = await processEqualSplit({ ...paymentPayload, sessionKey: sessionKey || undefined });
+          const result = await processEqualSplit({ ...paymentPayload, sessionKey: sessionKey || undefined, serviceFeeAmount, tipAmount });
 
           if (!result.ok) {
             throw new Error(result.error || "Equal split payment processing failed");
@@ -594,7 +601,7 @@ export default function TableSummaryPremium() {
             throw new Error("No items found in payment payload for item split payment");
           }
           
-          const result = await processItemSplit(paymentPayload);
+          const result = await processItemSplit({ ...paymentPayload, serviceFeeAmount, tipAmount });
           if (!result.ok) {
             throw new Error(result.error || "Item split payment processing failed");
           }
@@ -657,7 +664,7 @@ export default function TableSummaryPremium() {
 
         if (mode === "split-custom") {
           const { paymentPayload, paidAmount } = splitPayload;
-          const result = await processCustomSplit(paymentPayload);
+          const result = await processCustomSplit({ ...paymentPayload, serviceFeeAmount, tipAmount });
 
           if (!result.ok) {
             throw new Error(result.error || "Payment processing failed");
@@ -718,21 +725,6 @@ export default function TableSummaryPremium() {
     ],
   );
 
-  const triggerCardPay = useCallback(async () => {
-    if (isPaymentProcessing || !paymentSheetData) return;
-
-    const basePayload = {
-      amount: paymentSheetData.amount,
-      tableId: meta.tableId,
-      kotMasterID,
-      token,
-      brand: meta.brand,
-      mode: paymentSheetData.mode,
-      splitPayload: paymentSheetData.mode === "pay-full" ? null : (paymentSheetData.payload ?? paymentSheetData.splitPayload ?? null),
-    };
-
-    startTelrSession(basePayload);
-  }, [isPaymentProcessing, kotMasterID, meta.brand, meta.tableId, paymentSheetData, startTelrSession, token]);
 
   useEffect(() => {
     const status = searchParams.get("telrStatus");
@@ -854,6 +846,9 @@ export default function TableSummaryPremium() {
                 // Pass sessionKey so the backend can verify the paidAmount
                 // against what Telr actually charged (tamper protection)
                 sessionKey: sessionKeyParam || stored?.sessionKey || null,
+                // Server-recomputed fee charged for this leg (see startTelrSession)
+                serviceFeeAmount: stored?.serviceFeeAmount || 0,
+                tipAmount: stored?.tipAmount || 0,
               });
               // If split payment has balance, don't do anything else - stay on page
               // The completeSplitPaymentFromTelr already handled the balance display
@@ -886,8 +881,6 @@ export default function TableSummaryPremium() {
           isProcessingTelrSplitRef.current = false; // Clear flag on error
         } finally {
           setIsPaymentProcessing(false);
-          setShowPaymentMethodsSheet(false);
-          setPaymentSheetData(null);
           if (stored?.orderRef === orderRef) {
             sessionStorage.removeItem("telr:lastSession");
           }
@@ -1293,8 +1286,8 @@ export default function TableSummaryPremium() {
     ? remainingBalance
     : (hasItemSplitInProgress ? unpaidGrand : fullGrand);
 
-  // Customer convenience/service fee (see Terms → Pricing and description: up to 3.5%)
-  const serviceFee = grand * SERVICE_FEE_RATE;
+  // Customer convenience/service fee — rate is company-controlled (qrmenu-dashboard)
+  const serviceFee = grand * serviceFeeRate;
 
   // Round-off tip: brings bill+fee up to the next multiple of 5 AED
   // (93 → 95, 98 → 100; if already exactly on a multiple of 5, next one: 95 → 100)
@@ -1319,11 +1312,6 @@ export default function TableSummaryPremium() {
         ? { icon: null, text: "Skip the Wait. Pay Smart. Leave Happy.", premium: false }
         : { icon: null, text: "Your Table. Your Time. Your Way.", premium: false };
 
-  const cardButtonLabel = isPaymentProcessing
-    ? paymentSheetData?.mode === "pay-full"
-      ? "Launching Telr..."
-      : "Processing..."
-    : "Card";
 
   if (loading) {
     return (
@@ -1652,6 +1640,8 @@ export default function TableSummaryPremium() {
                 className={`flex-1 btn-pill h-12 disabled:opacity-50 ${!showSplitBill ? 'w-full' : ''}`}
                 onPaymentComplete={handlePaymentComplete}
                 brand={meta.brand}
+                serviceFeeAmount={serviceFee}
+                tipAmount={tipAmount}
                 onCardPay={handlePayFullRequest}
                 onRefreshData={loadOrderData}
               />
@@ -1765,8 +1755,9 @@ export default function TableSummaryPremium() {
           total={grand}
           currency="AED"
           equalSplitInfo={equalSplitInfo}
+          serviceFeeRate={serviceFeeRate}
           onClose={() => setShowEqualSheet(false)}
-          onConfirm={async (shares) => {
+          onConfirm={async (shares, tip = 0) => {
             try {
               if (!shares || shares.length === 0) {
                 showToast("Please set up equal split with at least one person.", "warning");
@@ -1815,17 +1806,16 @@ export default function TableSummaryPremium() {
                 numberOfPeople,
                 paymentPayload
               });
-              setPaymentSheetData({
+              startTelrSession({
                 mode: "split-equal",
                 amount: amountPerPerson,
-                note: `Equal split · ${numberOfPeople} ${numberOfPeople === 1 ? "person" : "people"}`,
-                payload: {
-                  paymentPayload,
-                  amountPerPerson,
-                  numberOfPeople,
-                },
+                tipAmount: tip,
+                tableId: meta.tableId,
+                kotMasterID,
+                token,
+                brand: meta.brand,
+                splitPayload: { paymentPayload, amountPerPerson, numberOfPeople },
               });
-              setShowPaymentMethodsSheet(true);
             } catch (err) {
               logError("Equal split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
@@ -1840,9 +1830,10 @@ export default function TableSummaryPremium() {
           items={lines}
           paidKotChildIds={paidKotChildIds}
           currency="AED"
+          serviceFeeRate={serviceFeeRate}
           onClose={() => setShowPickItems(false)}
           onRemoveSplit={() => setShowPickItems(false)}
-          onConfirm={async (payload) => {
+          onConfirm={async (payload, tip = 0) => {
             try {
               if (!payload || payload.length === 0) {
                 showToast("Please select at least one item to pay for.", "warning");
@@ -1882,16 +1873,16 @@ export default function TableSummaryPremium() {
                 kotMasterID: kotMasterID,
                 totalBillAmount: totalBillAmount // Pass original bill amount to backend
               };
-              setPaymentSheetData({
+              startTelrSession({
                 mode: "split-items",
                 amount: totalAmount,
-                note: "Selected items",
-                payload: {
-                  paymentPayload,
-                  totalAmount,
-                },
+                tipAmount: tip,
+                tableId: meta.tableId,
+                kotMasterID,
+                token,
+                brand: meta.brand,
+                splitPayload: { paymentPayload, totalAmount },
               });
-              setShowPaymentMethodsSheet(true);
             } catch (err) {
               logError("Item split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
@@ -1905,12 +1896,13 @@ export default function TableSummaryPremium() {
         <SplitCustomAmountSheet
           total={grand}
           currency="AED"
+          serviceFeeRate={serviceFeeRate}
           onClose={() => setShowCustomSheet(false)}
           onRemoveSplit={() => {
             setShowCustomSheet(false);
             setSplitTransId(null); // Reset TransID when removing split
           }}
-          onConfirm={async (paidAmount) => {
+          onConfirm={async (paidAmount, tip = 0) => {
             try {
               const paymentPayload = {
                 billAmount: grand,
@@ -1919,17 +1911,17 @@ export default function TableSummaryPremium() {
                 transId: splitTransId, // Fallback to existing TransID if kotMasterID not available
                 tableId: meta.tableId
               };
-              setPaymentSheetData({
+              setShowCustomSheet(false);
+              startTelrSession({
                 mode: "split-custom",
                 amount: paidAmount,
-                note: "Custom amount",
-                payload: {
-                  paymentPayload,
-                  paidAmount,
-                },
+                tipAmount: tip,
+                tableId: meta.tableId,
+                kotMasterID,
+                token,
+                brand: meta.brand,
+                splitPayload: { paymentPayload, paidAmount },
               });
-              setShowCustomSheet(false);
-              setShowPaymentMethodsSheet(true);
             } catch (err) {
               logError("Custom split payment error:", err);
               const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
@@ -1955,158 +1947,6 @@ export default function TableSummaryPremium() {
         paymentData={paymentCompleteData}
       />
 
-      {/* Payment Methods Sheet - Hidden */}
-      {showPaymentMethodsSheet && (
-        <div className="payment-sheet-overlay" role="dialog" aria-modal="true">
-          <button
-            type="button"
-            className="payment-sheet-backdrop"
-            onClick={() => {
-              if (!isPaymentProcessing) {
-                setShowPaymentMethodsSheet(false);
-                setPaymentSheetData(null);
-              }
-            }}
-            aria-label="Close payment methods"
-          />
-          <div className="payment-sheet">
-            <div className="payment-sheet__handle" />
-            <div className="payment-sheet__header">
-              <div>
-                <p className="payment-sheet__title">Choose payment method</p>
-                <p className="payment-sheet__caption">
-                  {(() => {
-                    // Get table display name - prefer tableName, then tableNo, never show raw tableId
-                    if (meta.tableName) {
-                      return meta.tableName;
-                    } else if (meta.tableNo) {
-                      return `Table ${meta.tableNo}`;
-                    } else if (meta.tableId) {
-                      // Fallback: only show ID if no name/number available
-                      return `Table ${meta.tableId}`;
-                    }
-                    return "Table";
-                  })()} · {String(meta?.brand ?? "Dining")}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="payment-sheet__close"
-                onClick={() => {
-                  if (!isPaymentProcessing) {
-                    setShowPaymentMethodsSheet(false);
-                    setPaymentSheetData(null);
-                  }
-                }}
-                aria-label="Close payment methods"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="payment-sheet__amount-row">
-              <span className="payment-sheet__amount">
-                {fmt(paymentSheetData?.amount ?? grand)}
-              </span>
-              <span className="payment-sheet__note">
-                AED · {paymentSheetData?.note || "Secured via Telr"}
-              </span>
-            </div>
-
-            <div className="payment-sheet__option-list">
-              <button
-                type="button"
-                className="payment-sheet__option payment-sheet__option--primary"
-                onClick={triggerCardPay}
-                disabled={isPaymentProcessing}
-              >
-                <div className="payment-sheet__icon">
-                  <img src={cardIcon} alt="Card payment" className="payment-sheet__icon-image" />
-                </div>
-                <div className="payment-sheet__copy">
-                  <span className="payment-sheet__option-title">
-                    {cardButtonLabel}
-                  </span>
-                  <span className="payment-sheet__option-desc">
-                    Visa · Mastercard · AMEX
-                  </span>
-                </div>
-                {isPaymentProcessing && <span className="payment-sheet__spinner" />}
-              </button>
-
-              <button
-                type="button"
-                className="payment-sheet__option"
-                onClick={() => handleAlternativeMethod("Apple Pay")}
-                disabled={isPaymentProcessing}
-              >
-                <div className="payment-sheet__icon">
-                  <img src={applePayIcon} alt="Apple Pay" className="payment-sheet__icon-image" />
-                </div>
-                <div className="payment-sheet__copy">
-                  <span className="payment-sheet__option-title">Apple Pay</span>
-                  <span className="payment-sheet__option-desc">
-                    Tap &amp; pay with Face ID
-                  </span>
-                </div>
-                <span className="payment-sheet__tag">Soon</span>
-              </button>
-
-              <button
-                type="button"
-                className="payment-sheet__option"
-                onClick={() => handleAlternativeMethod("Samsung Pay")}
-                disabled={isPaymentProcessing}
-              >
-                <div className="payment-sheet__icon">
-                  <img src={samsungPayIcon} alt="Samsung Pay" className="payment-sheet__icon-image" />
-                </div>
-                <div className="payment-sheet__copy">
-                  <span className="payment-sheet__option-title">Samsung Pay</span>
-                  <span className="payment-sheet__option-desc">
-                    NFC tap on Galaxy devices
-                  </span>
-                </div>
-                <span className="payment-sheet__tag">Soon</span>
-              </button>
-
-              <button
-                type="button"
-                className="payment-sheet__option"
-                onClick={() => handleAlternativeMethod("Google Pay")}
-                disabled={isPaymentProcessing}
-              >
-                <div className="payment-sheet__icon">
-                  <img src={googlePayIcon} alt="Google Pay" className="payment-sheet__icon-image" />
-                </div>
-                <div className="payment-sheet__copy">
-                  <span className="payment-sheet__option-title">Google Pay</span>
-                  <span className="payment-sheet__option-desc">
-                    Wallet &amp; tap on Android
-                  </span>
-                </div>
-                <span className="payment-sheet__tag">Soon</span>
-              </button>
-
-              <button
-                type="button"
-                className="payment-sheet__option"
-                onClick={() => handleAlternativeMethod("Pay at counter")}
-                disabled={isPaymentProcessing}
-              >
-                <div className="payment-sheet__icon">🏷️</div>
-                <div className="payment-sheet__copy">
-                  <span className="payment-sheet__option-title">Pay at counter</span>
-                  <span className="payment-sheet__option-desc">
-                    Cash · Chip &amp; PIN available
-                  </span>
-                </div>
-                <span className="payment-sheet__tag">Ask staff</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

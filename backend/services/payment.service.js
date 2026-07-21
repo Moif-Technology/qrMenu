@@ -45,7 +45,7 @@ async function getNextPaymentId(tx) {
 /**
  * Build INSERT SQL for payment record
  */
-function buildPaymentInsertSql(includeTableId = false) {
+function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
   const baseFields = [
     q("PaymentID"), q("ShopID"), q("TransID"), q("MethodID"),
     q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus")
@@ -58,6 +58,11 @@ function buildPaymentInsertSql(includeTableId = false) {
   if (includeTableId) {
     baseFields.push(q("TableID"));
     baseParams.push("@TableID");
+  }
+
+  if (includeFee) {
+    baseFields.push(q("ServiceFeeAmount"), q("TipAmount"));
+    baseParams.push("@ServiceFeeAmount", "@TipAmount");
   }
 
   return `
@@ -122,7 +127,7 @@ async function queryPaymentWithFilters(tx, filters, selectFields = "*", orderBy 
  * Runs against Moifcore using a fresh connection – outside the PaymentGateway
  * transaction so a KOTMaster update failure never rolls back the payment.
  */
-async function updateKotMasterQrPayment(kotMasterID, totalPaidAmount, balanceAmount, paidStatus) {
+async function updateKotMasterQrPayment(kotMasterID, totalPaidAmount, balanceAmount, paidStatus, posTipAmount = 0) {
   if (!kotMasterID || kotMasterID <= 0) return;
   try {
     const kotPool = await connectToDb();
@@ -177,12 +182,26 @@ async function updateKotMasterQrPayment(kotMasterID, totalPaidAmount, balanceAmo
     // Fire-and-forget: we don't block the payment response on settlement.
     if (qrPaymentStatus === "PAID") {
       console.log("[PAYMENT:SVC] Payment complete — triggering settlement for kotMasterID:", kotMasterID);
-      settleKotToSales(kotMasterID)
-        .then((settlement) => {
+      settleKotToSales(kotMasterID, { tipAmount: r2(toNum(posTipAmount, 0)) })
+        .then(async (settlement) => {
           if (settlement?.alreadySettled) {
             console.log("[PAYMENT:SVC] KOT already settled, skipping.");
-          } else {
-            console.log(`[PAYMENT:SVC] Settlement done: SalesID=${settlement.salesID}, BillNo=${settlement.billNo}, items=${settlement.salesChildCount}`);
+            return;
+          }
+          console.log(`[PAYMENT:SVC] Settlement done: SalesID=${settlement.salesID}, BillNo=${settlement.billNo}, items=${settlement.salesChildCount}`);
+
+          // Stamp SalesID onto every Payment row for this kotMasterID — a split
+          // bill can have multiple rows (one per split leg/method) under the
+          // same TransID, and none of them get a SalesID until this final settle.
+          try {
+            const payPool = await connectToPaymentDb();
+            await payPool.request()
+              .input("TransID", mssql.BigInt, kotMasterID)
+              .input("SalesID", mssql.BigInt, settlement.salesID)
+              .query(`UPDATE ${T_PAYMENT} SET ${q("SalesID")} = @SalesID WHERE ${q("TransID")} = @TransID`);
+            console.log(`[PAYMENT:SVC] Stamped SalesID=${settlement.salesID} on Payment rows for TransID=${kotMasterID}`);
+          } catch (stampErr) {
+            console.error("[PAYMENT:SVC] Failed to stamp SalesID on Payment rows:", stampErr.message);
           }
         })
         .catch((settleErr) => {
@@ -196,6 +215,32 @@ async function updateKotMasterQrPayment(kotMasterID, totalPaidAmount, balanceAmo
 }
 
 /* ---------------- service functions ---------------- */
+
+const DEFAULT_SERVICE_FEE_RATE = 3.1;
+let serviceFeeRateCache = { value: null, fetchedAt: 0 };
+const SERVICE_FEE_CACHE_TTL_MS = 15000;
+
+/**
+ * Company-controlled service fee %, set via the qrmenu-dashboard admin UI
+ * (dbo.ServiceFeeConfig). Cached briefly so checkout doesn't hit the DB on
+ * every request; falls back to the last known / default rate on read failure
+ * so a DB hiccup never blocks checkout.
+ */
+export async function getServiceFeeRatePercent() {
+  const now = Date.now();
+  if (serviceFeeRateCache.value != null && now - serviceFeeRateCache.fetchedAt < SERVICE_FEE_CACHE_TTL_MS) {
+    return serviceFeeRateCache.value;
+  }
+  try {
+    const rows = await queryPaymentDb(`SELECT RatePercent FROM dbo.ServiceFeeConfig WHERE ID = 1`);
+    const rate = toNum(rows?.[0]?.RatePercent, DEFAULT_SERVICE_FEE_RATE);
+    serviceFeeRateCache = { value: rate, fetchedAt: now };
+    return rate;
+  } catch (err) {
+    console.error("[PAYMENT:SVC] Failed to read service fee rate, using cached/default:", err.message);
+    return serviceFeeRateCache.value ?? DEFAULT_SERVICE_FEE_RATE;
+  }
+}
 
 export async function getActivePaymentMethods() {
   const sql = `
@@ -219,10 +264,12 @@ export async function getPaymentMethodById(methodId) {
 }
 
 export async function savePayFullPayment(payload) {
-  const { billAmount, tableId, kotMasterID } = payload;
+  const { billAmount, tableId, kotMasterID, serviceFeeAmount = 0, tipAmount = 0 } = payload;
   const { billAmt } = validateAmounts(billAmount);
-  
-  console.log("[PAYMENT:SVC] savePayFullPayment - Received payload:", { billAmount, tableId, kotMasterID });
+  const feeAmt = r2(toNum(serviceFeeAmount, 0));
+  const tipAmt = r2(toNum(tipAmount, 0));
+
+  console.log("[PAYMENT:SVC] savePayFullPayment - Received payload:", { billAmount, tableId, kotMasterID, serviceFeeAmount: feeAmt, tipAmount: tipAmt });
   
   const pool = await connectToPaymentDb();
   const tx = new mssql.Transaction(pool);
@@ -321,7 +368,7 @@ export async function savePayFullPayment(payload) {
       BalanceAmount: 0,
       PaidStatus: "PAID"
     };
-    
+
     console.log("[PAYMENT:SVC] Payment data to insert:", paymentData);
 
     const req = new mssql.Request(tx);
@@ -334,17 +381,28 @@ export async function savePayFullPayment(payload) {
         req.input(key, mssql.BigInt, value);
       }
     });
-    
+
     if (tableId) {
       req.input("TableID", mssql.BigInt, toInt(tableId));
       paymentData.TableID = toInt(tableId);
     }
 
-    await req.query(buildPaymentInsertSql(!!tableId));
+    req.input("ServiceFeeAmount", mssql.Money, feeAmt);
+    req.input("TipAmount", mssql.Money, tipAmt);
+    paymentData.ServiceFeeAmount = feeAmt;
+    paymentData.TipAmount = tipAmt;
+
+    await req.query(buildPaymentInsertSql(!!tableId, true));
     await tx.commit();
 
+    // POS-side "tip" recorded at settlement = customer's actual tip + a flat
+    // AED 0.50 carved out of the service fee (only when a fee was actually
+    // charged) — business rule: this flat amount is booked as tip, not fee,
+    // in SalesPaymentSplit since that table has no fee column.
+    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+
     // Update KOTMaster QR payment tracking columns in Moifcore
-    await updateKotMasterQrPayment(transId, r2(billAmt), 0, "PAID");
+    await updateKotMasterQrPayment(transId, r2(billAmt), 0, "PAID", posTipAmount);
 
     return { ok: true, ...paymentData, tableId: tableId ? toInt(tableId) : null };
   } catch (err) {
@@ -354,8 +412,10 @@ export async function savePayFullPayment(payload) {
 }
 
 export async function saveEqualSplitPayment(payload) {
-  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId, sessionKey } = payload;
-  
+  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId, sessionKey, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const feeAmt = r2(toNum(serviceFeeAmount, 0));
+  const tipAmt = r2(toNum(tipAmount, 0));
+
   // Validate amounts separately for equal split (paidAmount can be less than billAmount)
   const billAmt = toNum(billAmount);
   if (billAmt <= 0 || !Number.isFinite(billAmt)) {
@@ -368,17 +428,19 @@ export async function saveEqualSplitPayment(payload) {
   }
 
   // Server-side tamper check: if the frontend provided a sessionKey, compare the
-  // claimed paidAmount against the amount Telr actually charged.
+  // claimed charge (share + fee - what Telr was actually asked to charge) against
+  // the amount Telr actually authorized.
   if (sessionKey) {
     const { getVerifiedAmount } = await import("./telrSessionStore.js");
     const verified = getVerifiedAmount(sessionKey);
     if (verified !== null) {
-      const diff = Math.abs(paidAmt - verified);
+      const claimedCharge = r2(paidAmt + feeAmt + tipAmt);
+      const diff = Math.abs(claimedCharge - verified);
       if (diff > 0.01) {
-        console.error(`[PAYMENT:SVC] Tamper detected! claimed=${paidAmt} verified=${verified} diff=${diff} sessionKey=${sessionKey}`);
-        throw new Error(`Payment amount mismatch: claimed ${paidAmt} but Telr verified ${verified}`);
+        console.error(`[PAYMENT:SVC] Tamper detected! claimed=${claimedCharge} (share=${paidAmt}+fee=${feeAmt}) verified=${verified} diff=${diff} sessionKey=${sessionKey}`);
+        throw new Error(`Payment amount mismatch: claimed ${claimedCharge} but Telr verified ${verified}`);
       }
-      console.log(`[PAYMENT:SVC] Amount verified OK: ${paidAmt} === ${verified}`);
+      console.log(`[PAYMENT:SVC] Amount verified OK: ${claimedCharge} === ${verified}`);
     }
   }
   
@@ -539,7 +601,9 @@ export async function saveEqualSplitPayment(payload) {
       updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
       updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      
+      updateReq.input("NewFee", mssql.Money, feeAmt);
+      updateReq.input("NewTip", mssql.Money, tipAmt);
+
       // Update BillAmount if it was wrong
       const needsBillAmountUpdate = billAmountToUse !== storedBillAmount;
       if (needsBillAmountUpdate) {
@@ -549,7 +613,9 @@ export async function saveEqualSplitPayment(payload) {
           SET ${q("BillAmount")} = @BillAmount,
               ${q("PaidAmount")} = @PaidAmount,
               ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus
+              ${q("PaidStatus")} = @PaidStatus,
+              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
+              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
           WHERE ${q("PaymentID")} = @PaymentID
         `;
         await updateReq.query(updateSql);
@@ -559,7 +625,9 @@ export async function saveEqualSplitPayment(payload) {
           UPDATE ${T_PAYMENT}
           SET ${q("PaidAmount")} = @PaidAmount,
               ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus
+              ${q("PaidStatus")} = @PaidStatus,
+              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
+              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
           WHERE ${q("PaymentID")} = @PaymentID
         `;
         await updateReq.query(updateSql);
@@ -609,7 +677,7 @@ export async function saveEqualSplitPayment(payload) {
         BalanceAmount: newBalanceAmount,
         PaidStatus: paidStatus
       };
-      
+
       Object.entries(paymentData).forEach(([key, value]) => {
         if (key === "PaidStatus") {
           insertReq.input(key, mssql.VarChar(50), value);
@@ -619,12 +687,17 @@ export async function saveEqualSplitPayment(payload) {
           insertReq.input(key, mssql.BigInt, value);
         }
       });
-      
+
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
 
-      await insertReq.query(buildPaymentInsertSql(!!tableId));
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      paymentData.ServiceFeeAmount = feeAmt;
+      paymentData.TipAmount = tipAmt;
+
+      await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] Inserted new equal split payment record");
     }
 
@@ -656,8 +729,10 @@ export async function saveEqualSplitPayment(payload) {
 }
 
 export async function saveCustomSplitPayment(payload) {
-  const { billAmount, paidAmount, kotMasterID, transId: providedTransId, tableId } = payload;
+  const { billAmount, paidAmount, kotMasterID, transId: providedTransId, tableId, serviceFeeAmount = 0, tipAmount = 0 } = payload;
   const { billAmt, paidAmt } = validateAmounts(billAmount, paidAmount);
+  const feeAmt = r2(toNum(serviceFeeAmount, 0));
+  const tipAmt = r2(toNum(tipAmount, 0));
 
   console.log("[PAYMENT:SVC] saveCustomSplitPayment - Received payload:", { billAmount, paidAmount, kotMasterID, providedTransId, tableId });
 
@@ -799,13 +874,17 @@ export async function saveCustomSplitPayment(payload) {
       updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
       updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      
+      updateReq.input("NewFee", mssql.Money, feeAmt);
+      updateReq.input("NewTip", mssql.Money, tipAmt);
+
       let updateSql = `
         UPDATE ${T_PAYMENT}
         SET ${q("BillAmount")}   = @BillAmount,
             ${q("PaidAmount")}   = @PaidAmount,
             ${q("BalanceAmount")} = @BalanceAmount,
-            ${q("PaidStatus")}   = @PaidStatus
+            ${q("PaidStatus")}   = @PaidStatus,
+            ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
+            ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
         WHERE ${q("PaymentID")} = @PaymentID
       `;
       
@@ -840,7 +919,7 @@ export async function saveCustomSplitPayment(payload) {
         BalanceAmount: newBalanceAmount,
         PaidStatus: paidStatus
       };
-      
+
       Object.entries(paymentData).forEach(([key, value]) => {
         if (key === "PaidStatus") {
           insertReq.input(key, mssql.VarChar(50), value);
@@ -850,12 +929,17 @@ export async function saveCustomSplitPayment(payload) {
           insertReq.input(key, mssql.BigInt, value);
         }
       });
-      
+
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
 
-      await insertReq.query(buildPaymentInsertSql(!!tableId));
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      paymentData.ServiceFeeAmount = feeAmt;
+      paymentData.TipAmount = tipAmt;
+
+      await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] Inserted new payment record");
     }
 
@@ -885,8 +969,10 @@ export async function saveCustomSplitPayment(payload) {
 }
 
 export async function saveItemSplitPayment(payload) {
-  const { items, tableId, kotMasterID, totalBillAmount } = payload;
-  
+  const { items, tableId, kotMasterID, totalBillAmount, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const feeAmt = r2(toNum(serviceFeeAmount, 0));
+  const tipAmt = r2(toNum(tipAmount, 0));
+
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error("At least one item is required for item split payment");
   }
@@ -1232,15 +1318,19 @@ export async function saveItemSplitPayment(payload) {
       updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
       updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      
+      updateReq.input("NewFee", mssql.Money, feeAmt);
+      updateReq.input("NewTip", mssql.Money, tipAmt);
+
       const updateSql = `
         UPDATE ${T_PAYMENT}
         SET ${q("PaidAmount")} = @PaidAmount,
             ${q("BalanceAmount")} = @BalanceAmount,
-            ${q("PaidStatus")} = @PaidStatus
+            ${q("PaidStatus")} = @PaidStatus,
+            ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
+            ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
         WHERE ${q("PaymentID")} = @PaymentID
       `;
-      
+
       await updateReq.query(updateSql);
       console.log("[PAYMENT:SVC] Updated existing item split payment record");
       
@@ -1277,7 +1367,7 @@ export async function saveItemSplitPayment(payload) {
         BalanceAmount: newBalanceAmount,
         PaidStatus: paidStatus
       };
-      
+
       Object.entries(paymentData).forEach(([key, value]) => {
         if (key === "PaidStatus") {
           insertReq.input(key, mssql.VarChar(50), value);
@@ -1287,13 +1377,18 @@ export async function saveItemSplitPayment(payload) {
           insertReq.input(key, mssql.BigInt, value);
         }
       });
-      
+
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
         paymentData.TableID = toInt(tableId);
       }
 
-      await insertReq.query(buildPaymentInsertSql(!!tableId));
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      paymentData.ServiceFeeAmount = feeAmt;
+      paymentData.TipAmount = tipAmt;
+
+      await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] ✅ Inserted new item split payment record with MethodID=3");
     }
 

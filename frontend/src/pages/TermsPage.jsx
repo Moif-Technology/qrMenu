@@ -107,9 +107,9 @@ export default function TermsPage() {
             <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#933953" }}>
               Customer service fee
             </p>
-            <p className="text-2xl font-bold text-zinc-900 mb-2">Up to 3.5%</p>
+            <p className="text-2xl font-bold text-zinc-900 mb-2">Up to 3.1%</p>
             <p className="text-sm">
-              A convenience/service fee of up to 3.5% may be charged to customers for payments
+              A convenience/service fee of up to 3.1% may be charged to customers for payments
               made through the Deyno QR Payment platform. The applicable fee will be clearly
               displayed on the checkout page before the customer confirms the payment.
             </p>

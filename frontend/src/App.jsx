@@ -16,6 +16,7 @@ function getBasename() {
   const p = typeof window !== "undefined" ? window.location.pathname : "";
   if (p.startsWith("/opaia")) return "/opaia";
   if (p.startsWith("/bonfood")) return "/bonfood";
+  if (p.startsWith("/payout")) return "/payout";
   return "";
 }
 export const RESTAURANT_BASE_PATH = "/opaia";
@@ -28,6 +29,12 @@ const isOpaiaContext =
 const isBonfoodContext =
   typeof window !== "undefined" &&
   window.location.pathname.startsWith("/bonfood");
+
+// Payout console (merged in from qrmenu-dashboard) - own login/auth,
+// own full-reload boundary just like /opaia and /bonfood.
+const isPayoutContext =
+  typeof window !== "undefined" &&
+  window.location.pathname.startsWith("/payout");
 
 // app.deynoqr.com = LandingPage + OpaiaEntryPage
 // deynoqr.com     = QR menu app (entry + menu + admin)
@@ -93,6 +100,9 @@ const ReservationSuccessPage = lazy(() =>
 );
 const GuestReservationPage = lazy(() => import("./pages/GuestReservationPage"));
 
+// Payout console
+const PayoutRouter = lazy(() => import("./pages/payout/PayoutRouter"));
+
 // Admin portal
 const AdminLayout = lazy(() => import("./component/admin/AdminLayout"));
 const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
@@ -116,76 +126,83 @@ export default function App() {
       <AdminAuthProvider>
         <Suspense fallback={<PageLoader />}>
           <Routes>
-            {/* ── Root route differs by context ── */}
-            <Route
-              path="/"
-              element={
-                isOpaiaContext ? <OpaiaEntryPage /> :
-                isBonfoodContext ? <LaunchingSoonPage name="Bonfood" /> :
-                isAppDomain ? <LandingPage /> :
-                <OpaiaEntryPage />
-              }
-            />
+            {isPayoutContext ? (
+              /* ── Payout console: own login + full-reload boundary ── */
+              <Route path="/*" element={<PayoutRouter />} />
+            ) : (
+              <>
+                {/* ── Root route differs by context ── */}
+                <Route
+                  path="/"
+                  element={
+                    isOpaiaContext ? <OpaiaEntryPage /> :
+                    isBonfoodContext ? <LaunchingSoonPage name="Bonfood" /> :
+                    isAppDomain ? <LandingPage /> :
+                    <OpaiaEntryPage />
+                  }
+                />
 
-            {/* ── Company info / legal (public, unprefixed) ── */}
-            <Route path="/about" element={<AboutUsPage />} />
-            <Route path="/refund-policy" element={<RefundPolicyPage />} />
-            <Route path="/terms" element={<TermsPage />} />
-            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+                {/* ── Company info / legal (public, unprefixed) ── */}
+                <Route path="/about" element={<AboutUsPage />} />
+                <Route path="/refund-policy" element={<RefundPolicyPage />} />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
 
-            {/* ── Restaurant menu ──
-                In the opaia context: URL = /opaia/menu  → MenuPage
-                In root context: not linked (but renders if navigated to directly) */}
-            <Route path="/menu" element={<MenuPage />} />
+                {/* ── Restaurant menu ──
+                    In the opaia context: URL = /opaia/menu  → MenuPage
+                    In root context: not linked (but renders if navigated to directly) */}
+                <Route path="/menu" element={<MenuPage />} />
 
-            {/* ── Existing routes (unchanged) ── */}
-            <Route path="/package/:packageId" element={<PackageDetailsPage />} />
-            <Route path="/r/:token" element={<TableSummary />} />
-            <Route path="/qr-generator" element={<QRGenerator />} />
-            <Route path="/qr-menu-management" element={<QRMenuManagement />} />
-            <Route path="/reservation" element={<ReservationPage />} />
-            <Route path="/walk-in" element={<WalkInPage />} />
-            <Route path="/reservation-form" element={<ReservationFormPage />} />
-            <Route path="/table-action" element={<TableActionPage />} />
-            <Route path="/reservation-list" element={<ReservationListPage />} />
-            <Route path="/waitlist" element={<WaitlistPage />} />
-            <Route path="/customers" element={<CustomersPage />} />
-            <Route path="/reports" element={<ReportsPage />} />
-            <Route
-              path="/reservation-details"
-              element={<ReservationDetailsPage />}
-            />
-            <Route path="/walk-in-success" element={<WalkInSuccessPage />} />
-            <Route
-              path="/reservation-success"
-              element={<ReservationSuccessPage />}
-            />
-            <Route
-              path="/mt/opaiareservation"
-              element={<GuestReservationPage />}
-            />
+                {/* ── Existing routes (unchanged) ── */}
+                <Route path="/package/:packageId" element={<PackageDetailsPage />} />
+                <Route path="/r/:token" element={<TableSummary />} />
+                <Route path="/qr-generator" element={<QRGenerator />} />
+                <Route path="/qr-menu-management" element={<QRMenuManagement />} />
+                <Route path="/reservation" element={<ReservationPage />} />
+                <Route path="/walk-in" element={<WalkInPage />} />
+                <Route path="/reservation-form" element={<ReservationFormPage />} />
+                <Route path="/table-action" element={<TableActionPage />} />
+                <Route path="/reservation-list" element={<ReservationListPage />} />
+                <Route path="/waitlist" element={<WaitlistPage />} />
+                <Route path="/customers" element={<CustomersPage />} />
+                <Route path="/reports" element={<ReportsPage />} />
+                <Route
+                  path="/reservation-details"
+                  element={<ReservationDetailsPage />}
+                />
+                <Route path="/walk-in-success" element={<WalkInSuccessPage />} />
+                <Route
+                  path="/reservation-success"
+                  element={<ReservationSuccessPage />}
+                />
+                <Route
+                  path="/mt/opaiareservation"
+                  element={<GuestReservationPage />}
+                />
 
-            {/* ── Admin portal ── */}
-            <Route path="/admin/login" element={<AdminLoginPage />} />
-            <Route
-              path="/admin"
-              element={
-                <RequireAdmin>
-                  <AdminLayout />
-                </RequireAdmin>
-              }
-            >
-              <Route index element={<Navigate to="overview" replace />} />
-              <Route path="overview" element={<AdminOverview />} />
-              <Route path="waitlist" element={<AdminWaitlist />} />
-              <Route path="customers" element={<AdminCustomers />} />
-              <Route path="menu" element={<AdminMenu />} />
-              <Route path="qr-codes" element={<AdminQRCodes />} />
-              <Route path="reports" element={<AdminReports />} />
-              <Route path="settings" element={<AdminSettings />} />
-            </Route>
+                {/* ── Admin portal ── */}
+                <Route path="/admin/login" element={<AdminLoginPage />} />
+                <Route
+                  path="/admin"
+                  element={
+                    <RequireAdmin>
+                      <AdminLayout />
+                    </RequireAdmin>
+                  }
+                >
+                  <Route index element={<Navigate to="overview" replace />} />
+                  <Route path="overview" element={<AdminOverview />} />
+                  <Route path="waitlist" element={<AdminWaitlist />} />
+                  <Route path="customers" element={<AdminCustomers />} />
+                  <Route path="menu" element={<AdminMenu />} />
+                  <Route path="qr-codes" element={<AdminQRCodes />} />
+                  <Route path="reports" element={<AdminReports />} />
+                  <Route path="settings" element={<AdminSettings />} />
+                </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            )}
           </Routes>
           <OrderSuccess />
         </Suspense>

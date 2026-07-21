@@ -2,9 +2,11 @@ import React, { useEffect, useState, useMemo } from "react";
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
-export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, onConfirm, equalSplitInfo = null }) {
+export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, onConfirm, equalSplitInfo = null, serviceFeeRate = 0 }) {
   const [count, setCount] = useState(2);
   const [shares, setShares] = useState([]);
+  const [tipPreset, setTipPreset] = useState(null); // number | "roundup" | "custom" | null
+  const [customTip, setCustomTip] = useState("");
 
   // Initialise count once on mount.
   // In continuation mode start at 1 so the current person decides how many
@@ -34,6 +36,22 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
   const sum = useMemo(() => shares.reduce((a, s) => a + (+s.amount || 0), 0), [shares]);
   const diff = Math.round((total - sum) * 100) / 100;
   const ok = Math.abs(diff) < 0.01;
+
+  // Fee + tip preview for THIS person's own share (shares[0] = "pays now").
+  // Fee is display-only here — the backend always recomputes it from the live
+  // DB rate at charge time, this is just so the guest sees the real total
+  // before tapping pay.
+  const myShare = Number(shares[0]?.amount || 0);
+  const myFee = Math.round(myShare * serviceFeeRate * 100) / 100;
+  const baseDue = myShare + myFee;
+  const roundUpRemainder = Math.ceil(baseDue / 5) * 5 - baseDue;
+  const roundUpTip = roundUpRemainder < 0.01 ? 5 : roundUpRemainder;
+  const tipAmount = tipPreset === "custom"
+    ? Math.max(0, Number(customTip) || 0)
+    : tipPreset === "roundup"
+      ? roundUpTip
+      : Number(tipPreset) || 0;
+  const totalToPay = baseDue + tipAmount;
 
   return (
     <div className="fixed inset-0 z-[70]">
@@ -124,17 +142,95 @@ export default function SplitEqualSheet({ total = 0, currency = "AED", onClose, 
               {ok ? "✓ Amounts match perfectly" : `Difference: ${fmt(diff)} ${currency}`}
             </div>
 
+            {/* Your share breakdown (fee always applies, tip optional) */}
+            {ok && myShare > 0 && (
+              <div className="rounded-xl border p-3 mb-3 space-y-1" style={{ borderColor: "var(--grad-end-soft)" }}>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Your share</span>
+                  <span className="text-gray-900">{fmt(myShare)} {currency}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Service fee</span>
+                  <span className="text-gray-900">{fmt(myFee)} {currency}</span>
+                </div>
+                {tipAmount > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">Tip</span>
+                    <span className="text-gray-900">{fmt(tipAmount)} {currency}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-sm font-semibold pt-1 border-t" style={{ borderColor: "var(--grad-end-soft)" }}>
+                  <span>You pay</span>
+                  <span>{fmt(totalToPay)} {currency}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Tip (optional, applies to this person's share only) */}
+            {ok && myShare > 0 && (
+              <div className="mb-3">
+                <div className="flex items-baseline justify-between mb-1.5 px-1">
+                  <span className="text-[11px] font-medium tracking-wide text-gray-600">Add a tip</span>
+                  {tipAmount > 0 ? (
+                    <button onClick={() => { setTipPreset(null); setCustomTip(""); }} className="text-[11px] text-gray-400 hover:text-gray-600">
+                      Remove
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">Optional</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  <button
+                    onClick={() => setTipPreset(tipPreset === "roundup" ? null : "roundup")}
+                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "roundup" ? "btn text-white" : "bg-white text-gray-700"}`}
+                    style={tipPreset === "roundup" ? {} : { borderColor: "var(--grad-end-soft)" }}
+                  >
+                    +{fmt(roundUpTip)}
+                  </button>
+                  {[5, 10].map((amt) => (
+                    <button
+                      key={amt}
+                      onClick={() => setTipPreset(tipPreset === amt ? null : amt)}
+                      className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === amt ? "btn text-white" : "bg-white text-gray-700"}`}
+                      style={tipPreset === amt ? {} : { borderColor: "var(--grad-end-soft)" }}
+                    >
+                      {amt} {currency}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
+                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "custom" ? "btn text-white" : "bg-white text-gray-700"}`}
+                    style={tipPreset === "custom" ? {} : { borderColor: "var(--grad-end-soft)" }}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {tipPreset === "custom" && (
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={customTip}
+                    onChange={(e) => setCustomTip(e.target.value)}
+                    placeholder="Enter tip amount"
+                    className="input mt-2 text-right"
+                    autoFocus
+                  />
+                )}
+              </div>
+            )}
+
             <div className="space-y-2">
               <button
                 disabled={!ok}
-                onClick={() => onConfirm(shares)}
+                onClick={() => onConfirm(shares, tipAmount)}
                 className="btn w-full h-12 rounded-xl disabled:opacity-50"
               >
                 {equalSplitInfo
                   ? count === 1
-                    ? `Pay ${fmt(shares[0]?.amount || 0)} ${currency}`
-                    : `Pay my share · ${fmt(shares[0]?.amount || 0)} ${currency}`
-                  : "Confirm equal split"}
+                    ? `Pay ${fmt(totalToPay)} ${currency}`
+                    : `Pay my share · ${fmt(totalToPay)} ${currency}`
+                  : `Confirm equal split · Pay ${fmt(totalToPay)} ${currency}`}
               </button>
 
               {equalSplitInfo && (

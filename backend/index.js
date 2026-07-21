@@ -10,6 +10,12 @@ import menuRoutes from "./routes/menu.routes.js";
 import modifierRoutes from "./routes/modifier.routes.js";
 import packageRoutes from "./routes/package.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
+import payoutAuthRoutes from "./routes/payout/auth.routes.js";
+import payoutMethodsRoutes from "./routes/payout/methods.routes.js";
+import payoutPayoutsRoutes from "./routes/payout/payouts.routes.js";
+import payoutRestaurantsRoutes from "./routes/payout/restaurants.routes.js";
+import payoutSettingsRoutes from "./routes/payout/settings.routes.js";
+import payoutTransactionsRoutes from "./routes/payout/transactions.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import qrMenuRoutes from "./routes/qrMenu.routes.js";
 import reservationRoutes from "./routes/reservation.routes.js";
@@ -243,6 +249,14 @@ app.use("/api", waitlistRoutes);
 app.use("/api", qrRoutes);
 app.use("/api/floor-layout", floorLayoutRoutes);
 app.use(telrRoutes);
+
+// Payout tracker (merged in from qrmenu-dashboard - one backend, one process)
+app.use("/api/payout/auth", payoutAuthRoutes);
+app.use("/api/payout/transactions", payoutTransactionsRoutes);
+app.use("/api/payout/payouts", payoutPayoutsRoutes);
+app.use("/api/payout/restaurants", payoutRestaurantsRoutes);
+app.use("/api/payout/methods", payoutMethodsRoutes);
+app.use("/api/payout/settings", payoutSettingsRoutes);
 // 404
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: `Not found: ${req.method} ${req.originalUrl}` });

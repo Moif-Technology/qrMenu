@@ -7,11 +7,14 @@ export default function SplitPickItemsSheet({
   paidKotChildIds = [], // array of paid kotChildIDs (items already paid)
   currency = "AED",
   onClose,             // () => void
-  onConfirm,           // (payload) => void
+  onConfirm,           // (payload, tipAmount) => void
   onRemoveSplit,       // optional: () => void
+  serviceFeeRate = 0,
 }) {
   // selected count per line (0..Qty)
   const [pick, setPick] = useState([]);
+  const [tipPreset, setTipPreset] = useState(null); // number | "roundup" | "custom" | null
+  const [customTip, setCustomTip] = useState("");
 
   useEffect(() => {
     // Initialize pick array - set to 0 for all items
@@ -45,6 +48,19 @@ export default function SplitPickItemsSheet({
     });
     return total;
   }, [items, pick]);
+
+  // Fee + tip preview — fee is display-only, backend always recomputes it
+  // from the live DB rate at charge time.
+  const feeAmt = Math.round(share * serviceFeeRate * 100) / 100;
+  const baseDue = share + feeAmt;
+  const roundUpRemainder = Math.ceil(baseDue / 5) * 5 - baseDue;
+  const roundUpTip = roundUpRemainder < 0.01 ? 5 : roundUpRemainder;
+  const tipAmount = tipPreset === "custom"
+    ? Math.max(0, Number(customTip) || 0)
+    : tipPreset === "roundup"
+      ? roundUpTip
+      : Number(tipPreset) || 0;
+  const totalToPay = baseDue + tipAmount;
 
   const makePayload = () => {
     const out = [];
@@ -183,10 +199,88 @@ export default function SplitPickItemsSheet({
           {/* footer summary */}
           <div className="px-6 py-4 border-t bg-white rounded-b-[28px]"
                style={{ borderColor: "var(--grad-end-soft)" }}>
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-[15px] font-medium text-gray-900">Your share</div>
-              <div className="text-[15px] font-bold text-gray-900">{fmt(share)} {currency}</div>
-            </div>
+            {share > 0 && (
+              <div className="rounded-xl border p-3 mb-3 space-y-1" style={{ borderColor: "var(--grad-end-soft)" }}>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Your share</span>
+                  <span className="text-gray-900">{fmt(share)} {currency}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Service fee</span>
+                  <span className="text-gray-900">{fmt(feeAmt)} {currency}</span>
+                </div>
+                {tipAmount > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">Tip</span>
+                    <span className="text-gray-900">{fmt(tipAmount)} {currency}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-sm font-semibold pt-1 border-t" style={{ borderColor: "var(--grad-end-soft)" }}>
+                  <span>You pay</span>
+                  <span>{fmt(totalToPay)} {currency}</span>
+                </div>
+              </div>
+            )}
+
+            {share > 0 && (
+              <div className="mb-3">
+                <div className="flex items-baseline justify-between mb-1.5 px-1">
+                  <span className="text-[11px] font-medium tracking-wide text-gray-600">Add a tip</span>
+                  {tipAmount > 0 ? (
+                    <button onClick={() => { setTipPreset(null); setCustomTip(""); }} className="text-[11px] text-gray-400 hover:text-gray-600">
+                      Remove
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">Optional</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  <button
+                    onClick={() => setTipPreset(tipPreset === "roundup" ? null : "roundup")}
+                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "roundup" ? "text-white" : "bg-white text-gray-700"}`}
+                    style={tipPreset === "roundup"
+                      ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
+                      : { borderColor: "var(--grad-end-soft)" }}
+                  >
+                    +{fmt(roundUpTip)}
+                  </button>
+                  {[5, 10].map((amt) => (
+                    <button
+                      key={amt}
+                      onClick={() => setTipPreset(tipPreset === amt ? null : amt)}
+                      className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === amt ? "text-white" : "bg-white text-gray-700"}`}
+                      style={tipPreset === amt
+                        ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
+                        : { borderColor: "var(--grad-end-soft)" }}
+                    >
+                      {amt} {currency}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
+                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "custom" ? "text-white" : "bg-white text-gray-700"}`}
+                    style={tipPreset === "custom"
+                      ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
+                      : { borderColor: "var(--grad-end-soft)" }}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {tipPreset === "custom" && (
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={customTip}
+                    onChange={(e) => setCustomTip(e.target.value)}
+                    placeholder="Enter tip amount"
+                    className="input mt-2 text-right"
+                    autoFocus
+                  />
+                )}
+              </div>
+            )}
+
             <div className="text-[12px] text-gray-500 mb-3">Inclusive of all taxes and charges</div>
 
             <div className="flex gap-3">
@@ -201,14 +295,14 @@ export default function SplitPickItemsSheet({
               </button>
               <button
                 disabled={share <= 0}
-                onClick={() => onConfirm(makePayload())}
+                onClick={() => onConfirm(makePayload(), tipAmount)}
                 className="flex-1 h-12 rounded-full text-white font-semibold disabled:opacity-50"
                 style={{
                   background:
                     "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))",
                 }}
               >
-                Confirm
+                Confirm · Pay {fmt(totalToPay)} {currency}
               </button>
             </div>
 

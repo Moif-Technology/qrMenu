@@ -16,6 +16,7 @@ import { connectToDb } from "../config/dbConfig.js";
 const T_IDCTRL   = "dbo.IDControlManager";
 const T_SALESM   = "dbo.SalesMaster";
 const T_SALESC   = "dbo.SalesChild";
+const T_SALESPS  = "dbo.SalesPaymentSplit";
 const T_KOTM     = "dbo.KOTMaster";
 const T_KOTC     = "dbo.KOTChild";
 const q          = (n) => `[${n}]`;
@@ -97,11 +98,13 @@ async function getNextBillNo(tx) {
  * Settle a fully-paid KOT into SalesMaster / SalesChild, then delete it.
  *
  * @param {number} kotMasterID
+ * @param {{ tipAmount?: number }} [opts] - POS-side tip to record in SalesPaymentSplit
  * @returns {{ salesID: number, billNo: number, salesChildCount: number }}
  */
-export async function settleKotToSales(kotMasterID) {
+export async function settleKotToSales(kotMasterID, opts = {}) {
   const kmID = toInt(kotMasterID);
   if (kmID <= 0) throw new Error(`settleKotToSales: invalid kotMasterID (${kotMasterID})`);
+  const tipAmount = r2(toNum(opts?.tipAmount, 0));
 
   const pool = await connectToDb();
   const tx   = new mssql.Transaction(pool);
@@ -159,7 +162,7 @@ export async function settleKotToSales(kotMasterID) {
     smReq.input("CounterNo",              mssql.Numeric(18, 0),   counterNo);
     smReq.input("BillNo",                 mssql.Numeric(18, 0),   billNo);
     smReq.input("CustomerID",             mssql.BigInt,           customerID);
-    smReq.input("PaymentMode",            mssql.VarChar(50),      "QR MENU");
+    smReq.input("PaymentMode",            mssql.VarChar(50),      "ONLINE");
     smReq.input("CreditCardNO",           mssql.VarChar(50),      "0");
     smReq.input("CreditCardTypeID",       mssql.BigInt,           0);
     smReq.input("Amount",                 mssql.Money,            r2(toNum(km.Amount)));
@@ -168,14 +171,14 @@ export async function settleKotToSales(kotMasterID) {
     smReq.input("HoldStatus",             mssql.Char(10),         holdStatus);
     smReq.input("PaidAmount",             mssql.Money,            r2(toNum(km.Amount)));
     smReq.input("BalancePaid",            mssql.Money,            0);
-    smReq.input("TransactionType",        mssql.VarChar(1),       "Q");
+    smReq.input("TransactionType",        mssql.VarChar(1),       "S");
     smReq.input("PaidCurrency",           mssql.VarChar(50),      "AED");
     smReq.input("StationID",             mssql.BigInt,           toInt(km.StationID, 0));
     smReq.input("DBLocation",             mssql.VarChar(50),      "0");
     smReq.input("UploadStatusM",          mssql.VarChar(50),      "PENDING");
     smReq.input("CounterCloseStatus",     mssql.VarChar(50),      "PENDING");
-    smReq.input("CrBy",                   mssql.VarChar(50),      "QR MENU");
-    smReq.input("ModBy",                  mssql.VarChar(50),      "QR MENU");
+    smReq.input("CrBy",                   mssql.VarChar(50),      "QR_MENU");
+    smReq.input("ModBy",                  mssql.VarChar(50),      "QR_MENU");
     smReq.input("StaffID",               mssql.BigInt,           0);
     smReq.input("WaiterID",              mssql.BigInt,           toInt(km.WaiterID, 0));
     smReq.input("TableID",               mssql.BigInt,           toInt(km.TableID, 0));
@@ -194,6 +197,9 @@ export async function settleKotToSales(kotMasterID) {
     smReq.input("RoundOffAdj",           mssql.Money,            r2(toNum(km.RoundOffAdj)));
     smReq.input("DeliveryBoyID",         mssql.BigInt,           toInt(km.DeliveryBoyId, 0));
     smReq.input("Remarks",               mssql.VarChar(200),     "QR MENU PAYMENT");
+    // Bill amount actually collected online (excludes service fee — that's
+    // tracked separately in PaymentGateway.dbo.Payment.ServiceFeeAmount).
+    smReq.input("OnlinePaymentAmount",   mssql.Money,            r2(toNum(km.Amount)));
 
     const smSql = `
       INSERT INTO ${T_SALESM} (
@@ -242,7 +248,7 @@ export async function settleKotToSales(kotMasterID) {
         0, @ServerStatus, 0,
         '0', 0, 0, 0,
         0, 0, @Remarks,
-        0, 0, '0', 'Q',
+        0, 0, 'QR_PENDING', 'Q',
         0, 0, '0', '0',
         '0', 0,
         0, 0, 0,
@@ -254,13 +260,43 @@ export async function settleKotToSales(kotMasterID) {
         @Tax1AmountM, @Tax2AmountM, @Tax3AmountM,
         @Tax1RateM, @Tax2RateM, @Tax3RateM,
         0, @RoundOffAdj, '0',
-        0, 0,
+        0, @OnlinePaymentAmount,
         ' ', 0
       )
     `;
 
     await smReq.query(smSql);
     console.log(`[SETTLEMENT] SalesMaster inserted: SalesID=${salesID}, BillNo=${billNo}`);
+
+    /* ---- 5b. Insert SalesPaymentSplit — records the online payment + tip ---- */
+    const spsReq = new mssql.Request(tx);
+    spsReq.input("SalesID",       mssql.BigInt,       salesID);
+    spsReq.input("PayerNo",       mssql.Int,          1);
+    spsReq.input("PayMode",       mssql.VarChar(20),  "ONLINE");
+    spsReq.input("BillAmount",    mssql.Money,        r2(toNum(km.Amount)));
+    spsReq.input("TipAmount",     mssql.Money,        tipAmount);
+    spsReq.input("RefNo",         mssql.VarChar(100), "QR MENU");
+    spsReq.input("StationID",     mssql.BigInt,       toInt(km.StationID, 0));
+    spsReq.input("CounterID",     mssql.BigInt,       counterNo);
+    spsReq.input("StaffID",       mssql.BigInt,       0);
+    spsReq.input("SalesManID",    mssql.BigInt,       toInt(km.SalesManID, 0));
+    spsReq.input("CounterCloseStatus", mssql.VarChar(20), "PENDING");
+    spsReq.input("CreditCardTypeID",   mssql.BigInt,      0);
+
+    await spsReq.query(`
+      INSERT INTO ${T_SALESPS} (
+        ${q("SalesID")}, ${q("PayerNo")}, ${q("PayMode")},
+        ${q("BillAmount")}, ${q("TipAmount")}, ${q("RefNo")},
+        ${q("StationID")}, ${q("CounterID")}, ${q("StaffID")}, ${q("SalesManID")},
+        ${q("PayDate")}, ${q("IsCancelled")}, ${q("CounterCloseStatus")}, ${q("CreditCardTypeID")}
+      ) VALUES (
+        @SalesID, @PayerNo, @PayMode,
+        @BillAmount, @TipAmount, @RefNo,
+        @StationID, @CounterID, @StaffID, @SalesManID,
+        GETDATE(), 0, @CounterCloseStatus, @CreditCardTypeID
+      )
+    `);
+    console.log(`[SETTLEMENT] SalesPaymentSplit inserted: SalesID=${salesID}, TipAmount=${tipAmount}`);
 
     /* ---- 6. Insert SalesChild for each KOTChild ---- */
     let salesChildCount = 0;

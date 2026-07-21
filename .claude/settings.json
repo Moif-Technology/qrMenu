@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(netstat -ano)",
+      "Bash(npx vite *)",
+      "WebFetch(domain:telr.com)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" diff --stat frontend/src/pages/OpaiaEntryPage.jsx)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" status --short)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" add frontend/src/pages/OpaiaEntryPage.jsx)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" push)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" add frontend/src/pages/TableSummary.jsx)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" add .github/workflows/deploy-hostinger.yml)",
+      "PowerShell(gh run list --repo Moif-Technology/qrMenu --limit 1)",
+      "Bash(npm run *)",
+      "mcp__playwright__browser_run_code_unsafe",
+      "Bash(ls \"d:\\\\HMS UPDATED\\\\qrMenu\" && ls \"d:\\\\HMS UPDATED\" | head -30)",
+      "Read(//d/HMS UPDATED/**)",
+      "Bash(node --check ../backend/routes/payouts.routes.js)",
+      "Bash(node --check ../backend/routes/transactions.routes.js)"
+    ]
+  }
+}

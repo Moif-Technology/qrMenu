@@ -339,7 +339,8 @@ export async function saveKot(payload) {
           ${q("Amount")}, ${q("StationID")}, ${q("BillID")},
           ${q("CrBy")}, ${q("CrOn")}, ${q("ModBy")}, ${q("ModOn")},
           ${q("NofCustomer")}, ${q("Remarks")},
-          ${q("RoundOffAdj")}, ${q("DummyBillPrintStatus")}
+          ${q("RoundOffAdj")}, ${q("DummyBillPrintStatus")}, ${q("QrPaymentStatus")},
+          ${q("QrPaidAmount")}, ${q("QrBalanceAmount")}
         )
         VALUES (
           @kotMasterID, @KotNumber, @KotPrefix, @CounterNo,
@@ -356,7 +357,8 @@ export async function saveKot(payload) {
           @Amount, @StationID, 0,
           @CrBy, GETDATE(), @ModBy, GETDATE(),
           1, @Remarks,
-          0, @Dummy
+          0, @Dummy, 'PENDING',
+          0, @Amount
         )
       `;
       await reqM.query(sqlM);

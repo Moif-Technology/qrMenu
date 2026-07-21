@@ -1,6 +1,6 @@
 // backend/controllers/payment.controller.js
 import util from "node:util";
-import { getActivePaymentMethods, getPaymentMethodById, savePayFullPayment, saveCustomSplitPayment, saveItemSplitPayment, saveEqualSplitPayment, getPaidItems, getTableBalance } from "../services/payment.service.js";
+import { getActivePaymentMethods, getPaymentMethodById, savePayFullPayment, saveCustomSplitPayment, saveItemSplitPayment, saveEqualSplitPayment, getPaidItems, getTableBalance, getServiceFeeRatePercent } from "../services/payment.service.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -27,6 +27,20 @@ function unwrapSqlError(err) {
     stack: err?.stack,
     precedingErrors: preceding
   };
+}
+
+/**
+ * GET /api/payment/service-fee-rate
+ * Company-controlled service fee %, set via the qrmenu-dashboard admin UI.
+ */
+export async function getServiceFeeRate(req, res) {
+  try {
+    const ratePercent = await getServiceFeeRatePercent();
+    return res.status(200).json({ ok: true, ratePercent });
+  } catch (err) {
+    console.error("[PAYMENT][getServiceFeeRate] Error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to load service fee rate" });
+  }
 }
 
 /**
@@ -170,6 +184,8 @@ export async function processEqualSplit(req, res) {
   const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
   const transId = req.body?.transId;
   const sessionKey = req.body?.sessionKey || null; // used for tamper-check in service layer
+  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
+  const tipAmount = req.body?.tipAmount || 0;
   
   console.log(`[PAYMENT][${reqId}] Raw request body:`, JSON.stringify(req.body, null, 2));
   
@@ -202,7 +218,7 @@ export async function processEqualSplit(req, res) {
   console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
   
   try {
-    const result = await saveEqualSplitPayment({ billAmount, paidAmount, numberOfPeople, kotMasterID, transId, tableId, sessionKey });
+    const result = await saveEqualSplitPayment({ billAmount, paidAmount, numberOfPeople, kotMasterID, transId, tableId, sessionKey, serviceFeeAmount, tipAmount });
     console.log(`[PAYMENT][${reqId}] OK:`, result);
     return res.status(201).json({ 
       ok: true, 
@@ -240,7 +256,9 @@ export async function processCustomSplit(req, res) {
   const transId = req.body?.transId;
   const tableId = req.body?.tableId;
   const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
-  
+  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
+  const tipAmount = req.body?.tipAmount || 0;
+
   const preview = {
     billAmount,
     paidAmount,
@@ -253,7 +271,7 @@ export async function processCustomSplit(req, res) {
   console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
 
   try {
-    const result = await saveCustomSplitPayment({ billAmount, paidAmount, transId, tableId, kotMasterID });
+    const result = await saveCustomSplitPayment({ billAmount, paidAmount, transId, tableId, kotMasterID, serviceFeeAmount, tipAmount });
     console.log(`[PAYMENT][${reqId}] OK:`, result);
     return res.status(201).json({
       ok: true,
@@ -286,14 +304,16 @@ export async function processItemSplit(req, res) {
   const tableId = req.body?.tableId;
   const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
   const totalBillAmount = req.body?.totalBillAmount || req.body?.billAmount || null;
-  
+  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
+  const tipAmount = req.body?.tipAmount || 0;
+
   const preview = {
     itemsCount: items.length, tableId, kotMasterID, totalBillAmount, methodId: 3
   };
   console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
-  
+
   try {
-    const result = await saveItemSplitPayment({ items, tableId, kotMasterID, totalBillAmount });
+    const result = await saveItemSplitPayment({ items, tableId, kotMasterID, totalBillAmount, serviceFeeAmount, tipAmount });
     console.log(`[PAYMENT][${reqId}] OK:`, result);
     return res.status(201).json({ 
       ok: true, 
