@@ -175,6 +175,8 @@ function PayFullButton({
           token,
           brand,
           mode: "split-equal",
+          numberOfPeople,
+          originalBillAmount: fullGrandTotal,
           splitPayload: {
             paymentPayload,
             amountPerPerson: amountToCharge, // This payment: one person pays remaining
@@ -316,7 +318,10 @@ function PayFullButton({
       const feeAmt = Number(serviceFeeAmount) || 0;
       const tip = Number(tipAmount) || 0;
       onCardPay?.({
-        amount: Number(grandTotal) + feeAmt + tip,
+        // Raw bill only — backend recomputes fee from this amount and adds
+        // tip itself (telr.routes.js). Baking fee/tip in here double-counts
+        // both once the backend adds them again on top.
+        amount: Number(grandTotal),
         billAmount: Number(grandTotal),
         serviceFeeAmount: feeAmt,
         tipAmount: tip,
@@ -448,6 +453,12 @@ export default function TableSummaryPremium() {
         brand: payloadBrand,
         mode = "pay-full",
         splitPayload = null,
+        // Split-mode extras — let the backend webhook complete this leg on
+        // its own if the frontend's follow-up save call never fires (closed
+        // browser, network drop, etc).
+        numberOfPeople = null,
+        items = null,
+        originalBillAmount = null,
       } = payload;
 
       try {
@@ -477,6 +488,9 @@ export default function TableSummaryPremium() {
           kotMasterID,
           token: payloadToken,
           mode,
+          numberOfPeople,
+          items,
+          originalBillAmount,
           customer: {},
         };
         log("[EQUAL SPLIT] Step 2 - Telr session starting:", {
@@ -1814,6 +1828,8 @@ export default function TableSummaryPremium() {
                 kotMasterID,
                 token,
                 brand: meta.brand,
+                numberOfPeople,
+                originalBillAmount,
                 splitPayload: { paymentPayload, amountPerPerson, numberOfPeople },
               });
             } catch (err) {
@@ -1881,6 +1897,8 @@ export default function TableSummaryPremium() {
                 kotMasterID,
                 token,
                 brand: meta.brand,
+                items: payload,
+                originalBillAmount: totalBillAmount,
                 splitPayload: { paymentPayload, totalAmount },
               });
             } catch (err) {
@@ -1920,6 +1938,7 @@ export default function TableSummaryPremium() {
                 kotMasterID,
                 token,
                 brand: meta.brand,
+                originalBillAmount: grand,
                 splitPayload: { paymentPayload, paidAmount },
               });
             } catch (err) {

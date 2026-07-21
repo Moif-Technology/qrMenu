@@ -322,22 +322,29 @@ export async function savePayFullPayment(payload) {
         updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
         updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
         updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-        
+        updateReq.input("NewFee", mssql.Money, feeAmt);
+        updateReq.input("NewTip", mssql.Money, tipAmt);
+
         const updateSql = `
           UPDATE ${T_PAYMENT}
           SET ${q("PaidAmount")} = @PaidAmount,
               ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus
+              ${q("PaidStatus")} = @PaidStatus,
+              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
+              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
           WHERE ${q("PaymentID")} = @PaymentID
         `;
-        
+
         await updateReq.query(updateSql);
         await tx.commit();
-        
+
         console.log(`[PAYMENT:SVC] Completed split payment (MethodID=${existingMethodID}) by updating existing record`);
-        
-        // Update KOTMaster QR payment tracking columns in Moifcore
-        await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+
+        // Update KOTMaster QR payment tracking columns in Moifcore.
+        // POS-side tip = customer tip + a flat 0.50 carved from the service fee
+        // (only when a fee was actually charged) - same rule as pay-full.
+        const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+        await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
         return {
           ok: true,
@@ -703,8 +710,11 @@ export async function saveEqualSplitPayment(payload) {
 
     await tx.commit();
 
-    // Update KOTMaster QR payment tracking columns in Moifcore
-    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+    // Update KOTMaster QR payment tracking columns in Moifcore.
+    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
+    // (only when a fee was actually charged) - same rule as pay-full.
+    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     return {
       ok: true,
@@ -945,8 +955,11 @@ export async function saveCustomSplitPayment(payload) {
 
     await tx.commit();
 
-    // Update KOTMaster QR payment tracking columns in Moifcore
-    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+    // Update KOTMaster QR payment tracking columns in Moifcore.
+    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
+    // (only when a fee was actually charged) - same rule as pay-full.
+    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     return {
       ok: true,
@@ -1495,8 +1508,11 @@ export async function saveItemSplitPayment(payload) {
 
     await tx.commit();
 
-    // Update KOTMaster QR payment tracking columns in Moifcore
-    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus);
+    // Update KOTMaster QR payment tracking columns in Moifcore.
+    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
+    // (only when a fee was actually charged) - same rule as pay-full.
+    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     console.log("[PAYMENT:SVC] ✅ Item split payment completed successfully:", {
       paymentId,

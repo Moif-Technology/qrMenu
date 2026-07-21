@@ -2,7 +2,13 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import express from "express";
 import axios from "axios";
-import { savePayFullPayment, getServiceFeeRatePercent } from "./services/payment.service.js";
+import {
+  savePayFullPayment,
+  saveEqualSplitPayment,
+  saveCustomSplitPayment,
+  saveItemSplitPayment,
+  getServiceFeeRatePercent,
+} from "./services/payment.service.js";
 import { queryPaymentDb } from "./config/dbConfig.js";
 import {
   storeSession,
@@ -243,13 +249,18 @@ router.post("/api/telr/create", async (req, res) => {
       currency = "AED",
       cartId,
       description,
-      customer = {},
       tableId = null,
       kotMasterID = null,
       token = null,
       billAmount = null,
       serviceFeeAmount = 0,
       tipAmount = 0,
+      // Split-mode extras - carried through so the webhook can complete a
+      // split leg server-side (same as pay-full) if the frontend never
+      // makes its own follow-up call after the customer pays.
+      numberOfPeople = null,
+      items = null,
+      originalBillAmount = null,
     } = req.body ?? {};
 
     if (!amount || !cartId || !description) {
@@ -311,17 +322,12 @@ router.post("/api/telr/create", async (req, res) => {
       return_decl: `${normalizedAppBaseUrl}/api/telr/return/declined${returnQuery}`,
     });
 
-    if (customer.email) form.set("bill_email", customer.email);
-
-    if (customer.name) {
-      const parts = customer.name.trim().split(" ");
-      form.set("bill_fname", parts.slice(0, -1).join(" ") || parts[0]);
-      form.set("bill_sname", parts.length > 1 ? parts[parts.length - 1] : "Customer");
-    }
-
-    if (customer.address1) form.set("bill_addr1", customer.address1);
-    if (customer.city) form.set("bill_city", customer.city);
-    if (customer.country) form.set("bill_country", customer.country);
+    // Billing info is fixed (not collected from the guest) - QR menu checkout
+    // has no billing form, so every Telr session uses these same details.
+    form.set("bill_email", "moiftechz@gmail.com");
+    form.set("bill_fname", "Opaia");
+    form.set("bill_sname", "Restaurant");
+    form.set("bill_country", "AE");
 
     const { data } = await axios.post(TELR_ENDPOINT, form, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -353,6 +359,10 @@ router.post("/api/telr/create", async (req, res) => {
       billAmount: effectiveBillAmount,
       serviceFeeAmount: effectiveServiceFeeAmount,
       tipAmount: requestedTip,
+      // Split-mode extras for webhook self-completion (see above)
+      numberOfPeople,
+      items,
+      originalBillAmount,
     });
 
     return res.json({
@@ -673,12 +683,63 @@ router.post("/api/telr/webhook", async (req, res) => {
         console.warn("[Telr:Webhook] Missing amount/tableId/kotMasterID — cannot settle.", metaForSave);
       }
     } else {
-      // Split payment — the backend cannot complete a split without knowing which person
-      // is paying (that logic is driven by the frontend session). We log it here so staff
-      // can manually resolve if needed. In practice, the customer would retry on their
-      // phone since the Telr redirect page shows "Payment Authorised".
-      console.warn("[Telr:Webhook] Split payment received via webhook (mode:", mode, "). " +
-        "Split payments require the frontend to complete — customer should retry if the page didn't load.");
+      // Split payment — the redirect did not process it (browser closed before the
+      // frontend's follow-up save call fired). Complete it here using the data
+      // captured at session creation, same as pay-full above. session.billAmount
+      // holds THIS leg's base share/subtotal (see /telr/create's effectiveBillAmount);
+      // session.originalBillAmount holds the full bill total for equal/item split.
+      const legPaidAmount = session.billAmount ?? session.amount;
+      const feeAmt = session.serviceFeeAmount ?? 0;
+      const tipAmt = session.tipAmount ?? 0;
+
+      if (mode === "split-equal") {
+        const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+        if (legPaidAmount && fullBillAmount && session.numberOfPeople && (session.tableId || session.kotMasterID)) {
+          await saveEqualSplitPayment({
+            billAmount: fullBillAmount,
+            paidAmount: legPaidAmount,
+            numberOfPeople: session.numberOfPeople,
+            kotMasterID: session.kotMasterID,
+            tableId: session.tableId,
+            serviceFeeAmount: feeAmt,
+            tipAmount: tipAmt,
+          });
+          console.log("[Telr:Webhook] Equal split leg settled via webhook. orderRef:", orderRef);
+        } else {
+          console.warn("[Telr:Webhook] Missing data for equal split — cannot settle.", { legPaidAmount, fullBillAmount, session });
+        }
+      } else if (mode === "split-custom") {
+        const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+        if (legPaidAmount && (session.tableId || session.kotMasterID)) {
+          await saveCustomSplitPayment({
+            billAmount: fullBillAmount,
+            paidAmount: legPaidAmount,
+            kotMasterID: session.kotMasterID,
+            tableId: session.tableId,
+            serviceFeeAmount: feeAmt,
+            tipAmount: tipAmt,
+          });
+          console.log("[Telr:Webhook] Custom split leg settled via webhook. orderRef:", orderRef);
+        } else {
+          console.warn("[Telr:Webhook] Missing data for custom split — cannot settle.", { legPaidAmount, session });
+        }
+      } else if (mode === "split-items") {
+        if (Array.isArray(session.items) && session.items.length > 0 && session.kotMasterID) {
+          await saveItemSplitPayment({
+            items: session.items,
+            tableId: session.tableId,
+            kotMasterID: session.kotMasterID,
+            totalBillAmount: session.originalBillAmount ?? legPaidAmount,
+            serviceFeeAmount: feeAmt,
+            tipAmount: tipAmt,
+          });
+          console.log("[Telr:Webhook] Item split leg settled via webhook. orderRef:", orderRef);
+        } else {
+          console.warn("[Telr:Webhook] Missing items for item split — cannot settle.", { session });
+        }
+      } else {
+        console.warn("[Telr:Webhook] Unknown mode, cannot settle:", mode);
+      }
     }
   } catch (err) {
     console.error("[Telr:Webhook] Error processing notification:", err.message);
