@@ -98,8 +98,8 @@ async function queryTransactions(req, { paginate = true } = {}) {
     }
     if (search && String(search).trim()) {
       // Match payment ID, KOT (TransID) or table number
-      conditions.push("(CAST(p.PaymentID AS VARCHAR(30)) LIKE @search OR CAST(p.TransID AS VARCHAR(30)) LIKE @search OR CAST(p.TableID AS VARCHAR(30)) = @searchExact)");
-      attemptConds.push("(CAST(a.TransID AS VARCHAR(30)) LIKE @search OR CAST(a.TableID AS VARCHAR(30)) = @searchExact)");
+      conditions.push("(CAST(p.PaymentID AS VARCHAR(30)) LIKE @search OR CAST(p.TransID AS VARCHAR(30)) LIKE @search OR CAST(tm.TableNO AS VARCHAR(30)) = @searchExact)");
+      attemptConds.push("(CAST(a.TransID AS VARCHAR(30)) LIKE @search OR CAST(tm2.TableNO AS VARCHAR(30)) = @searchExact)");
       const term = String(search).trim();
       params.search = { type: mssql.VarChar(40), value: `%${term}%` };
       params.searchExact = { type: mssql.VarChar(30), value: term };
@@ -155,7 +155,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           p.ShopID, p.TransID, p.MethodID,
           CAST(NULL AS VARCHAR(30)) AS ModeName,
           p.BillAmount, p.PaidAmount, p.BalanceAmount, p.PaidStatus,
-          p.TableID, p.CreatedAt,
+          p.TableID, tm.TableNO AS TableNo, p.CreatedAt,
           CAST(NULL AS NVARCHAR(100)) AS OrderRef,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
@@ -171,6 +171,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
+        LEFT JOIN Moifcore.dbo.TableMaster tm ON tm.TableID = p.TableID
         ${whereClause}
 
         UNION ALL
@@ -185,7 +186,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           CAST(0 AS MONEY)         AS PaidAmount,
           a.Amount                 AS BalanceAmount,
           a.Status                 AS PaidStatus,
-          a.TableID, a.CreatedAt,
+          a.TableID, tm2.TableNO AS TableNo, a.CreatedAt,
           a.OrderRef,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
@@ -196,6 +197,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           CAST(0 AS MONEY) AS RestaurantPayoutAmount
         FROM dbo.PaymentAttempts a
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = a.ShopID
+        LEFT JOIN Moifcore.dbo.TableMaster tm2 ON tm2.TableID = a.TableID
         ${attemptWhere}
       )
       SELECT *, COUNT(*) OVER () AS TotalRows
@@ -231,7 +233,10 @@ async function queryTransactions(req, { paginate = true } = {}) {
         paidStatus: failed ? "FAILED" : r.PaidStatus,
         failReason: failed ? r.PaidStatus : null,
         orderRef: r.OrderRef || null,
-        tableId: r.TableID != null ? Number(r.TableID) : null,
+        // TableID is TableMaster's internal PK from the QR token; TableNo is
+        // the physical table number printed on receipts - show that instead,
+        // falling back to the raw ID if the table row is gone.
+        tableId: r.TableNo != null ? Number(r.TableNo) : (r.TableID != null ? Number(r.TableID) : null),
         createdAt: r.CreatedAt,
         payout: failed
           ? null
