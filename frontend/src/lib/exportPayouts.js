@@ -11,18 +11,27 @@ const CURRENCY = "AED";
 export const fmtMoney = (n) =>
   Number(n || 0).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Row timestamps (createdAt, transferDate, ...) come from the backend as
+// "wall clock tagged UTC" ISO strings (see backend/utils/payoutDates.js) -
+// timeZone: "UTC" reads those digits back literally instead of re-converting
+// them into the viewer's local time, which would double-apply the offset.
 export const fmtDateTime = (d) => {
   if (!d) return "-";
   const dt = new Date(d);
   return Number.isNaN(dt.getTime())
     ? "-"
-    : dt.toLocaleString("en-AE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    : dt.toLocaleString("en-AE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 };
+
+// The "Generated:" stamp is a genuine real-time Date (when the export ran),
+// not a backend wall-clock value - format it in the viewer's actual local time.
+const fmtLocalNow = (d) =>
+  d.toLocaleString("en-AE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 function rangeLabel(fromDate, toDate) {
   if (!fromDate && !toDate) return "All dates";
-  const from = fromDate ? new Date(fromDate).toLocaleDateString("en-AE") : "...";
-  const to = toDate ? new Date(toDate).toLocaleDateString("en-AE") : "...";
+  const from = fromDate ? new Date(fromDate).toLocaleDateString("en-AE", { timeZone: "UTC" }) : "...";
+  const to = toDate ? new Date(toDate).toLocaleDateString("en-AE", { timeZone: "UTC" }) : "...";
   return `${from} to ${to}`;
 }
 
@@ -38,7 +47,7 @@ export function exportPayoutsPdf({ title, fromDate, toDate, columns, rows, fileN
   doc.setFontSize(10);
   doc.setTextColor(100);
   doc.text(`Date range: ${rangeLabel(fromDate, toDate)}`, 40, 58);
-  doc.text(`Generated: ${fmtDateTime(new Date())}`, 40, 72);
+  doc.text(`Generated: ${fmtLocalNow(new Date())}`, 40, 72);
   doc.text(`${rows.length} record${rows.length === 1 ? "" : "s"}`, 40, 86);
 
   autoTable(doc, {
@@ -71,7 +80,7 @@ export function exportPayoutsExcel({ title, fromDate, toDate, columns, rows, fil
   const sheetData = [
     [title],
     [`Date range: ${rangeLabel(fromDate, toDate)}`],
-    [`Generated: ${fmtDateTime(new Date())}`],
+    [`Generated: ${fmtLocalNow(new Date())}`],
     [],
     header,
     ...body

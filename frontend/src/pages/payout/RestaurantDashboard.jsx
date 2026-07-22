@@ -13,11 +13,14 @@ const CURRENCY = "AED";
 const fmt = (n) =>
   Number(n || 0).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// CreatedAt comes from the backend as a "wall clock tagged UTC" ISO string
+// (see backend/utils/payoutDates.js) - timeZone: "UTC" reads those digits
+// back literally instead of re-converting them into the viewer's local time.
 const fmtDate = (d) => {
   if (!d) return "-";
   const dt = new Date(d);
   return Number.isNaN(dt.getTime()) ? "-" : dt.toLocaleString("en-AE", {
-    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC"
   });
 };
 
@@ -35,7 +38,7 @@ function getNextPayoutDate() {
 }
 
 const fmtPayoutDate = (d) =>
-  d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+  d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
 function PayoutBadge({ status }) {
   const transferred = status === "TRANSFERRED";
@@ -530,7 +533,7 @@ export default function RestaurantDashboard() {
                       <span className="num text-xs text-zinc-400">
                         Ref {t.payout.transferRef}
                         {t.payout.transferDate &&
-                          ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE")}`}
+                          ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE", { timeZone: "UTC" })}`}
                       </span>
                     )}
                   </div>

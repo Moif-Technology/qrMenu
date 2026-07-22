@@ -14,11 +14,14 @@ const CURRENCY = "AED";
 const fmt = (n) =>
   Number(n || 0).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// CreatedAt comes from the backend as a "wall clock tagged UTC" ISO string
+// (see backend/utils/payoutDates.js) - timeZone: "UTC" reads those digits
+// back literally instead of re-converting them into the viewer's local time.
 const fmtDate = (d) => {
   if (!d) return "-";
   const dt = new Date(d);
   return Number.isNaN(dt.getTime()) ? "-" : dt.toLocaleString("en-AE", {
-    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC"
   });
 };
 
@@ -314,7 +317,7 @@ function TxnDetailModal({ txn, onClose }) {
               <DetailRow label="Transfer ref" value={txn.payout?.transferRef} mono />
               <DetailRow
                 label="Transfer date"
-                value={txn.payout?.transferDate ? new Date(txn.payout.transferDate).toLocaleDateString("en-AE") : "-"}
+                value={txn.payout?.transferDate ? new Date(txn.payout.transferDate).toLocaleDateString("en-AE", { timeZone: "UTC" }) : "-"}
               />
               <DetailRow label="Transferred by" value={txn.payout?.transferredBy} />
               <DetailRow label="Notes" value={txn.payout?.notes} />
@@ -1134,7 +1137,7 @@ export default function AdminDashboard() {
                         <span className="num">{t.payout?.transferRef || "-"}</span>
                         {t.payout?.transferDate && (
                           <span className="num block text-zinc-400">
-                            {new Date(t.payout.transferDate).toLocaleDateString("en-AE")}
+                            {new Date(t.payout.transferDate).toLocaleDateString("en-AE", { timeZone: "UTC" })}
                           </span>
                         )}
                       </td>
@@ -1222,7 +1225,7 @@ export default function AdminDashboard() {
                     <p className="num text-xs text-zinc-500">
                       Ref {t.payout.transferRef}
                       {t.payout.transferDate &&
-                        ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE")}`}
+                        ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE", { timeZone: "UTC" })}`}
                     </p>
                   )}
 
