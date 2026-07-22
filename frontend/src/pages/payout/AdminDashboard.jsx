@@ -430,6 +430,26 @@ export default function AdminDashboard() {
     load();
   }, [load]);
 
+  // Split payments (equal/custom/item) create one row per payer sharing the
+  // same kotMasterId - without a marker these look like duplicate orders.
+  // Group rows currently loaded that share a kotMasterId and label each with
+  // its position (numbered by paymentId so it's stable regardless of sort).
+  const splitGroupInfo = useMemo(() => {
+    const groups = new Map();
+    transactions.forEach((t) => {
+      if (t.kotMasterId == null || t.failed) return;
+      if (!groups.has(t.kotMasterId)) groups.set(t.kotMasterId, []);
+      groups.get(t.kotMasterId).push(t);
+    });
+    const info = new Map();
+    groups.forEach((rows) => {
+      if (rows.length < 2) return;
+      const sorted = [...rows].sort((a, b) => a.paymentId - b.paymentId);
+      sorted.forEach((t, i) => info.set(t.paymentId, { idx: i + 1, total: sorted.length }));
+    });
+    return info;
+  }, [transactions]);
+
   // Drop selection when the visible page changes
   useEffect(() => {
     setSelected(new Set());
@@ -988,11 +1008,12 @@ export default function AdminDashboard() {
                 )}
                 {transactions.map((t) => {
                   const payoutStatus = t.payout?.status || "PENDING";
+                  const splitInfo = splitGroupInfo.get(t.paymentId);
                   return (
                     <tr
                       key={t.paymentId}
                       onClick={() => setDetailTxn(t)}
-                      className="border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition"
+                      className={`border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition ${splitInfo ? "bg-indigo-50/40" : ""}`}
                       title="Click for full details"
                     >
                       <td className="pl-5 pr-1 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1012,6 +1033,11 @@ export default function AdminDashboard() {
                       <td className="num px-4 py-3 text-zinc-600">
                         {t.kotMasterId}
                         {t.tableId != null && <span className="text-zinc-400"> · T{t.tableId}</span>}
+                        {splitInfo && (
+                          <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700 border border-indigo-200 align-middle">
+                            Split {splitInfo.idx}/{splitInfo.total}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-zinc-600">{t.methodName}</td>
                       <td className="num px-4 py-3 text-right text-zinc-600">{fmt(t.billAmount)}</td>
@@ -1065,8 +1091,13 @@ export default function AdminDashboard() {
             )}
             {transactions.map((t) => {
               const payoutStatus = t.payout?.status || "PENDING";
+              const splitInfo = splitGroupInfo.get(t.paymentId);
               return (
-                <div key={t.paymentId} className="p-4 space-y-2.5" onClick={() => setDetailTxn(t)}>
+                <div
+                  key={t.paymentId}
+                  className={`p-4 space-y-2.5 ${splitInfo ? "bg-indigo-50/40" : ""}`}
+                  onClick={() => setDetailTxn(t)}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-2.5 min-w-0">
                       {!t.failed && payoutStatus !== "TRANSFERRED" && (
@@ -1081,6 +1112,11 @@ export default function AdminDashboard() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-zinc-900 truncate">
                           {t.restaurantName}
+                          {splitInfo && (
+                            <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700 border border-indigo-200 align-middle">
+                              Split {splitInfo.idx}/{splitInfo.total}
+                            </span>
+                          )}
                         </p>
                         <p className="num text-xs text-zinc-500 mt-0.5">
                           {t.failed ? "Failed attempt" : `#${t.paymentId}`}

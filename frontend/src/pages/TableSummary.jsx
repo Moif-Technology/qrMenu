@@ -126,6 +126,7 @@ function PayFullButton({
   onRefreshData,
   serviceFeeAmount = 0,
   tipAmount = 0,
+  showConfirm,
 }) {
   const [processing, setProcessing] = useState(false);
   
@@ -1675,6 +1676,7 @@ export default function TableSummaryPremium() {
                 tipAmount={tipAmount}
                 onCardPay={handlePayFullRequest}
                 onRefreshData={loadOrderData}
+                showConfirm={showConfirm}
               />
             )}
           </div>

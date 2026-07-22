@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Store, LogOut, KeyRound, RefreshCw, ReceiptText, ChevronDown, ArrowUpDown,
@@ -140,6 +140,26 @@ export default function RestaurantDashboard() {
     load(1, false);
     setPage(1);
   }, [load]);
+
+  // Split payments (equal/custom/item) create one row per payer sharing the
+  // same kotMasterId - without a marker these look like duplicate orders.
+  // Group rows currently loaded that share a kotMasterId and label each with
+  // its position (numbered by paymentId so it's stable regardless of sort).
+  const splitGroupInfo = useMemo(() => {
+    const groups = new Map();
+    transactions.forEach((t) => {
+      if (t.kotMasterId == null || t.failed) return;
+      if (!groups.has(t.kotMasterId)) groups.set(t.kotMasterId, []);
+      groups.get(t.kotMasterId).push(t);
+    });
+    const info = new Map();
+    groups.forEach((rows) => {
+      if (rows.length < 2) return;
+      const sorted = [...rows].sort((a, b) => a.paymentId - b.paymentId);
+      sorted.forEach((t, i) => info.set(t.paymentId, { idx: i + 1, total: sorted.length }));
+    });
+    return info;
+  }, [transactions]);
 
   function logout() {
     clearSession();
@@ -357,7 +377,7 @@ export default function RestaurantDashboard() {
           {transactions.length > 0 && (
             <div className="rounded-2xl bg-white border border-zinc-200 shadow-sm divide-y divide-zinc-100 overflow-hidden">
               {transactions.map((t) => (
-                <article key={t.paymentId} className="p-4">
+                <article key={t.paymentId} className={`p-4 ${splitGroupInfo.has(t.paymentId) ? "bg-indigo-50/40" : ""}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-medium text-zinc-900">
@@ -369,6 +389,11 @@ export default function RestaurantDashboard() {
                         {t.tableId != null && (
                           <span className="text-zinc-400 font-normal"> · Table {t.tableId}</span>
                         )}
+                        {splitGroupInfo.has(t.paymentId) && (
+                          <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 align-middle">
+                            Split payment {splitGroupInfo.get(t.paymentId).idx}/{splitGroupInfo.get(t.paymentId).total}
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-zinc-400 mt-0.5">
                         {t.methodName}
@@ -379,8 +404,9 @@ export default function RestaurantDashboard() {
                       <p className={`num text-lg font-semibold ${t.failed ? "text-zinc-400 line-through" : "text-zinc-900"}`}>
                         {CURRENCY} {fmt(t.failed ? t.billAmount : t.restaurantPayoutAmount)}
                       </p>
+                      {!t.failed && <p className="text-[10px] text-zinc-400">you receive</p>}
                       {!t.failed && Number(t.balanceAmount) > 0 && (
-                        <p className="num text-xs text-amber-600">balance {fmt(t.balanceAmount)}</p>
+                        <p className="num text-xs text-amber-600 mt-0.5">bill remaining {fmt(t.balanceAmount)}</p>
                       )}
                     </div>
                   </div>

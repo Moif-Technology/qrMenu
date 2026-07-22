@@ -46,7 +46,7 @@ async function getNextPaymentId(tx) {
 
 // Flat AED commission DeynoQR takes from the restaurant (not the customer)
 // on every payment row - Pay Full and every split leg, unconditionally.
-const PLATFORM_FEE_AMOUNT = 0.50;
+const PLATFORM_FEE_AMOUNT = 0.525;
 
 /**
  * Build INSERT SQL for payment record
