@@ -23,24 +23,30 @@ const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /**
  * Get next ID: first record = startValue, then MAX(column) + 1
  */
-async function getNextId(tx, column, startValue = 1000) {
+async function getNextId(tx, column, startValue = 1000, table = T_PAYMENT) {
   const req = new mssql.Request(tx);
+  // WITH (UPDLOCK, HOLDLOCK) serializes concurrent callers so two legs paid
+  // at the same moment can't both read the same MAX(...) and collide -
+  // PaymentID/PaymentItemID are manually-generated, not DB identities.
   const sql = `
-    SELECT 
-      CASE 
+    SELECT
+      CASE
         WHEN MAX(${q(column)}) IS NULL THEN ${startValue}
         ELSE MAX(${q(column)}) + 1
       END AS nextId
-    FROM ${T_PAYMENT}
+    FROM ${table} WITH (UPDLOCK, HOLDLOCK)
   `;
   const rs = await req.query(sql);
   return Number(rs.recordset[0].nextId);
 }
 
 async function getNextPaymentId(tx) {
-  return getNextId(tx, "PaymentID", 1000);
+  return getNextId(tx, "PaymentID", 1000, T_PAYMENT);
 }
 
+// Flat AED commission DeynoQR takes from the restaurant (not the customer)
+// on every payment row - Pay Full and every split leg, unconditionally.
+const PLATFORM_FEE_AMOUNT = 0.50;
 
 /**
  * Build INSERT SQL for payment record
@@ -48,11 +54,13 @@ async function getNextPaymentId(tx) {
 function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
   const baseFields = [
     q("PaymentID"), q("ShopID"), q("TransID"), q("MethodID"),
-    q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus")
+    q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus"),
+    q("PlatformFeeAmount")
   ];
   const baseParams = [
     "@PaymentID", "@ShopID", "@TransID", "@MethodID",
-    "@BillAmount", "@PaidAmount", "@BalanceAmount", "@PaidStatus"
+    "@BillAmount", "@PaidAmount", "@BalanceAmount", "@PaidStatus",
+    "@PlatformFeeAmount"
   ];
 
   if (includeTableId) {
@@ -69,6 +77,40 @@ function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
     INSERT INTO ${T_PAYMENT} (${baseFields.join(", ")})
     VALUES (${baseParams.join(", ")})
   `;
+}
+
+/**
+ * Aggregate every leg row sharing a TransID (+ MethodID filter) into one
+ * whole-bill snapshot: SUM(PaidAmount/fees) across legs, MAX(BillAmount) as
+ * the invariant full-bill figure, MAX(PaymentID) to identify the latest leg.
+ * Returns null if no rows exist for this TransID+MethodID group yet.
+ */
+async function getGroupAggregate(tx, transId, methodIds) {
+  const req = new mssql.Request(tx);
+  req.input("TransID", mssql.BigInt, transId);
+  const methods = Array.isArray(methodIds) ? methodIds : [methodIds];
+  methods.forEach((m, i) => req.input(`m${i}`, mssql.BigInt, m));
+  const inClause = methods.map((_, i) => `@m${i}`).join(",");
+  const sql = `
+    SELECT ${q("MethodID")},
+           MAX(${q("BillAmount")})  AS BillAmount,
+           SUM(${q("PaidAmount")})  AS PaidAmount,
+           SUM(ISNULL(${q("ServiceFeeAmount")},0)) AS ServiceFeeAmount,
+           SUM(ISNULL(${q("TipAmount")},0))        AS TipAmount,
+           SUM(${q("PlatformFeeAmount")})          AS PlatformFeeAmount,
+           MAX(${q("TableID")})   AS TableID,
+           MAX(${q("PaymentID")}) AS LatestPaymentID
+    FROM ${T_PAYMENT}
+    WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} IN (${inClause})
+    GROUP BY ${q("MethodID")}
+    ORDER BY MAX(${q("PaymentID")}) DESC
+  `;
+  const rs = await req.query(sql);
+  // Only one method group should ever be active per TransID (cross-method
+  // blocking enforces this) - ORDER BY makes the pick deterministic in the
+  // rare transient case where a stale zero-paid row from another method
+  // hasn't been cleaned up yet.
+  return rs.recordset[0] || null;
 }
 
 /**
@@ -288,75 +330,65 @@ export async function savePayFullPayment(payload) {
     // IMPORTANT: Check if there's already a split payment (MethodID = 2, 3, or 4) for this kotMasterID
     // If split has started, we should complete it using the existing MethodID, NOT create a new MethodID = 1 record
     if (transId > 0) {
-      const checkSplitReq = new mssql.Request(tx);
-      checkSplitReq.input("TransID", mssql.BigInt, transId);
-      
-      // Check for any split payment: MethodID 2 (equal split), 3 (item split), or 4 (custom split)
-      const checkSplitSql = `
-        SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
-        FROM ${T_PAYMENT}
-        WHERE ${q("TransID")} = @TransID AND (${q("MethodID")} = 2 OR ${q("MethodID")} = 3 OR ${q("MethodID")} = 4)
-        ORDER BY ${q("PaymentID")} ASC
-      `;
-      
-      const splitCheckResult = await checkSplitReq.query(checkSplitSql);
-      const existingSplitPayment = splitCheckResult.recordset[0];
-      
-      if (existingSplitPayment) {
-        // Split has already started - complete it using the existing MethodID
-        const existingMethodID = toInt(existingSplitPayment.MethodID);
-        console.log(`[PAYMENT:SVC] Found existing split payment (MethodID=${existingMethodID}), completing it instead of creating MethodID=1`);
-        
-        const existingPaidAmount = toNum(existingSplitPayment.PaidAmount, 0);
-        const originalBillAmount = toNum(existingSplitPayment.BillAmount, billAmt);
-        const remainingBalance = toNum(existingSplitPayment.BalanceAmount, billAmt);
-        
-        // Pay the remaining balance
-        const newPaidAmount = r2(existingPaidAmount + remainingBalance);
+      const agg = await getGroupAggregate(tx, transId, [2, 3, 4]);
+
+      if (agg) {
+        // Split has already started - complete it by inserting a FINAL leg row
+        // under the existing group's MethodID (this leg belongs to whichever
+        // split group is already in progress, never a fresh MethodID=1 row).
+        const existingMethodID = toInt(agg.MethodID);
+        console.log(`[PAYMENT:SVC] Found existing split group (MethodID=${existingMethodID}), completing it with a new leg row instead of creating MethodID=1`);
+
+        const originalBillAmount = r2(toNum(agg.BillAmount, billAmt));
+        const paidSoFar = r2(toNum(agg.PaidAmount, 0));
+        const remainingBalance = r2(Math.max(0, originalBillAmount - paidSoFar));
+
+        const newPaymentId = await getNextPaymentId(tx);
+        const newPaidAmount = r2(paidSoFar + remainingBalance); // = originalBillAmount, whole bill now settled
         const newBalanceAmount = 0;
         const paidStatus = "PAID";
-        
-        // Update the existing payment record
-        const updateReq = new mssql.Request(tx);
-        updateReq.input("PaymentID", mssql.BigInt, toInt(existingSplitPayment.PaymentID));
-        updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
-        updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
-        updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-        updateReq.input("NewFee", mssql.Money, feeAmt);
-        updateReq.input("NewTip", mssql.Money, tipAmt);
 
-        const updateSql = `
-          UPDATE ${T_PAYMENT}
-          SET ${q("PaidAmount")} = @PaidAmount,
-              ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus,
-              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
-              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
-          WHERE ${q("PaymentID")} = @PaymentID
-        `;
+        const insertReq = new mssql.Request(tx);
+        insertReq.input("PaymentID", mssql.BigInt, newPaymentId);
+        insertReq.input("ShopID", mssql.BigInt, 1);
+        insertReq.input("TransID", mssql.BigInt, transId);
+        insertReq.input("MethodID", mssql.BigInt, existingMethodID);
+        insertReq.input("BillAmount", mssql.Money, originalBillAmount);
+        insertReq.input("PaidAmount", mssql.Money, remainingBalance); // this leg's own contribution only
+        insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+        insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+        insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+        insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+        insertReq.input("TipAmount", mssql.Money, tipAmt);
+        const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
+        let includeTableIdForInsert = false;
+        if (legTableId) {
+          insertReq.input("TableID", mssql.BigInt, legTableId);
+          includeTableIdForInsert = true;
+        }
 
-        await updateReq.query(updateSql);
+        await insertReq.query(buildPaymentInsertSql(includeTableIdForInsert, true));
         await tx.commit();
 
-        console.log(`[PAYMENT:SVC] Completed split payment (MethodID=${existingMethodID}) by updating existing record`);
+        console.log(`[PAYMENT:SVC] Completed split group (MethodID=${existingMethodID}) with new leg PaymentID=${newPaymentId}`);
 
         // Update KOTMaster QR payment tracking columns in Moifcore.
-        // POS-side tip = customer tip + a flat 0.50 carved from the service fee
-        // (only when a fee was actually charged) - same rule as pay-full.
-        const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+        // Settlement fires once on this PAID transition, so the POS-side tip
+        // must be the SUM of every leg's tip, not just this final leg's own.
+        const posTipAmount = r2(toNum(agg.TipAmount, 0) + tipAmt);
         await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
         return {
           ok: true,
-          paymentId: toInt(existingSplitPayment.PaymentID),
+          paymentId: newPaymentId,
           ShopID: 1,
           TransID: transId,
           MethodID: existingMethodID, // Keep the original MethodID (2, 3, or 4)
-          BillAmount: r2(originalBillAmount),
+          BillAmount: originalBillAmount,
           PaidAmount: newPaidAmount,
           BalanceAmount: newBalanceAmount,
           PaidStatus: paidStatus,
-          tableId: tableId ? toInt(tableId) : null
+          tableId: legTableId || null
         };
       }
     }
@@ -394,19 +426,18 @@ export async function savePayFullPayment(payload) {
       paymentData.TableID = toInt(tableId);
     }
 
+    req.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
     req.input("ServiceFeeAmount", mssql.Money, feeAmt);
     req.input("TipAmount", mssql.Money, tipAmt);
+    paymentData.PlatformFeeAmount = PLATFORM_FEE_AMOUNT;
     paymentData.ServiceFeeAmount = feeAmt;
     paymentData.TipAmount = tipAmt;
 
     await req.query(buildPaymentInsertSql(!!tableId, true));
     await tx.commit();
 
-    // POS-side "tip" recorded at settlement = customer's actual tip + a flat
-    // AED 0.50 carved out of the service fee (only when a fee was actually
-    // charged) — business rule: this flat amount is booked as tip, not fee,
-    // in SalesPaymentSplit since that table has no fee column.
-    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    // POS-side tip recorded at settlement = customer's actual tip only.
+    const posTipAmount = r2(tipAmt);
 
     // Update KOTMaster QR payment tracking columns in Moifcore
     await updateKotMasterQrPayment(transId, r2(billAmt), 0, "PAID", posTipAmount);
@@ -475,17 +506,8 @@ export async function saveEqualSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for equal split payment");
     }
 
-    // Find any existing payment record for this KOT (any method)
-    const checkAnyPaymentReq = new mssql.Request(tx);
-    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
-    const checkAnyPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
-    const anyExistingPayment = anyPaymentResult.recordset[0];
+    // Find any existing payment group for this KOT (any method) via aggregate
+    const agg = await getGroupAggregate(tx, transId, [1, 2, 3, 4]);
 
     // Cross-method logic:
     // - No existing payment               → create fresh Equal Split record
@@ -495,16 +517,19 @@ export async function saveEqualSplitPayment(payload) {
     // - Existing MethodID=4 (Custom)      → ALLOW cross-method (custom→equal is fine;
     //                                        custom is flexible, equal just settles balance)
     // - Existing method, balance=0        → bill already fully paid, reject
-    let existingPayment = null;
+    let groupExists = false;
+    let groupMethodID = 2;
 
-    if (anyExistingPayment) {
-      const existingMethodID    = toInt(anyExistingPayment.MethodID);
-      const existingPaidAmount  = toNum(anyExistingPayment.PaidAmount, 0);
-      const existingBalance     = toNum(anyExistingPayment.BalanceAmount, 0);
-      const methodNames         = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+    if (agg) {
+      const existingMethodID = toInt(agg.MethodID);
+      const existingPaidAmount = r2(toNum(agg.PaidAmount, 0));
+      const existingBillAmount = r2(toNum(agg.BillAmount, 0));
+      const existingBalance = r2(Math.max(0, existingBillAmount - existingPaidAmount));
+      const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
 
       if (existingMethodID === 2) {
-        existingPayment = anyExistingPayment;
+        groupExists = true;
+        groupMethodID = 2;
       } else if (existingMethodID === 3 && existingPaidAmount > 0) {
         throw new Error(
           `Cannot use Equal Split for this bill. An Item Split is already in progress. ` +
@@ -512,197 +537,126 @@ export async function saveEqualSplitPayment(payload) {
         );
       } else if (existingPaidAmount <= 0) {
         const deleteReq = new mssql.Request(tx);
-        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`);
-        console.log(`[PAYMENT:SVC] Equal split - deleted unused MethodID=${existingMethodID} record`);
+        deleteReq.input("TransID", mssql.BigInt, transId);
+        deleteReq.input("ExistingMethodID", mssql.BigInt, existingMethodID);
+        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @ExistingMethodID`);
+        console.log(`[PAYMENT:SVC] Equal split - deleted unused MethodID=${existingMethodID} group`);
       } else if (existingBalance <= 0) {
         throw new Error("This bill has already been fully paid.");
       } else {
         // Custom split with balance remaining → allow continuation via equal split
         console.log(`[PAYMENT:SVC] Cross-method continuation: ${methodNames[existingMethodID] || existingMethodID} → Equal Split. Balance remaining: ${existingBalance}`);
-        existingPayment = anyExistingPayment;
+        groupExists = true;
+        groupMethodID = existingMethodID; // preserve the group's own method, not literal 2
       }
     }
-    
-    if (existingPayment) {
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ✅ FOUND existing equal split payment (MethodID=2):`);
-      console.log(`  - PaymentID: ${existingPayment.PaymentID}`);
-      console.log(`  - BillAmount: ${existingPayment.BillAmount}`);
-      console.log(`  - PaidAmount: ${existingPayment.PaidAmount}`);
-      console.log(`  - BalanceAmount: ${existingPayment.BalanceAmount}`);
-      console.log(`  - PaidStatus: ${existingPayment.PaidStatus}`);
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] Will UPDATE this record (not create new)`);
-    } else {
-      console.log(`[PAYMENT:SVC] [EQUAL SPLIT] ❌ No MethodID=2 payment found - will CREATE new`);
-    }
-    
+
+    console.log(groupExists
+      ? `[PAYMENT:SVC] [EQUAL SPLIT] ✅ FOUND existing split group (MethodID=${groupMethodID}) - will INSERT a new leg row`
+      : `[PAYMENT:SVC] [EQUAL SPLIT] ❌ No existing group - will CREATE first leg row`);
+
     let paymentId;
     let newPaidAmount;
     let newBalanceAmount;
     let paidStatus;
     let billAmountToUse = billAmt; // Default to incoming full bill amount
+    let priorTipAmount = 0;
 
-    if (existingPayment) {
-      // Update existing payment record - accumulate paid amount
-      paymentId = toInt(existingPayment.PaymentID);
-      const currentPaidAmount = toNum(existingPayment.PaidAmount, 0);
-      const storedBillAmount = toNum(existingPayment.BillAmount, 0);
-      
+    if (groupExists) {
+      const currentPaidAmount = r2(toNum(agg.PaidAmount, 0));
+      const storedBillAmount = r2(toNum(agg.BillAmount, 0));
+      priorTipAmount = r2(toNum(agg.TipAmount, 0));
+
       // CRITICAL: BillAmount must always be the FULL bill amount, never the split amount
-      // Use the larger of stored or incoming billAmount (both should be the full bill)
-      // If stored is 0 or invalid, use incoming. If stored is correct, keep it.
       billAmountToUse = storedBillAmount > 0 ? storedBillAmount : billAmt;
-      
-      // If incoming billAmount is larger, it means stored was wrong - fix it
       if (billAmt > billAmountToUse) {
         console.warn(`[PAYMENT:SVC] Fixing incorrect BillAmount: stored=${billAmountToUse}, correct=${billAmt}`);
         billAmountToUse = billAmt;
       }
-      
+
       // CRITICAL: Calculate remaining balance BEFORE adding new payment
       const remainingBalance = r2(billAmountToUse - currentPaidAmount);
-      
+
       // CRITICAL: For equal split, paidAmt should be the split amount (per person), NOT the full bill
-      // If paidAmt exceeds remaining balance, cap it to remaining balance
-      // This prevents PaidAmount from exceeding BillAmount
       let actualPaidAmount = paidAmt;
       if (paidAmt > remainingBalance) {
         console.warn(`[PAYMENT:SVC] ⚠️ paidAmt (${paidAmt}) > remainingBalance (${remainingBalance}). Capping to remaining balance.`);
         actualPaidAmount = remainingBalance;
       }
-      
-      // Add new payment to existing paid amount (accumulate)
-      // Example: If bill=35, first payment=17.5, second payment=17.5:
-      //   First: PaidAmount=17.5, Balance=17.5, Status=PENDING
-      //   Second: PaidAmount=35, Balance=0, Status=PAID
-      newPaidAmount = r2(currentPaidAmount + actualPaidAmount);
-      
-      // CRITICAL: Ensure PaidAmount never exceeds BillAmount
-      if (newPaidAmount > billAmountToUse) {
-        console.warn(`[PAYMENT:SVC] ⚠️ newPaidAmount (${newPaidAmount}) > billAmountToUse (${billAmountToUse}). Capping to billAmount.`);
-        newPaidAmount = r2(billAmountToUse);
-      }
-      
-      // Recalculate balance: Balance = Full Bill - Total Paid
-      newBalanceAmount = r2(billAmountToUse - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
-      
-      // CRITICAL: Status = "PAID" ONLY when BalanceAmount = 0, otherwise "PENDING"
-      // This ensures the payment is only marked as complete when the full bill is paid
-      paidStatus = newBalanceAmount === 0 ? "PAID" : "PENDING";
-      
-      console.log("[PAYMENT:SVC] Updating existing equal split payment:", {
-        paymentId,
-        billAmount: billAmountToUse,
-        currentPaidAmount,
-        incomingPaidAmt: paidAmt,
-        actualPaidAmount: actualPaidAmount,
-        remainingBalanceBefore: remainingBalance,
-        newPaidAmount,
-        newBalanceAmount,
-        paidStatus
-      });
-      
-      const updateReq = new mssql.Request(tx);
-      updateReq.input("PaymentID", mssql.BigInt, paymentId);
-      updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
-      updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
-      updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      updateReq.input("NewFee", mssql.Money, feeAmt);
-      updateReq.input("NewTip", mssql.Money, tipAmt);
 
-      // Update BillAmount if it was wrong
-      const needsBillAmountUpdate = billAmountToUse !== storedBillAmount;
-      if (needsBillAmountUpdate) {
-        updateReq.input("BillAmount", mssql.Money, billAmountToUse);
-        const updateSql = `
-          UPDATE ${T_PAYMENT}
-          SET ${q("BillAmount")} = @BillAmount,
-              ${q("PaidAmount")} = @PaidAmount,
-              ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus,
-              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
-              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
-          WHERE ${q("PaymentID")} = @PaymentID
-        `;
-        await updateReq.query(updateSql);
-        console.log("[PAYMENT:SVC] Updated existing equal split payment (fixed BillAmount)");
-      } else {
-        const updateSql = `
-          UPDATE ${T_PAYMENT}
-          SET ${q("PaidAmount")} = @PaidAmount,
-              ${q("BalanceAmount")} = @BalanceAmount,
-              ${q("PaidStatus")} = @PaidStatus,
-              ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
-              ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
-          WHERE ${q("PaymentID")} = @PaymentID
-        `;
-        await updateReq.query(updateSql);
-        console.log("[PAYMENT:SVC] Updated existing equal split payment");
+      newPaidAmount = r2(currentPaidAmount + actualPaidAmount); // whole-bill total, for status/response only
+      if (newPaidAmount > billAmountToUse) newPaidAmount = r2(billAmountToUse);
+      newBalanceAmount = r2(Math.max(0, billAmountToUse - newPaidAmount));
+      paidStatus = newBalanceAmount === 0 ? "PAID" : "PENDING";
+
+      console.log("[PAYMENT:SVC] Inserting new leg for existing equal split group:", {
+        billAmount: billAmountToUse, currentPaidAmount, actualPaidAmount, newPaidAmount, newBalanceAmount, paidStatus
+      });
+
+      // Propagate the BillAmount invariant to every existing leg row of this
+      // group if it drifted (e.g. items added to the KOT mid-split).
+      if (billAmountToUse !== storedBillAmount) {
+        const fixReq = new mssql.Request(tx);
+        fixReq.input("TransID", mssql.BigInt, transId);
+        fixReq.input("GroupMethodID", mssql.BigInt, groupMethodID);
+        fixReq.input("NewBillAmount", mssql.Money, billAmountToUse);
+        await fixReq.query(`UPDATE ${T_PAYMENT} SET ${q("BillAmount")} = @NewBillAmount WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @GroupMethodID`);
       }
-      
-    } else {
-      // Insert new payment record - FIRST payment for this kotMasterID
+
       paymentId = await getNextPaymentId(tx);
-      
-      // CRITICAL: BillAmount must ALWAYS be the FULL bill amount, never the split amount
-      // For equal split: billAmount = full bill, paidAmount = per-person share
-      // Validate that billAmount >= paidAmount (full bill should never be less than per-person share)
+      const insertReq = new mssql.Request(tx);
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, groupMethodID);
+      insertReq.input("BillAmount", mssql.Money, billAmountToUse);
+      insertReq.input("PaidAmount", mssql.Money, actualPaidAmount); // this leg's own contribution only
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
+      let includeTableIdForInsert = false;
+      if (legTableId) {
+        insertReq.input("TableID", mssql.BigInt, legTableId);
+        includeTableIdForInsert = true;
+      }
+      await insertReq.query(buildPaymentInsertSql(includeTableIdForInsert, true));
+      console.log("[PAYMENT:SVC] Inserted new leg row for equal split group");
+
+    } else {
+      // First payment for this kotMasterID
+      paymentId = await getNextPaymentId(tx);
+
       if (billAmt < paidAmt) {
         console.error(`[PAYMENT:SVC] ERROR: BillAmount (${billAmt}) < PaidAmount (${paidAmt}). Full bill must be >= per-person amount.`);
         throw new Error(`Invalid amounts: Full bill amount (${billAmt}) must be greater than or equal to per-person amount (${paidAmt})`);
       }
-      
-      // First payment: BillAmount = FULL total bill, PaidAmount = equal share paid, Balance = remaining
-      // Example: Bill=30, Split=2 people, Per person=15
-      //   BillAmount=30, PaidAmount=15, BalanceAmount=15, Status=PENDING
+
       newPaidAmount = r2(paidAmt);
-      newBalanceAmount = r2(billAmt - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
-      
-      // CRITICAL: Status = "PAID" ONLY when BalanceAmount = 0, otherwise "PENDING"
-      // For first payment, balance will be > 0, so status will be "PENDING"
+      newBalanceAmount = r2(Math.max(0, billAmt - newPaidAmount));
       paidStatus = newBalanceAmount === 0 ? "PAID" : "PENDING";
-      
-      console.log("[PAYMENT:SVC] Creating new equal split payment record:", {
-        paymentId,
-        billAmount: billAmt, // FULL bill amount
-        paidAmount: newPaidAmount, // Split amount (per person)
-        balanceAmount: newBalanceAmount,
-        paidStatus,
-        numberOfPeople
+
+      console.log("[PAYMENT:SVC] Creating first equal split leg row:", {
+        paymentId, billAmount: billAmt, paidAmount: newPaidAmount, balanceAmount: newBalanceAmount, paidStatus, numberOfPeople
       });
-      
+
       const insertReq = new mssql.Request(tx);
-      const paymentData = {
-        PaymentID: paymentId,
-        ShopID: 1,
-        TransID: transId,
-        MethodID: 2,
-        BillAmount: billAmt, // FULL bill amount - never the split amount
-        PaidAmount: newPaidAmount, // Split amount paid (per person)
-        BalanceAmount: newBalanceAmount,
-        PaidStatus: paidStatus
-      };
-
-      Object.entries(paymentData).forEach(([key, value]) => {
-        if (key === "PaidStatus") {
-          insertReq.input(key, mssql.VarChar(50), value);
-        } else if (["BillAmount", "PaidAmount", "BalanceAmount"].includes(key)) {
-          insertReq.input(key, mssql.Money, value);
-        } else {
-          insertReq.input(key, mssql.BigInt, value);
-        }
-      });
-
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, 2);
+      insertReq.input("BillAmount", mssql.Money, billAmt);
+      insertReq.input("PaidAmount", mssql.Money, newPaidAmount);
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
-
-      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
-      insertReq.input("TipAmount", mssql.Money, tipAmt);
-      paymentData.ServiceFeeAmount = feeAmt;
-      paymentData.TipAmount = tipAmt;
 
       await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] Inserted new equal split payment record");
@@ -711,9 +665,8 @@ export async function saveEqualSplitPayment(payload) {
     await tx.commit();
 
     // Update KOTMaster QR payment tracking columns in Moifcore.
-    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
-    // (only when a fee was actually charged) - same rule as pay-full.
-    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    // POS-side tip = SUM of every leg's tip (settlement fires once, at PAID).
+    const posTipAmount = r2(priorTipAmount + tipAmt);
     await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     return {
@@ -721,7 +674,7 @@ export async function saveEqualSplitPayment(payload) {
       paymentId,
       ShopID: 1,
       TransID: transId,
-      MethodID: 2,
+      MethodID: groupMethodID,
       BillAmount: billAmountToUse,
       PaidAmount: newPaidAmount,
       BalanceAmount: newBalanceAmount,
@@ -766,17 +719,8 @@ export async function saveCustomSplitPayment(payload) {
       throw new Error("Valid kotMasterID (TransID) is required for custom split payment");
     }
 
-    // Find any existing payment record for this KOT (any method)
-    const checkAnyPaymentReq = new mssql.Request(tx);
-    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
-    const checkAnyPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}, ${q("TableID")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
-    const anyExistingPayment = anyPaymentResult.recordset[0];
+    // Find any existing payment group for this KOT (any method) via aggregate
+    const agg = await getGroupAggregate(tx, transId, [1, 2, 3, 4]);
 
     // Cross-method logic:
     // - No existing payment               → create fresh Custom Split record
@@ -786,18 +730,20 @@ export async function saveCustomSplitPayment(payload) {
     // - Existing MethodID=2 (Equal)       → BLOCK: equal split is a group agreement;
     //                                        switching to custom breaks the contract
     // - Existing method, balance=0        → bill already fully paid, reject
-    let existingPayment = null;
+    let groupExists = false;
+    let groupMethodID = 4;
 
-    if (anyExistingPayment) {
-      const existingMethodID    = toInt(anyExistingPayment.MethodID);
-      const existingPaidAmount  = toNum(anyExistingPayment.PaidAmount, 0);
-      const existingBalance     = toNum(anyExistingPayment.BalanceAmount, 0);
-      const methodNames         = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
+    if (agg) {
+      const existingMethodID = toInt(agg.MethodID);
+      const existingPaidAmount = r2(toNum(agg.PaidAmount, 0));
+      const existingBillAmount = r2(toNum(agg.BillAmount, 0));
+      const existingBalance = r2(Math.max(0, existingBillAmount - existingPaidAmount));
+      const methodNames = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
 
       if (existingMethodID === 4) {
-        existingPayment = anyExistingPayment;
+        groupExists = true;
+        groupMethodID = 4;
       } else if (existingMethodID === 2 && existingPaidAmount > 0) {
-        // Equal split is in progress — custom cannot override an equal-split agreement
         throw new Error(
           `Cannot use Custom Split for this bill. An Equal Split is already in progress. ` +
           `Please continue with the equal split to complete the payment.`
@@ -809,27 +755,29 @@ export async function saveCustomSplitPayment(payload) {
         );
       } else if (existingPaidAmount <= 0) {
         const deleteReq = new mssql.Request(tx);
-        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`);
-        console.log(`[PAYMENT:SVC] Custom split - deleted unused MethodID=${existingMethodID} record`);
+        deleteReq.input("TransID", mssql.BigInt, transId);
+        deleteReq.input("ExistingMethodID", mssql.BigInt, existingMethodID);
+        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @ExistingMethodID`);
+        console.log(`[PAYMENT:SVC] Custom split - deleted unused MethodID=${existingMethodID} group`);
       } else if (existingBalance <= 0) {
         throw new Error("This bill has already been fully paid.");
       } else {
         console.log(`[PAYMENT:SVC] Cross-method continuation: ${methodNames[existingMethodID] || existingMethodID} → Custom Split. Balance remaining: ${existingBalance}`);
-        existingPayment = anyExistingPayment;
+        groupExists = true;
+        groupMethodID = existingMethodID;
       }
     }
-    
+
     let paymentId;
     let originalBillAmount;
     let newPaidAmount;
     let newBalanceAmount;
     let paidStatus;
-    
-    if (existingPayment) {
-      // UPDATE existing payment record
-      paymentId = toInt(existingPayment.PaymentID);
-      originalBillAmount = toNum(existingPayment.BillAmount, billAmt);
+    let priorTipAmount = 0;
+
+    if (groupExists) {
+      originalBillAmount = r2(toNum(agg.BillAmount, billAmt));
+      priorTipAmount = r2(toNum(agg.TipAmount, 0));
 
       // If POS added new items and KOTMaster.Amount increased after the first
       // custom split payment, align the bill total with the *current* KOT amount
@@ -855,99 +803,76 @@ export async function saveCustomSplitPayment(payload) {
       } catch (kotErr) {
         console.warn("[PAYMENT:SVC] Custom split - could not refresh KOT amount:", kotErr.message);
       }
-      
-      // Add new payment to existing paid amount
-      const currentPaidAmount = toNum(existingPayment.PaidAmount, 0);
-      newPaidAmount = r2(currentPaidAmount + paidAmt);
-      
-      // Recalculate balance: originalBillAmount - newPaidAmount
-      newBalanceAmount = r2(originalBillAmount - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
-      
-      // Update status based on balance
-      paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
-      
-      console.log("[PAYMENT:SVC] Updating existing payment:", {
-        paymentId,
-        originalBillAmount,
-        currentPaidAmount,
-        newPaymentAmount: paidAmt,
-        newPaidAmount,
-        newBalanceAmount,
-        paidStatus
-      });
-      
-      // Build UPDATE query
-      const updateReq = new mssql.Request(tx);
-      updateReq.input("PaymentID", mssql.BigInt, paymentId);
-      updateReq.input("BillAmount", mssql.Money, originalBillAmount);
-      updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
-      updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
-      updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      updateReq.input("NewFee", mssql.Money, feeAmt);
-      updateReq.input("NewTip", mssql.Money, tipAmt);
 
-      let updateSql = `
-        UPDATE ${T_PAYMENT}
-        SET ${q("BillAmount")}   = @BillAmount,
-            ${q("PaidAmount")}   = @PaidAmount,
-            ${q("BalanceAmount")} = @BalanceAmount,
-            ${q("PaidStatus")}   = @PaidStatus,
-            ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
-            ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
-        WHERE ${q("PaymentID")} = @PaymentID
-      `;
-      
-      await updateReq.query(updateSql);
-      console.log("[PAYMENT:SVC] Updated existing payment record");
-      
+      // Propagate the BillAmount invariant to every existing leg row of this
+      // group if it drifted.
+      const storedBillAmount = r2(toNum(agg.BillAmount, 0));
+      if (originalBillAmount !== storedBillAmount) {
+        const fixReq = new mssql.Request(tx);
+        fixReq.input("TransID", mssql.BigInt, transId);
+        fixReq.input("GroupMethodID", mssql.BigInt, groupMethodID);
+        fixReq.input("NewBillAmount", mssql.Money, originalBillAmount);
+        await fixReq.query(`UPDATE ${T_PAYMENT} SET ${q("BillAmount")} = @NewBillAmount WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @GroupMethodID`);
+      }
+
+      const currentPaidAmount = r2(toNum(agg.PaidAmount, 0));
+      newPaidAmount = r2(currentPaidAmount + paidAmt); // whole-bill total, for status/response only
+      newBalanceAmount = r2(Math.max(0, originalBillAmount - newPaidAmount));
+      paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
+
+      console.log("[PAYMENT:SVC] Inserting new leg for existing custom split group:", {
+        originalBillAmount, currentPaidAmount, newPaymentAmount: paidAmt, newPaidAmount, newBalanceAmount, paidStatus
+      });
+
+      paymentId = await getNextPaymentId(tx);
+      const insertReq = new mssql.Request(tx);
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, groupMethodID);
+      insertReq.input("BillAmount", mssql.Money, originalBillAmount);
+      insertReq.input("PaidAmount", mssql.Money, r2(paidAmt)); // this leg's own contribution only
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
+      let includeTableIdForInsert = false;
+      if (legTableId) {
+        insertReq.input("TableID", mssql.BigInt, legTableId);
+        includeTableIdForInsert = true;
+      }
+      await insertReq.query(buildPaymentInsertSql(includeTableIdForInsert, true));
+      console.log("[PAYMENT:SVC] Inserted new leg row for custom split group");
+
     } else {
       // INSERT new payment record (first payment for this kotMasterID)
       paymentId = await getNextPaymentId(tx);
       originalBillAmount = r2(billAmt);
       newPaidAmount = r2(paidAmt);
-      newBalanceAmount = r2(originalBillAmount - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
+      newBalanceAmount = r2(Math.max(0, originalBillAmount - newPaidAmount));
       paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
-      
+
       console.log("[PAYMENT:SVC] Creating new payment record:", {
-        paymentId,
-        originalBillAmount,
-        newPaidAmount,
-        newBalanceAmount,
-        paidStatus
+        paymentId, originalBillAmount, newPaidAmount, newBalanceAmount, paidStatus
       });
-      
+
       const insertReq = new mssql.Request(tx);
-      const paymentData = {
-        PaymentID: paymentId,
-        ShopID: 1,
-        TransID: transId,
-        MethodID: 4,
-        BillAmount: originalBillAmount,
-        PaidAmount: newPaidAmount,
-        BalanceAmount: newBalanceAmount,
-        PaidStatus: paidStatus
-      };
-
-      Object.entries(paymentData).forEach(([key, value]) => {
-        if (key === "PaidStatus") {
-          insertReq.input(key, mssql.VarChar(50), value);
-        } else if (["BillAmount", "PaidAmount", "BalanceAmount"].includes(key)) {
-          insertReq.input(key, mssql.Money, value);
-        } else {
-          insertReq.input(key, mssql.BigInt, value);
-        }
-      });
-
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, 4);
+      insertReq.input("BillAmount", mssql.Money, originalBillAmount);
+      insertReq.input("PaidAmount", mssql.Money, newPaidAmount);
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
-
-      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
-      insertReq.input("TipAmount", mssql.Money, tipAmt);
-      paymentData.ServiceFeeAmount = feeAmt;
-      paymentData.TipAmount = tipAmt;
 
       await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] Inserted new payment record");
@@ -956,9 +881,8 @@ export async function saveCustomSplitPayment(payload) {
     await tx.commit();
 
     // Update KOTMaster QR payment tracking columns in Moifcore.
-    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
-    // (only when a fee was actually charged) - same rule as pay-full.
-    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    // POS-side tip = SUM of every leg's tip (settlement fires once, at PAID).
+    const posTipAmount = r2(priorTipAmount + tipAmt);
     await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     return {
@@ -966,12 +890,12 @@ export async function saveCustomSplitPayment(payload) {
       paymentId,
       ShopID: 1,
       TransID: transId,
-      MethodID: 4,
+      MethodID: groupMethodID,
       BillAmount: originalBillAmount,
       PaidAmount: newPaidAmount,
       BalanceAmount: newBalanceAmount,
       PaidStatus: paidStatus,
-      billAmount: newBalanceAmount,
+      billAmount: originalBillAmount,
       originalBillAmount: originalBillAmount,
       tableId: tableId ? toInt(tableId) : null
     };
@@ -1019,23 +943,15 @@ export async function saveItemSplitPayment(payload) {
     // Reject item split if an amount-based split (equal/custom) is already in progress.
     // Amount splits track a running balance total; they don't mark individual items.
     // Mixing the two would make it impossible to reconcile which items are "paid".
-    const conflictCheckReq = new mssql.Request(tx);
-    conflictCheckReq.input("TransID", mssql.BigInt, transId);
-    const conflictCheckSql = `
-      SELECT TOP 1 ${q("MethodID")}, ${q("PaidAmount")}, ${q("BalanceAmount")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    const conflictResult = await conflictCheckReq.query(conflictCheckSql);
-    const conflictRecord = conflictResult.recordset[0];
-    if (conflictRecord) {
-      const conflictMethodID   = toInt(conflictRecord.MethodID);
-      const conflictPaidAmount = toNum(conflictRecord.PaidAmount, 0);
-      const conflictBalance    = toNum(conflictRecord.BalanceAmount, 0);
+    const conflictAgg = await getGroupAggregate(tx, transId, [2, 4]);
+    if (conflictAgg) {
+      const conflictMethodID   = toInt(conflictAgg.MethodID);
+      const conflictPaidAmount = r2(toNum(conflictAgg.PaidAmount, 0));
+      const conflictBillAmount = r2(toNum(conflictAgg.BillAmount, 0));
+      const conflictBalance    = r2(Math.max(0, conflictBillAmount - conflictPaidAmount));
       const methodNames        = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
       // If an amount-based split (Equal=2, Custom=4) has already received money → block
-      if ((conflictMethodID === 2 || conflictMethodID === 4) && conflictPaidAmount > 0 && conflictBalance > 0) {
+      if (conflictPaidAmount > 0 && conflictBalance > 0) {
         throw new Error(
           `Cannot use Item Split for this bill. A ${methodNames[conflictMethodID] || `MethodID=${conflictMethodID}`} ` +
           `is already in progress with ${conflictBalance.toFixed(2)} AED remaining. ` +
@@ -1093,40 +1009,28 @@ export async function saveItemSplitPayment(payload) {
     console.log("[PAYMENT:SVC] Item split - Provided totalBillAmount:", totalBillAmount);
     console.log("[PAYMENT:SVC] Item split - Calculated originalBillAmount:", originalBillAmount);
 
-    // CRITICAL: Check if there's ANY existing payment for this kotMasterID
+    // CRITICAL: Check if there's ANY existing payment GROUP for this kotMasterID
     // If a payment method has been started AND money has been paid, we MUST use that same method ID
     // We cannot switch methods after payment has been made
     // However, if a payment exists but PaidAmount = 0 (no actual payment made yet), we can switch methods
-    const checkAnyPaymentReq = new mssql.Request(tx);
-    checkAnyPaymentReq.input("TransID", mssql.BigInt, transId);
-    
-    const checkAnyPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    
-    const anyPaymentResult = await checkAnyPaymentReq.query(checkAnyPaymentSql);
-    const anyExistingPayment = anyPaymentResult.recordset[0];
-    
-    // If there's an existing payment with a DIFFERENT method, check if we can switch
-    if (anyExistingPayment) {
-      const existingMethodID = toInt(anyExistingPayment.MethodID);
-      const existingPaidAmount = toNum(anyExistingPayment.PaidAmount, 0);
-      const existingBalanceAmount = toNum(anyExistingPayment.BalanceAmount, 0);
-      const existingPaidStatus = anyExistingPayment.PaidStatus || "PENDING";
-      
-      console.log("[PAYMENT:SVC] Item split - Found existing payment:", {
-        PaymentID: anyExistingPayment.PaymentID,
+    const anyAgg = await getGroupAggregate(tx, transId, [1, 2, 3, 4]);
+
+    if (anyAgg) {
+      const existingMethodID = toInt(anyAgg.MethodID);
+      const existingPaidAmount = r2(toNum(anyAgg.PaidAmount, 0));
+      const existingBillAmount = r2(toNum(anyAgg.BillAmount, 0));
+      const existingBalanceAmount = r2(Math.max(0, existingBillAmount - existingPaidAmount));
+      const existingPaidStatus = existingBalanceAmount <= 0 ? "PAID" : "PENDING";
+
+      console.log("[PAYMENT:SVC] Item split - Found existing group:", {
         MethodID: existingMethodID,
         PaidAmount: existingPaidAmount,
         BalanceAmount: existingBalanceAmount,
         PaidStatus: existingPaidStatus,
-        BillAmount: toNum(anyExistingPayment.BillAmount, 0),
+        BillAmount: existingBillAmount,
         TransID: transId
       });
-      
+
       // If a different method exists AND payment has been made (PaidAmount > 0), check if we can switch
       if (existingMethodID !== 3 && existingPaidAmount > 0) {
         // Special case: If it's Pay Full (MethodID=1), allow switching to Item Split
@@ -1135,32 +1039,15 @@ export async function saveItemSplitPayment(payload) {
         // - Changing payment method preference
         // - Correcting payment records
         if (existingMethodID === 1) {
-          const isFullyPaid = existingPaidStatus === "PAID" && existingBalanceAmount <= 0;
-          
-          if (isFullyPaid) {
-            // Pay Full is fully paid - but allow switching to Item Split by deleting Pay Full
-            // This is useful for testing or if user wants to change payment method
-            console.log(`[PAYMENT:SVC] Item split - Found fully paid Pay Full payment, but allowing switch to Item Split (deleting Pay Full record)`);
-            // Delete the Pay Full payment to allow Item Split
-            const deleteReq = new mssql.Request(tx);
-            deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-            const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
-            await deleteReq.query(deleteSql);
-            console.log(`[PAYMENT:SVC] Item split - Deleted Pay Full payment to allow Item Split`);
-          } else {
-            // Pay Full exists but bill isn't fully paid - allow switching to Item Split
-            console.log(`[PAYMENT:SVC] Item split - Found Pay Full payment but bill is not fully paid (Status: ${existingPaidStatus}, Balance: ${existingBalanceAmount}), allowing switch to Item Split`);
-            // Delete the incomplete Pay Full payment to allow Item Split
-            const deleteReq = new mssql.Request(tx);
-            deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-            const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
-            await deleteReq.query(deleteSql);
-            console.log(`[PAYMENT:SVC] Item split - Deleted incomplete Pay Full payment to allow Item Split`);
-          }
+          console.log(`[PAYMENT:SVC] Item split - Found Pay Full group (fully paid: ${existingBalanceAmount <= 0}), allowing switch to Item Split (deleting Pay Full group)`);
+          const deleteReq = new mssql.Request(tx);
+          deleteReq.input("TransID", mssql.BigInt, transId);
+          deleteReq.input("ExistingMethodID", mssql.BigInt, existingMethodID);
+          await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @ExistingMethodID`);
+          console.log(`[PAYMENT:SVC] Item split - Deleted Pay Full group to allow Item Split`);
         } else {
           // For other methods (Equal Split, Custom Split), check if fully paid
-          const isFullyPaid = existingPaidStatus === "PAID" && existingBalanceAmount <= 0;
-          if (isFullyPaid) {
+          if (existingPaidStatus === "PAID") {
             throw new Error("This bill has already been fully paid. No additional payments can be made.");
           }
           // If not fully paid, reject switching between split methods
@@ -1168,51 +1055,43 @@ export async function saveItemSplitPayment(payload) {
           throw new Error(`Cannot use Item Split (MethodID=3) for this bill. This bill is already using ${methodNames[existingMethodID] || `MethodID=${existingMethodID}`} and payment has been made. Once a payment method is chosen and payment is made, all payments must use the same method.`);
         }
       }
-      
+
       // If a different method exists but NO payment has been made (PaidAmount = 0), delete it and allow this method
       if (existingMethodID !== 3 && existingPaidAmount <= 0) {
-        console.log(`[PAYMENT:SVC] Item split - Found existing MethodID=${existingMethodID} payment with PaidAmount=0, deleting it to allow Item Split`);
+        console.log(`[PAYMENT:SVC] Item split - Found existing MethodID=${existingMethodID} group with PaidAmount=0, deleting it to allow Item Split`);
         const deleteReq = new mssql.Request(tx);
-        deleteReq.input("PaymentID", mssql.BigInt, toInt(anyExistingPayment.PaymentID));
-        const deleteSql = `DELETE FROM ${T_PAYMENT} WHERE ${q("PaymentID")} = @PaymentID`;
-        await deleteReq.query(deleteSql);
-        console.log(`[PAYMENT:SVC] Item split - Deleted unused payment (MethodID=${existingMethodID})`);
+        deleteReq.input("TransID", mssql.BigInt, transId);
+        deleteReq.input("ExistingMethodID", mssql.BigInt, existingMethodID);
+        await deleteReq.query(`DELETE FROM ${T_PAYMENT} WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @ExistingMethodID`);
+        console.log(`[PAYMENT:SVC] Item split - Deleted unused group (MethodID=${existingMethodID})`);
       }
     }
-    
-    // Now check specifically for MethodID=3 payment (item split)
-    const existingPaymentReq = new mssql.Request(tx);
-    existingPaymentReq.input("TransID", mssql.BigInt, transId);
-    existingPaymentReq.input("MethodID", mssql.BigInt, 3);
-    
-    const existingPaymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @MethodID
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    
-    const existingPaymentResult = await existingPaymentReq.query(existingPaymentSql);
-    const existingPayment = existingPaymentResult.recordset[0];
-    
+
+    // Now check specifically for MethodID=3 (item split) group
+    const itemAgg = await getGroupAggregate(tx, transId, 3);
+
     // Calculate amount being paid for selected items
-    // CRITICAL: First check if there's an existing payment to validate against already-paid items
+    // CRITICAL: First check if there's an existing group to validate against already-paid items
     let itemsPaidAmount = 0;
     const itemsToPay = [];
-    
-    // If there's an existing payment, check which items are already paid
+
+    // If there's an existing item-split group, check which items are already paid
+    // across EVERY leg's PaymentID (not just one row) so a second payer can't
+    // re-pay an item a prior payer already paid.
     let alreadyPaidKotChildIds = new Set();
-    if (existingPayment) {
-      const existingPaymentId = toInt(existingPayment.PaymentID);
+    if (itemAgg && r2(toNum(itemAgg.PaidAmount, 0)) > 0) {
       const checkPaidItemsReq = new mssql.Request(tx);
-      checkPaidItemsReq.input("PaymentID", mssql.BigInt, existingPaymentId);
-      
+      checkPaidItemsReq.input("TransID", mssql.BigInt, transId);
+
       const checkPaidItemsSql = `
         SELECT kotChildID
         FROM dbo.PaymentItems
-        WHERE PaymentID = @PaymentID
+        WHERE PaymentID IN (
+          SELECT ${q("PaymentID")} FROM ${T_PAYMENT}
+          WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = 3
+        )
       `;
-      
+
       try {
         const paidItemsResult = await checkPaidItemsReq.query(checkPaidItemsSql);
         if (paidItemsResult.recordset && paidItemsResult.recordset.length > 0) {
@@ -1252,154 +1131,99 @@ export async function saveItemSplitPayment(payload) {
     let newPaidAmount;
     let newBalanceAmount;
     let paidStatus;
-    let finalBillAmount = originalBillAmount; // Will be set correctly for both new and update cases
+    let finalBillAmount = originalBillAmount; // Will be set correctly for both new and continuing groups
+    let priorTipAmount = 0;
+    const groupExists = !!itemAgg;
 
-    if (existingPayment) {
-      // Update existing payment record - accumulate paid amount
-      paymentId = toInt(existingPayment.PaymentID);
-      const currentPaidAmount = toNum(existingPayment.PaidAmount, 0);
-      const storedBillAmount = toNum(existingPayment.BillAmount, 0);
-      
+    if (groupExists) {
+      const currentPaidAmount = r2(toNum(itemAgg.PaidAmount, 0));
+      const storedBillAmount = r2(toNum(itemAgg.BillAmount, 0));
+      priorTipAmount = r2(toNum(itemAgg.TipAmount, 0));
+
       // CRITICAL: For item split, ALWAYS use the stored BillAmount from the FIRST payment
       // This is the original total bill amount and should NEVER change
-      // If storedBillAmount is 0 or invalid, use the provided originalBillAmount
-      // But if storedBillAmount exists, it's the source of truth (from first payment)
-      // NEVER use the new originalBillAmount if storedBillAmount exists - it might be wrong
       const billAmountToUse = storedBillAmount > 0 ? storedBillAmount : originalBillAmount;
-      finalBillAmount = billAmountToUse; // Store for return statement
-      
-      // Validate: The new originalBillAmount should match storedBillAmount (if stored exists)
-      // If they don't match, use storedBillAmount (it's the correct original)
+      finalBillAmount = billAmountToUse;
+
       if (storedBillAmount > 0 && Math.abs(storedBillAmount - originalBillAmount) > 0.01) {
         console.warn(`[PAYMENT:SVC] Item split - BillAmount mismatch! Stored: ${storedBillAmount}, Provided: ${originalBillAmount}. Using stored value.`);
-        console.warn(`[PAYMENT:SVC] Item split - This might indicate the frontend is sending incorrect totalBillAmount. Check frontend calculation.`);
       }
-      
-      // CRITICAL: Verify that BillAmount makes sense - it should be >= currentPaidAmount + itemsPaidAmount
-      // If BillAmount is less than what's being paid, there's a calculation error
+
       const totalBeingPaid = currentPaidAmount + itemsPaidAmount;
       if (billAmountToUse < totalBeingPaid) {
         console.error(`[PAYMENT:SVC] Item split - CRITICAL ERROR: BillAmount (${billAmountToUse}) < TotalBeingPaid (${totalBeingPaid}). This indicates a calculation error!`);
-        // Don't throw - use the stored BillAmount but log the error
       }
-      
+
       console.log("[PAYMENT:SVC] Item split - Payment calculation:", {
-        storedBillAmount,
-        originalBillAmount,
-        billAmountToUse: billAmountToUse, // This is what we'll use
-        currentPaidAmount,
-        itemsPaidAmount,
+        storedBillAmount, originalBillAmount, billAmountToUse, currentPaidAmount, itemsPaidAmount,
         calculation: `${billAmountToUse} - (${currentPaidAmount} + ${itemsPaidAmount}) = ${billAmountToUse - (currentPaidAmount + itemsPaidAmount)}`
       });
-      
-      // CRITICAL: Validate that itemsPaidAmount doesn't exceed remaining balance
+
       const remainingBalance = r2(billAmountToUse - currentPaidAmount);
       if (itemsPaidAmount > remainingBalance) {
         console.warn(`[PAYMENT:SVC] Item split - WARNING: itemsPaidAmount (${itemsPaidAmount}) > remainingBalance (${remainingBalance}). This might indicate duplicate payment.`);
-        // Don't throw error, but log warning - might be legitimate if items include tax/service
       }
-      
-      // Add new payment to existing paid amount
-      newPaidAmount = r2(currentPaidAmount + itemsPaidAmount);
-      
-      // CRITICAL: Ensure PaidAmount never exceeds BillAmount
-      if (newPaidAmount > billAmountToUse) {
-        console.error(`[PAYMENT:SVC] Item split - ERROR: newPaidAmount (${newPaidAmount}) > billAmountToUse (${billAmountToUse}). Capping to billAmount.`);
-        newPaidAmount = r2(billAmountToUse);
-      }
-      
-      // Recalculate balance using the ORIGINAL bill amount (stored from first payment)
-      // Formula: Balance = OriginalBillAmount - (AllPaidAmounts)
-      newBalanceAmount = r2(billAmountToUse - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
-      
-      // Update status based on balance
+
+      newPaidAmount = r2(currentPaidAmount + itemsPaidAmount); // whole-bill total, for status/response only
+      if (newPaidAmount > billAmountToUse) newPaidAmount = r2(billAmountToUse);
+      newBalanceAmount = r2(Math.max(0, billAmountToUse - newPaidAmount));
       paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
-      
-      console.log("[PAYMENT:SVC] Updating existing item split payment:", {
-        paymentId,
-        billAmount: billAmountToUse,
-        currentPaidAmount,
-        itemsPaidAmount,
-        newPaidAmount,
-        newBalanceAmount,
-        paidStatus
+
+      console.log("[PAYMENT:SVC] Inserting new leg for existing item split group:", {
+        billAmount: billAmountToUse, currentPaidAmount, itemsPaidAmount, newPaidAmount, newBalanceAmount, paidStatus
       });
-      
-      const updateReq = new mssql.Request(tx);
-      updateReq.input("PaymentID", mssql.BigInt, paymentId);
-      updateReq.input("PaidAmount", mssql.Money, newPaidAmount);
-      updateReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
-      updateReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
-      updateReq.input("NewFee", mssql.Money, feeAmt);
-      updateReq.input("NewTip", mssql.Money, tipAmt);
 
-      const updateSql = `
-        UPDATE ${T_PAYMENT}
-        SET ${q("PaidAmount")} = @PaidAmount,
-            ${q("BalanceAmount")} = @BalanceAmount,
-            ${q("PaidStatus")} = @PaidStatus,
-            ${q("ServiceFeeAmount")} = ISNULL(${q("ServiceFeeAmount")}, 0) + @NewFee,
-            ${q("TipAmount")} = ISNULL(${q("TipAmount")}, 0) + @NewTip
-        WHERE ${q("PaymentID")} = @PaymentID
-      `;
-
-      await updateReq.query(updateSql);
-      console.log("[PAYMENT:SVC] Updated existing item split payment record");
-      
-    } else {
-      // Insert new payment record
       paymentId = await getNextPaymentId(tx);
-      
-      // First payment: BillAmount = total bill, PaidAmount = items paid, Balance = remaining
-      newPaidAmount = r2(itemsPaidAmount);
-      newBalanceAmount = r2(originalBillAmount - newPaidAmount);
-      if (newBalanceAmount < 0) newBalanceAmount = 0;
-      paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
-      
-      console.log("[PAYMENT:SVC] Creating new item split payment record:", {
-        paymentId,
-        ShopID: 1,
-        TransID: transId,
-        MethodID: 3,
-        BillAmount: originalBillAmount,
-        PaidAmount: newPaidAmount,
-        BalanceAmount: newBalanceAmount,
-        PaidStatus: paidStatus,
-        TableID: tableId ? toInt(tableId) : null
-      });
-      
       const insertReq = new mssql.Request(tx);
-      const paymentData = {
-        PaymentID: paymentId,
-        ShopID: 1,
-        TransID: transId,
-        MethodID: 3,
-        BillAmount: originalBillAmount,
-        PaidAmount: newPaidAmount,
-        BalanceAmount: newBalanceAmount,
-        PaidStatus: paidStatus
-      };
-
-      Object.entries(paymentData).forEach(([key, value]) => {
-        if (key === "PaidStatus") {
-          insertReq.input(key, mssql.VarChar(50), value);
-        } else if (["BillAmount", "PaidAmount", "BalanceAmount"].includes(key)) {
-          insertReq.input(key, mssql.Money, value);
-        } else {
-          insertReq.input(key, mssql.BigInt, value);
-        }
-      });
-
-      if (tableId) {
-        insertReq.input("TableID", mssql.BigInt, toInt(tableId));
-        paymentData.TableID = toInt(tableId);
-      }
-
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, 3);
+      insertReq.input("BillAmount", mssql.Money, billAmountToUse);
+      insertReq.input("PaidAmount", mssql.Money, r2(itemsPaidAmount)); // this leg's own items only
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
-      paymentData.ServiceFeeAmount = feeAmt;
-      paymentData.TipAmount = tipAmt;
+      const legTableId = tableId ? toInt(tableId) : toInt(itemAgg.TableID, 0);
+      let includeTableIdForInsert = false;
+      if (legTableId) {
+        insertReq.input("TableID", mssql.BigInt, legTableId);
+        includeTableIdForInsert = true;
+      }
+      await insertReq.query(buildPaymentInsertSql(includeTableIdForInsert, true));
+      console.log("[PAYMENT:SVC] Inserted new leg row for item split group");
+
+    } else {
+      // First payment for this kotMasterID
+      paymentId = await getNextPaymentId(tx);
+
+      newPaidAmount = r2(itemsPaidAmount);
+      newBalanceAmount = r2(Math.max(0, originalBillAmount - newPaidAmount));
+      paidStatus = newBalanceAmount <= 0 ? "PAID" : "PENDING";
+
+      console.log("[PAYMENT:SVC] Creating new item split payment record:", {
+        paymentId, ShopID: 1, TransID: transId, MethodID: 3,
+        BillAmount: originalBillAmount, PaidAmount: newPaidAmount, BalanceAmount: newBalanceAmount,
+        PaidStatus: paidStatus, TableID: tableId ? toInt(tableId) : null
+      });
+
+      const insertReq = new mssql.Request(tx);
+      insertReq.input("PaymentID", mssql.BigInt, paymentId);
+      insertReq.input("ShopID", mssql.BigInt, 1);
+      insertReq.input("TransID", mssql.BigInt, transId);
+      insertReq.input("MethodID", mssql.BigInt, 3);
+      insertReq.input("BillAmount", mssql.Money, originalBillAmount);
+      insertReq.input("PaidAmount", mssql.Money, newPaidAmount);
+      insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
+      insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
+      insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
+      insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
+      insertReq.input("TipAmount", mssql.Money, tipAmt);
+      if (tableId) {
+        insertReq.input("TableID", mssql.BigInt, toInt(tableId));
+      }
 
       await insertReq.query(buildPaymentInsertSql(!!tableId, true));
       console.log("[PAYMENT:SVC] ✅ Inserted new item split payment record with MethodID=3");
@@ -1449,19 +1273,11 @@ export async function saveItemSplitPayment(payload) {
         if (!checkItemResult.recordset || checkItemResult.recordset.length === 0) {
           // Insert new PaymentItem record
           const insertItemReq = new mssql.Request(tx);
-          
-          // Get next PaymentItemID
-          const nextIdReq = new mssql.Request(tx);
-          const nextIdSql = `
-            SELECT CASE 
-              WHEN MAX(PaymentItemID) IS NULL THEN 1
-              ELSE MAX(PaymentItemID) + 1
-            END AS nextId
-            FROM ${T_PAYMENT_ITEMS}
-          `;
-          const nextIdResult = await nextIdReq.query(nextIdSql);
-          const nextItemId = toInt(nextIdResult.recordset[0]?.nextId, 1);
-          
+
+          // Get next PaymentItemID (UPDLOCK/HOLDLOCK via getNextId serializes
+          // concurrent legs so two payers inserting at once can't collide).
+          const nextItemId = await getNextId(tx, "PaymentItemID", 1, T_PAYMENT_ITEMS);
+
           insertItemReq.input("PaymentItemID", mssql.BigInt, nextItemId);
           insertItemReq.input("PaymentID", mssql.BigInt, paymentId);
           insertItemReq.input("kotChildID", mssql.BigInt, kotChildId);
@@ -1509,9 +1325,8 @@ export async function saveItemSplitPayment(payload) {
     await tx.commit();
 
     // Update KOTMaster QR payment tracking columns in Moifcore.
-    // POS-side tip = customer tip + a flat 0.50 carved from the service fee
-    // (only when a fee was actually charged) - same rule as pay-full.
-    const posTipAmount = r2(tipAmt + (feeAmt > 0 ? 0.5 : 0));
+    // POS-side tip = SUM of every leg's tip (settlement fires once, at PAID).
+    const posTipAmount = r2(priorTipAmount + tipAmt);
     await updateKotMasterQrPayment(transId, newPaidAmount, newBalanceAmount, paidStatus, posTipAmount);
 
     console.log("[PAYMENT:SVC] ✅ Item split payment completed successfully:", {
@@ -1566,39 +1381,23 @@ export async function getPaidItems(kotMasterID) {
   }
 
   try {
-    // Get PaymentID for this kotMasterID with MethodID = 3
-    const paymentSql = `
-      SELECT TOP 1 ${q("PaymentID")}
-      FROM ${T_PAYMENT}
-      WHERE ${q("ShopID")} = 1 AND ${q("TransID")} = @kotMasterID AND ${q("MethodID")} = 3
-      ORDER BY ${q("PaymentID")} ASC
-    `;
-    
-    const paymentResults = await queryPaymentDb(paymentSql, { kotMasterID: numericKotMasterID });
-    
-    if (!paymentResults || paymentResults.length === 0) {
-      return [];
-    }
-
-    const paymentId = toInt(paymentResults[0].PaymentID);
-    
-    // Get paid items from PaymentItems table
+    // Item-split bills can have multiple leg rows (one per payer) sharing this
+    // TransID+MethodID=3 - union paid items across ALL of them, not just one.
     const paidItemsSql = `
-      SELECT kotChildID
-      FROM dbo.PaymentItems
-      WHERE PaymentID = @paymentId
+      SELECT pi.kotChildID
+      FROM dbo.PaymentItems pi
+      WHERE pi.PaymentID IN (
+        SELECT ${q("PaymentID")} FROM ${T_PAYMENT}
+        WHERE ${q("ShopID")} = 1 AND ${q("TransID")} = @kotMasterID AND ${q("MethodID")} = 3
+      )
     `;
-    
-    const pool = await connectToPaymentDb();
-    const req = pool.request();
-    req.input("paymentId", mssql.BigInt, paymentId);
-    
+
     try {
-      const paidItemsResult = await req.query(paidItemsSql);
-      const paidKotChildIds = (paidItemsResult.recordset || []).map(row => toInt(row.kotChildID));
-      
+      const paidItemsResult = await queryPaymentDb(paidItemsSql, { kotMasterID: numericKotMasterID });
+      const paidKotChildIds = (paidItemsResult || []).map(row => toInt(row.kotChildID));
+
       console.log("[PAYMENT:SVC] Found paid items for kotMasterID:", numericKotMasterID, "Items:", paidKotChildIds);
-      
+
       return paidKotChildIds;
     } catch (err) {
       // If PaymentItems table doesn't exist, return empty array
@@ -1618,31 +1417,24 @@ export async function getTableBalance(tableId, kotMasterID = null) {
 
   const numericTableId = toInt(tableId);
   
-  // FIRST: Check if there's a payment for the specific kotMasterID (if provided)
-  // This takes priority - check for both MethodID = 1 (Pay Full) and MethodID = 4 (Custom Split)
+  // FIRST: Check if there's a payment group for the specific kotMasterID (if provided)
+  // This takes priority - check for MethodID = 1, 2, 3, or 4
   if (kotMasterID) {
     const numericKotMasterID = toInt(kotMasterID);
     if (numericKotMasterID > 0) {
-      // Check for any payment (MethodID = 1, 2, 3, or 4) for this kotMasterID
-      const kotPaymentSql = `
-        SELECT TOP 1 ${q("TransID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
-        FROM ${T_PAYMENT}
-        WHERE ${q("ShopID")} = 1 AND ${q("TransID")} = @kotMasterID AND (${q("MethodID")} = 1 OR ${q("MethodID")} = 2 OR ${q("MethodID")} = 3 OR ${q("MethodID")} = 4)
-        ORDER BY ${q("PaymentID")} DESC
-      `;
-      
-      const kotPaymentResults = await queryPaymentDb(kotPaymentSql, { kotMasterID: numericKotMasterID });
-      
-      if (kotPaymentResults && kotPaymentResults.length > 0) {
-        const paymentRecord = kotPaymentResults[0];
-        const originalBillAmount = toNum(paymentRecord?.BillAmount, 0);
-        const totalPaid = toNum(paymentRecord?.PaidAmount, 0);
-        const balance = toNum(paymentRecord?.BalanceAmount, 0);
-        const paidStatus = paymentRecord?.PaidStatus || "PENDING";
-        const methodId = toNum(paymentRecord?.MethodID, 0);
-        
-        console.log("[PAYMENT:SVC] Found payment for kotMasterID:", numericKotMasterID, "MethodID:", methodId, "Balance:", balance, "Status:", paidStatus);
-        
+      const paymentPool = await connectToPaymentDb();
+      const agg = await getGroupAggregate(paymentPool, numericKotMasterID, [1, 2, 3, 4]);
+
+      if (agg) {
+        let originalBillAmount = r2(toNum(agg.BillAmount, 0));
+        const totalPaid = r2(toNum(agg.PaidAmount, 0));
+        let balance = r2(Math.max(0, originalBillAmount - totalPaid));
+        let paidStatus = balance <= 0 ? "PAID" : "PENDING";
+        const methodId = toNum(agg.MethodID, 0);
+        const latestPaymentId = toInt(agg.LatestPaymentID, 0);
+
+        console.log("[PAYMENT:SVC] Found payment group for kotMasterID:", numericKotMasterID, "MethodID:", methodId, "Balance:", balance, "Status:", paidStatus);
+
         // For split payments (MethodID 2, 3, 4): POS may have added new items after the first payment.
         // Recompute balance from CURRENT KOT amount - totalPaid and SYNC both KOTMaster and Payment tables.
         let effectiveBalance = balance;
@@ -1671,23 +1463,28 @@ export async function getTableBalance(tableId, kotMasterID = null) {
                 await kotUpd.query(`
                   UPDATE dbo.KOTMaster SET QrPaidAmount = @QrPaidAmount, QrBalanceAmount = @QrBalanceAmount, QrPaymentStatus = @QrPaymentStatus WHERE kotMasterID = @kotMasterID
                 `);
-                // Update Payment: BillAmount, BalanceAmount, PaidStatus
+                // BillAmount invariant must stay identical on EVERY leg row of this group.
                 const newPaidStatus = effectiveBalance <= 0 ? "PAID" : "PENDING";
-                const paymentPool = await connectToPaymentDb();
-                const paymentId = toInt(paymentRecord?.PaymentID ?? 0);
-                if (paymentId > 0) {
+                const billFixReq = paymentPool.request();
+                billFixReq.input("TransID", mssql.BigInt, numericKotMasterID);
+                billFixReq.input("GroupMethodID", mssql.BigInt, methodId);
+                billFixReq.input("BillAmount", mssql.Money, r2(currentKotAmount));
+                await billFixReq.query(`
+                  UPDATE ${T_PAYMENT} SET ${q("BillAmount")} = @BillAmount WHERE ${q("TransID")} = @TransID AND ${q("MethodID")} = @GroupMethodID
+                `);
+                // BalanceAmount/PaidStatus snapshot only meaningfully belongs to the latest leg row.
+                if (latestPaymentId > 0) {
                   const payUpd = paymentPool.request();
-                  payUpd.input("PaymentID", mssql.BigInt, paymentId);
-                  payUpd.input("BillAmount", mssql.Money, r2(currentKotAmount));
+                  payUpd.input("PaymentID", mssql.BigInt, latestPaymentId);
                   payUpd.input("BalanceAmount", mssql.Money, r2(effectiveBalance));
                   payUpd.input("PaidStatus", mssql.VarChar(50), newPaidStatus);
                   await payUpd.query(`
-                    UPDATE dbo.Payment SET ${q("BillAmount")} = @BillAmount, ${q("BalanceAmount")} = @BalanceAmount, ${q("PaidStatus")} = @PaidStatus WHERE ${q("PaymentID")} = @PaymentID
+                    UPDATE dbo.Payment SET ${q("BalanceAmount")} = @BalanceAmount, ${q("PaidStatus")} = @PaidStatus WHERE ${q("PaymentID")} = @PaymentID
                   `);
-                  balance = effectiveBalance;
-                  paidStatus = newPaidStatus;
-                  originalBillAmount = currentKotAmount;
                 }
+                balance = effectiveBalance;
+                paidStatus = newPaidStatus;
+                originalBillAmount = currentKotAmount;
               }
             }
           } catch (kotErr) {
@@ -1789,27 +1586,33 @@ export async function getTableBalance(tableId, kotMasterID = null) {
     };
   }
   
-  // THIRD: If no unpaid KOTs, check for any pending split payments for this table (MethodID = 2, 3, or 4)
+  // THIRD: If no unpaid KOTs, check for any pending split payments for this table (MethodID = 2, 3, or 4).
+  // Must aggregate: a bill can now have multiple leg rows sharing a TransID,
+  // and a later leg completing the bill leaves earlier legs' own PaidStatus
+  // stuck at 'PENDING' - filtering on that column would return a stale leg
+  // instead of the group's actual (now fully paid) truth.
   const pendingSql = `
-    SELECT TOP 1 ${q("TransID")}, ${q("MethodID")}, ${q("BillAmount")}, ${q("PaidAmount")}, ${q("BalanceAmount")}, ${q("PaidStatus")}
+    SELECT TOP 1 ${q("TransID")}, ${q("MethodID")}, MAX(${q("BillAmount")}) AS BillAmount, SUM(${q("PaidAmount")}) AS PaidAmount
     FROM ${T_PAYMENT}
-    WHERE ${q("ShopID")} = 1 AND ${q("TableID")} = @tableId AND ${q("PaidStatus")} = 'PENDING' AND (${q("MethodID")} = 2 OR ${q("MethodID")} = 3 OR ${q("MethodID")} = 4)
-    ORDER BY ${q("PaymentID")} DESC
+    WHERE ${q("ShopID")} = 1 AND ${q("TableID")} = @tableId AND ${q("MethodID")} IN (2, 3, 4)
+    GROUP BY ${q("TransID")}, ${q("MethodID")}
+    HAVING SUM(${q("PaidAmount")}) < MAX(${q("BillAmount")})
+    ORDER BY MAX(${q("PaymentID")}) DESC
   `;
-  
+
   const results = await queryPaymentDb(pendingSql, { tableId: numericTableId });
-  
+
   if (!results || results.length === 0) {
     // No pending payments and no unpaid KOTs - table is fully paid
     return { balance: 0, hasPendingPayment: false, isFullyPaid: true, hasUnpaidKots: false };
   }
 
-  // Get the payment record (there's only one per kotMasterID now)
+  // Get the still-incomplete group for this table
   const paymentRecord = results[0];
   const transId = toNum(paymentRecord?.TransID, 0);
   const originalBillAmount = toNum(paymentRecord?.BillAmount, 0);
   const totalPaid = toNum(paymentRecord?.PaidAmount, 0);
-  const balance = toNum(paymentRecord?.BalanceAmount, 0);
+  const balance = r2(Math.max(0, originalBillAmount - totalPaid));
   const methodId = toNum(paymentRecord?.MethodID, 0);
 
   // Calculate amount per person for equal split (MethodID = 2)

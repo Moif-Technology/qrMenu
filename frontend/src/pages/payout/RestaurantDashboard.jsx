@@ -377,13 +377,21 @@ export default function RestaurantDashboard() {
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`num text-lg font-semibold ${t.failed ? "text-zinc-400 line-through" : "text-zinc-900"}`}>
-                        {CURRENCY} {fmt(t.failed ? t.billAmount : t.paidAmount)}
+                        {CURRENCY} {fmt(t.failed ? t.billAmount : t.restaurantPayoutAmount)}
                       </p>
                       {!t.failed && Number(t.balanceAmount) > 0 && (
                         <p className="num text-xs text-amber-600">balance {fmt(t.balanceAmount)}</p>
                       )}
                     </div>
                   </div>
+
+                  {!t.failed && (
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Bill {CURRENCY} {fmt(t.billAmount)}
+                      {Number(t.tipAmount) > 0 && ` + tip ${fmt(t.tipAmount)}`}
+                      {" "}− {CURRENCY} {fmt(t.platformFeeAmount)} platform fee
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap items-center justify-between gap-2 mt-3">
                     {t.failed ? (

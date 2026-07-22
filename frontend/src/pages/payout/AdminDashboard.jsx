@@ -274,8 +274,20 @@ function TxnDetailModal({ txn, onClose }) {
           <div className="py-3">
             <p className="text-xs font-medium text-zinc-400 mb-1.5">Amounts</p>
             <DetailRow label="Bill amount" value={`${CURRENCY} ${fmt(txn.billAmount)}`} mono />
+            {!txn.failed && Number(txn.serviceFeeAmount) > 0 && (
+              <DetailRow label="Service fee (customer paid)" value={`+ ${CURRENCY} ${fmt(txn.serviceFeeAmount)}`} mono />
+            )}
+            {!txn.failed && Number(txn.tipAmount) > 0 && (
+              <DetailRow label="Tip" value={`+ ${CURRENCY} ${fmt(txn.tipAmount)}`} mono />
+            )}
             <DetailRow label="Paid amount" value={`${CURRENCY} ${fmt(txn.paidAmount)}`} mono />
             <DetailRow label="Balance" value={`${CURRENCY} ${fmt(txn.balanceAmount)}`} mono />
+            {!txn.failed && (
+              <>
+                <DetailRow label="Platform fee (0.50 flat)" value={`- ${CURRENCY} ${fmt(txn.platformFeeAmount)}`} mono />
+                <DetailRow label="Restaurant payout" value={`${CURRENCY} ${fmt(txn.restaurantPayoutAmount)}`} mono />
+              </>
+            )}
             <DetailRow label="Payment status" value={<PaidBadge status={txn.paidStatus} />} />
           </div>
 
@@ -958,6 +970,7 @@ export default function AdminDashboard() {
                   <SortTh label="Bill" k="bill" sort={sort} onSort={toggleSort} align="right" />
                   <SortTh label="Paid" k="paid" sort={sort} onSort={toggleSort} align="right" />
                   <th className="px-4 py-2.5 font-medium text-right">Balance</th>
+                  <th className="px-4 py-2.5 font-medium text-right">Restaurant payout</th>
                   <th className="px-4 py-2.5 font-medium">Payment</th>
                   <th className="px-4 py-2.5 font-medium">Settlement</th>
                   <th className="px-4 py-2.5 font-medium">Transfer ref</th>
@@ -968,7 +981,7 @@ export default function AdminDashboard() {
               <tbody>
                 {transactions.length === 0 && (
                   <tr>
-                    <td colSpan={isCompany ? 13 : 11} className="px-4 py-12 text-center text-zinc-400">
+                    <td colSpan={isCompany ? 14 : 12} className="px-4 py-12 text-center text-zinc-400">
                       {loading ? "Loading..." : "No transactions found"}
                     </td>
                   </tr>
@@ -1004,6 +1017,9 @@ export default function AdminDashboard() {
                       <td className="num px-4 py-3 text-right text-zinc-600">{fmt(t.billAmount)}</td>
                       <td className="num px-4 py-3 text-right font-medium text-zinc-900">{fmt(t.paidAmount)}</td>
                       <td className="num px-4 py-3 text-right text-zinc-400">{fmt(t.balanceAmount)}</td>
+                      <td className="num px-4 py-3 text-right text-zinc-600">
+                        {t.failed ? "-" : fmt(t.restaurantPayoutAmount)}
+                      </td>
                       <td className="px-4 py-3"><PaidBadge status={t.paidStatus} /></td>
                       <td className="px-4 py-3">
                         {t.failed ? <span className="text-xs text-zinc-300">-</span> : <PayoutBadge status={payoutStatus} />}

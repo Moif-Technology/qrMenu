@@ -158,7 +158,11 @@ router.get("/", requireAuth, async (req, res) => {
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
           ps.PayoutID, ps.Status AS PayoutStatus, ps.Amount AS PayoutAmount,
-          ps.TransferRef, ps.TransferDate, ps.TransferredBy, ps.Notes AS PayoutNotes
+          ps.TransferRef, ps.TransferDate, ps.TransferredBy, ps.Notes AS PayoutNotes,
+          ISNULL(p.ServiceFeeAmount, 0) AS ServiceFeeAmount,
+          ISNULL(p.TipAmount, 0)        AS TipAmount,
+          p.PlatformFeeAmount,
+          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.TipAmount,0) - p.PlatformFeeAmount) AS RestaurantPayoutAmount
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
@@ -180,7 +184,11 @@ router.get("/", requireAuth, async (req, res) => {
           a.OrderRef,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
-          NULL, NULL, NULL, NULL, NULL, NULL, NULL
+          NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          CAST(0 AS MONEY) AS ServiceFeeAmount,
+          CAST(0 AS MONEY) AS TipAmount,
+          CAST(0 AS MONEY) AS PlatformFeeAmount,
+          CAST(0 AS MONEY) AS RestaurantPayoutAmount
         FROM dbo.PaymentAttempts a
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = a.ShopID
         ${attemptWhere}
@@ -210,6 +218,10 @@ router.get("/", requireAuth, async (req, res) => {
         billAmount: Number(r.BillAmount),
         paidAmount: Number(r.PaidAmount),
         balanceAmount: Number(r.BalanceAmount),
+        serviceFeeAmount: failed ? null : Number(r.ServiceFeeAmount),
+        tipAmount: failed ? null : Number(r.TipAmount),
+        platformFeeAmount: failed ? null : Number(r.PlatformFeeAmount),
+        restaurantPayoutAmount: failed ? null : Number(r.RestaurantPayoutAmount),
         // DECLINED and CANCELLED both surface as FAILED to keep it simple.
         paidStatus: failed ? "FAILED" : r.PaidStatus,
         failReason: failed ? r.PaidStatus : null,
@@ -262,7 +274,9 @@ router.get("/summary", requireAuth, async (req, res) => {
         ISNULL(SUM(p.PaidAmount), 0)                                        AS totalCollected,
         ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ps.Amount END), 0) AS totalTransferred,
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
-                        THEN p.PaidAmount END), 0)                          AS totalPendingPayout
+                        THEN p.PaidAmount END), 0)                          AS totalPendingPayout,
+        ISNULL(SUM(p.PlatformFeeAmount), 0)                                 AS totalPlatformFees,
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.TipAmount,0) - p.PlatformFeeAmount), 0) AS totalRestaurantPayoutDue
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
       ${shopFilter}
