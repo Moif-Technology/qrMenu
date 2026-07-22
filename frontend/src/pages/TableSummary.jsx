@@ -579,7 +579,10 @@ export default function TableSummaryPremium() {
 
           const balance = result.balanceAmount || result.BalanceAmount || 0;
           const paidStatus = result.paidStatus || result.PaidStatus || "PENDING";
-          const paidValue = result.PaidAmount || result.paidAmount || amountPerPerson || amountPaid;
+          // amountPaid (from the Telr return) is this leg's real charge incl.
+          // fee+tip - result.PaidAmount is the whole-bill running bill-share
+          // total used for balance tracking, not what THIS payer actually paid.
+          const paidValue = amountPaid || result.PaidAmount || result.paidAmount || amountPerPerson;
 
           if (balance <= 0 && paidStatus === "PAID") {
             handlePaymentComplete({
@@ -621,7 +624,10 @@ export default function TableSummaryPremium() {
           }
           const balance = result.BalanceAmount || result.balanceAmount || 0;
           const paidStatus = result.PaidStatus || result.paidStatus || "PENDING";
-          const paidValue = result.PaidAmount || result.paidAmount || result.itemsPaid || totalAmount || amountPaid;
+          // amountPaid (from the Telr return) is this leg's real charge incl.
+          // fee+tip - result.PaidAmount/itemsPaid are bill-only figures, not
+          // what THIS payer actually paid.
+          const paidValue = amountPaid || result.PaidAmount || result.paidAmount || result.itemsPaid || totalAmount;
 
           // Always refresh paid items after item split payment (regardless of balance)
           // Add a small delay to ensure database transaction is committed
@@ -657,7 +663,7 @@ export default function TableSummaryPremium() {
               status: paidStatus,
             });
           } else {
-            showToast(`Paid ${fmt(result.itemsPaid || paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
+            showToast(`Paid ${fmt(paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
             // Don't reload - stay on payment page to allow continued payment
             // Refresh order data to get updated balance without reloading page
             if (loadOrderDataRef.current) {
@@ -690,7 +696,10 @@ export default function TableSummaryPremium() {
 
           const balance = result.balanceAmount || result.BalanceAmount || 0;
           const paidStatus = result.paidStatus || result.PaidStatus || "PENDING";
-          const totalPaid = result.paidAmount || result.PaidAmount || result.billAmount || result.BillAmount || amountPaid || paidAmount;
+          // amountPaid (from the Telr return) is this leg's real charge incl.
+          // fee+tip - result.PaidAmount/billAmount are bill-only figures, not
+          // what THIS payer actually paid.
+          const totalPaid = amountPaid || result.paidAmount || result.PaidAmount || result.billAmount || result.BillAmount || paidAmount;
 
           if (balance <= 0 && paidStatus === "PAID") {
             handlePaymentComplete({
@@ -703,7 +712,7 @@ export default function TableSummaryPremium() {
             setRemainingBalance(null);
             setSplitTransId(null);
           } else {
-            showToast(`Paid ${fmt(paidAmount || amountPaid)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
+            showToast(`Paid ${fmt(amountPaid || paidAmount)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
             setRemainingBalance(balance);
             setSplitTransId(result.transId);
             // Don't reload - stay on payment page to allow continued payment
@@ -807,10 +816,18 @@ export default function TableSummaryPremium() {
             // Set telrReturnStatus to "AUTH" BEFORE processing payment to prevent redirects
             setTelrReturnStatus("AUTH");
             
+            // stored.amount is only the raw bill (what was sent to /api/telr/create,
+            // before fee/tip) - NOT what the customer was actually charged. The real
+            // total is bill + this leg's fee + tip, so prefer Telr's own authorized
+            // amount, then that computed total, before ever falling back to the bare bill.
+            const storedTrueTotal = stored
+              ? Number(stored.amount || 0) + Number(stored.serviceFeeAmount || 0) + Number(stored.tipAmount || 0)
+              : null;
             const amountPaid =
-              stored?.amount ??
-              Number(telrData?.order?.amount) ??
-              Number(telrData?.order?.total);
+              Number(telrData?.order?.amount) ||
+              (Number.isFinite(storedTrueTotal) && storedTrueTotal > 0 ? storedTrueTotal : null) ||
+              Number(telrData?.order?.total) ||
+              stored?.amount;
 
             const paymentIdValue =
               paymentIdParam ||
