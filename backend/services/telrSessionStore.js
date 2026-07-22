@@ -49,3 +49,19 @@ export function getVerifiedAmount(sessionKey) {
   if (!session || session.verifiedAmount === undefined) return null;
   return session.verifiedAmount;
 }
+
+/**
+ * Returns the Telr order/transaction reference captured during the AUTH
+ * callback, so split-payment endpoints can stamp the same ref onto their
+ * DB row even though the actual save happens in a separate request
+ * (frontend follow-up call after redirect) from the one that saw telrData.
+ */
+export function getVerifiedTelrRef(sessionKey) {
+  const session = getSessionByKey(sessionKey);
+  if (!session) return null;
+  return {
+    orderRef: session.verifiedOrderRef ?? session.orderRef ?? null,
+    tranRef: session.verifiedTranRef ?? null,
+    authCode: session.verifiedAuthCode ?? null,
+  };
+}

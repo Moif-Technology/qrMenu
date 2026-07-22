@@ -488,6 +488,9 @@ async function handleReturn(req, res, status) {
                 kotMasterID: metaForSave.kotMasterID,
                 serviceFeeAmount: metaForSave.serviceFeeAmount,
                 tipAmount: metaForSave.tipAmount,
+                orderRef: effectiveOrderRef,
+                tranRef: telrData?.transaction?.ref ?? null,
+                authCode: telrData?.transaction?.auth ?? null,
               });
               if (sessionMeta) sessionMeta.processed = true;
             } catch (err) {
@@ -513,6 +516,9 @@ async function handleReturn(req, res, status) {
               ...(sessionMeta || {}),
               sessionKey: sessionKey || sessionMeta?.sessionKey,
               verifiedAmount: telrVerifiedAmount,
+              verifiedOrderRef: effectiveOrderRef,
+              verifiedTranRef: telrData?.transaction?.ref ?? null,
+              verifiedAuthCode: telrData?.transaction?.auth ?? null,
               verifiedAt: Date.now(),
             });
           }
@@ -666,6 +672,12 @@ router.post("/api/telr/webhook", async (req, res) => {
     const mode = session.mode || "pay-full";
     console.log("[Telr:Webhook] Processing payment. mode:", mode, "orderRef:", orderRef);
 
+    const webhookTelrRef = {
+      orderRef,
+      tranRef: telrData?.transaction?.ref ?? null,
+      authCode: telrData?.transaction?.auth ?? null,
+    };
+
     if (!mode || mode === "pay-full") {
       // Pay Full — the redirect did not process it (browser closed), so we do it here
       const metaForSave = {
@@ -674,6 +686,7 @@ router.post("/api/telr/webhook", async (req, res) => {
         kotMasterID: session.kotMasterID,
         serviceFeeAmount: session.serviceFeeAmount ?? 0,
         tipAmount:   session.tipAmount ?? 0,
+        ...webhookTelrRef,
       };
 
       if (metaForSave.billAmount && (metaForSave.tableId || metaForSave.kotMasterID)) {
@@ -703,6 +716,7 @@ router.post("/api/telr/webhook", async (req, res) => {
             tableId: session.tableId,
             serviceFeeAmount: feeAmt,
             tipAmount: tipAmt,
+            ...webhookTelrRef,
           });
           console.log("[Telr:Webhook] Equal split leg settled via webhook. orderRef:", orderRef);
         } else {
@@ -718,6 +732,7 @@ router.post("/api/telr/webhook", async (req, res) => {
             tableId: session.tableId,
             serviceFeeAmount: feeAmt,
             tipAmount: tipAmt,
+            ...webhookTelrRef,
           });
           console.log("[Telr:Webhook] Custom split leg settled via webhook. orderRef:", orderRef);
         } else {
@@ -732,6 +747,7 @@ router.post("/api/telr/webhook", async (req, res) => {
             totalBillAmount: session.originalBillAmount ?? legPaidAmount,
             serviceFeeAmount: feeAmt,
             tipAmount: tipAmt,
+            ...webhookTelrRef,
           });
           console.log("[Telr:Webhook] Item split leg settled via webhook. orderRef:", orderRef);
         } else {

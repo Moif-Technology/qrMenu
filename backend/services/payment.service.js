@@ -55,12 +55,12 @@ function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
   const baseFields = [
     q("PaymentID"), q("ShopID"), q("TransID"), q("MethodID"),
     q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus"),
-    q("PlatformFeeAmount"), q("CreatedAt")
+    q("PlatformFeeAmount"), q("OrderRef"), q("TranRef"), q("AuthCode"), q("CreatedAt")
   ];
   const baseParams = [
     "@PaymentID", "@ShopID", "@TransID", "@MethodID",
     "@BillAmount", "@PaidAmount", "@BalanceAmount", "@PaidStatus",
-    "@PlatformFeeAmount", "GETDATE()"
+    "@PlatformFeeAmount", "@OrderRef", "@TranRef", "@AuthCode", "GETDATE()"
   ];
 
   if (includeTableId) {
@@ -77,6 +77,16 @@ function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
     INSERT INTO ${T_PAYMENT} (${baseFields.join(", ")})
     VALUES (${baseParams.join(", ")})
   `;
+}
+
+/**
+ * Attach the Telr order/transaction reference to an insert Request.
+ * All three are nullable — non-Telr or unverified legs just get NULLs.
+ */
+function addTelrRefInputs(req, { orderRef = null, tranRef = null, authCode = null } = {}) {
+  req.input("OrderRef", mssql.NVarChar(100), orderRef || null);
+  req.input("TranRef", mssql.NVarChar(100), tranRef || null);
+  req.input("AuthCode", mssql.NVarChar(50), authCode || null);
 }
 
 /**
@@ -310,7 +320,8 @@ export async function getPaymentMethodById(methodId) {
 }
 
 export async function savePayFullPayment(payload) {
-  const { billAmount, tableId, kotMasterID, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const { billAmount, tableId, kotMasterID, serviceFeeAmount = 0, tipAmount = 0, orderRef = null, tranRef = null, authCode = null } = payload;
+  const telrRef = { orderRef, tranRef, authCode };
   const { billAmt } = validateAmounts(billAmount);
   const feeAmt = r2(toNum(serviceFeeAmount, 0));
   const tipAmt = r2(toNum(tipAmount, 0));
@@ -365,6 +376,7 @@ export async function savePayFullPayment(payload) {
         insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
         insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
         insertReq.input("TipAmount", mssql.Money, tipAmt);
+        addTelrRefInputs(insertReq, telrRef);
         const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
         let includeTableIdForInsert = false;
         if (legTableId) {
@@ -434,6 +446,7 @@ export async function savePayFullPayment(payload) {
     req.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
     req.input("ServiceFeeAmount", mssql.Money, feeAmt);
     req.input("TipAmount", mssql.Money, tipAmt);
+    addTelrRefInputs(req, telrRef);
     paymentData.PlatformFeeAmount = PLATFORM_FEE_AMOUNT;
     paymentData.ServiceFeeAmount = feeAmt;
     paymentData.TipAmount = tipAmt;
@@ -455,9 +468,10 @@ export async function savePayFullPayment(payload) {
 }
 
 export async function saveEqualSplitPayment(payload) {
-  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId, sessionKey, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const { billAmount, paidAmount, numberOfPeople, kotMasterID, transId: providedTransId, tableId, sessionKey, serviceFeeAmount = 0, tipAmount = 0, orderRef: orderRefIn = null, tranRef: tranRefIn = null, authCode: authCodeIn = null } = payload;
   const feeAmt = r2(toNum(serviceFeeAmount, 0));
   const tipAmt = r2(toNum(tipAmount, 0));
+  let telrRef = { orderRef: orderRefIn, tranRef: tranRefIn, authCode: authCodeIn };
 
   // Validate amounts separately for equal split (paidAmount can be less than billAmount)
   const billAmt = toNum(billAmount);
@@ -474,7 +488,7 @@ export async function saveEqualSplitPayment(payload) {
   // claimed charge (share + fee - what Telr was actually asked to charge) against
   // the amount Telr actually authorized.
   if (sessionKey) {
-    const { getVerifiedAmount } = await import("./telrSessionStore.js");
+    const { getVerifiedAmount, getVerifiedTelrRef } = await import("./telrSessionStore.js");
     const verified = getVerifiedAmount(sessionKey);
     if (verified !== null) {
       const claimedCharge = r2(paidAmt + feeAmt + tipAmt);
@@ -485,8 +499,16 @@ export async function saveEqualSplitPayment(payload) {
       }
       console.log(`[PAYMENT:SVC] Amount verified OK: ${claimedCharge} === ${verified}`);
     }
+    const sessionRef = getVerifiedTelrRef(sessionKey);
+    if (sessionRef) {
+      telrRef = {
+        orderRef: telrRef.orderRef ?? sessionRef.orderRef,
+        tranRef: telrRef.tranRef ?? sessionRef.tranRef,
+        authCode: telrRef.authCode ?? sessionRef.authCode,
+      };
+    }
   }
-  
+
   // For equal split, paidAmount (per person) should not exceed the remaining balance
   // But we allow it to be less than billAmount since it's just one person's share
 
@@ -622,6 +644,7 @@ export async function saveEqualSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
       let includeTableIdForInsert = false;
       if (legTableId) {
@@ -661,6 +684,7 @@ export async function saveEqualSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
@@ -699,7 +723,8 @@ export async function saveEqualSplitPayment(payload) {
 }
 
 export async function saveCustomSplitPayment(payload) {
-  const { billAmount, paidAmount, kotMasterID, transId: providedTransId, tableId, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const { billAmount, paidAmount, kotMasterID, transId: providedTransId, tableId, serviceFeeAmount = 0, tipAmount = 0, orderRef = null, tranRef = null, authCode = null } = payload;
+  const telrRef = { orderRef, tranRef, authCode };
   const { billAmt, paidAmt } = validateAmounts(billAmount, paidAmount);
   const feeAmt = r2(toNum(serviceFeeAmount, 0));
   const tipAmt = r2(toNum(tipAmount, 0));
@@ -845,6 +870,7 @@ export async function saveCustomSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       const legTableId = tableId ? toInt(tableId) : toInt(agg.TableID, 0);
       let includeTableIdForInsert = false;
       if (legTableId) {
@@ -879,6 +905,7 @@ export async function saveCustomSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
@@ -915,7 +942,8 @@ export async function saveCustomSplitPayment(payload) {
 }
 
 export async function saveItemSplitPayment(payload) {
-  const { items, tableId, kotMasterID, totalBillAmount, serviceFeeAmount = 0, tipAmount = 0 } = payload;
+  const { items, tableId, kotMasterID, totalBillAmount, serviceFeeAmount = 0, tipAmount = 0, orderRef = null, tranRef = null, authCode = null } = payload;
+  const telrRef = { orderRef, tranRef, authCode };
   const feeAmt = r2(toNum(serviceFeeAmount, 0));
   const tipAmt = r2(toNum(tipAmount, 0));
 
@@ -1196,6 +1224,7 @@ export async function saveItemSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       const legTableId = tableId ? toInt(tableId) : toInt(itemAgg.TableID, 0);
       let includeTableIdForInsert = false;
       if (legTableId) {
@@ -1232,6 +1261,7 @@ export async function saveItemSplitPayment(payload) {
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
       insertReq.input("ServiceFeeAmount", mssql.Money, feeAmt);
       insertReq.input("TipAmount", mssql.Money, tipAmt);
+      addTelrRefInputs(insertReq, telrRef);
       if (tableId) {
         insertReq.input("TableID", mssql.BigInt, toInt(tableId));
       }
