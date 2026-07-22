@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   QrCode, LogOut, RefreshCw, Banknote, ChevronLeft, ChevronRight, X,
-  KeyRound, Search, ShieldAlert, Store, ArrowUp, ArrowDown, ArrowUpDown
+  KeyRound, Search, ShieldAlert, Store, ArrowUp, ArrowDown, ArrowUpDown,
+  FileDown, FileSpreadsheet
 } from "lucide-react";
 import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
+import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
 
 const CURRENCY = "AED";
 
@@ -378,6 +380,7 @@ export default function AdminDashboard() {
   const [detailTxn, setDetailTxn] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
   const [sort, setSort] = useState({ key: "id", dir: "desc" });
+  const [exporting, setExporting] = useState("");
 
   const [filters, setFilters] = useState({
     shopId: "",
@@ -429,6 +432,67 @@ export default function AdminDashboard() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const EXPORT_COLUMNS = useMemo(() => {
+    const cols = [
+      { header: "#", key: (r) => (r.failed ? "-" : r.paymentId) },
+      ...(isCompany ? [{ header: "Restaurant", key: "restaurantName" }] : []),
+      { header: "Order (KOT)", key: (r) => r.kotMasterId ?? "-" },
+      { header: "Table", key: (r) => (r.tableId != null ? `T${r.tableId}` : "-") },
+      { header: "Method", key: "methodName" },
+      { header: "Bill (AED)", key: (r) => fmt(r.billAmount), align: "right" },
+      { header: "Paid (AED)", key: (r) => fmt(r.paidAmount), align: "right" },
+      { header: "Balance (AED)", key: (r) => fmt(r.balanceAmount), align: "right" },
+      { header: "Restaurant payout (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
+      { header: "Payment", key: (r) => r.paidStatus },
+      { header: "Settlement", key: (r) => (r.failed ? "-" : r.payout?.status || "PENDING") },
+      { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" },
+      { header: "Date", key: (r) => fmtDateTime(r.createdAt) }
+    ];
+    return cols;
+  }, [isCompany]);
+
+  async function runExport(kind) {
+    setExporting(kind);
+    try {
+      const params = {};
+      if (filters.shopId) params.shopId = filters.shopId;
+      if (filters.status) params.status = filters.status;
+      if (filters.payoutStatus) params.payoutStatus = filters.payoutStatus;
+      if (filters.methodId) params.methodId = filters.methodId;
+      if (filters.search) params.search = filters.search;
+      if (filters.from) params.from = filters.from;
+      if (filters.to) params.to = filters.to;
+      if (filters.minAmount) params.minAmount = filters.minAmount;
+      if (filters.maxAmount) params.maxAmount = filters.maxAmount;
+      params.sort = sort.key;
+      params.dir = sort.dir;
+
+      const { data } = await api.get("/transactions/export", { params });
+      const rows = data.transactions || [];
+      const scope = isCompany ? "all-restaurants" : (user?.displayName || "restaurant");
+      const fileName = `payouts-${scope}-${new Date().toISOString().slice(0, 10)}`.replace(/\s+/g, "-");
+      if (kind === "pdf") {
+        exportPayoutsPdf({
+          title: "DeynoQR Payouts",
+          fromDate: filters.from, toDate: filters.to,
+          columns: EXPORT_COLUMNS, rows, fileName,
+          footerNote: data.truncated ? `Showing first ${rows.length} of ${data.total} matching records.` : undefined
+        });
+      } else {
+        exportPayoutsExcel({
+          title: "DeynoQR Payouts",
+          fromDate: filters.from, toDate: filters.to,
+          columns: EXPORT_COLUMNS, rows, fileName
+        });
+      }
+    } catch (err) {
+      console.error("Export failed:", err.message);
+      alert("Export failed. Please try again.");
+    } finally {
+      setExporting("");
+    }
+  }
 
   // Split payments (equal/custom/item) create one row per payer sharing the
   // same kotMasterId - without a marker these look like duplicate orders.
@@ -936,6 +1000,22 @@ export default function AdminDashboard() {
                 <Banknote className="w-3.5 h-3.5" /> Transfer all awaiting
               </button>
             )}
+            <button
+              onClick={() => runExport("pdf")}
+              disabled={!!exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 transition"
+              title="Export filtered transactions to PDF"
+            >
+              <FileDown className="w-3.5 h-3.5" /> {exporting === "pdf" ? "Exporting..." : "PDF"}
+            </button>
+            <button
+              onClick={() => runExport("excel")}
+              disabled={!!exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 transition"
+              title="Export filtered transactions to Excel"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" /> {exporting === "excel" ? "Exporting..." : "Excel"}
+            </button>
             <select
               value={`${sort.key}:${sort.dir}`}
               onChange={(e) => {

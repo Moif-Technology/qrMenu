@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Store, LogOut, KeyRound, RefreshCw, ReceiptText, ChevronDown, ArrowUpDown,
-  CalendarDays, CalendarClock, X
+  CalendarDays, CalendarClock, X, FileDown, FileSpreadsheet
 } from "lucide-react";
 import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
+import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
 
 const CURRENCY = "AED";
 
@@ -121,6 +122,56 @@ export default function RestaurantDashboard() {
   const [rangePreset, setRangePreset] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [exporting, setExporting] = useState("");
+
+  const exportParams = useCallback(() => {
+    const params = {};
+    if (payoutFilter) params.payoutStatus = payoutFilter;
+    if (range.fromDate) params.from = range.fromTime ? `${range.fromDate}T${range.fromTime}` : range.fromDate;
+    if (range.toDate) params.to = range.toTime ? `${range.toDate}T${range.toTime}` : range.toDate;
+    return params;
+  }, [payoutFilter, range]);
+
+  const EXPORT_COLUMNS = useMemo(() => [
+    { header: "Order", key: (r) => (r.kotMasterId != null ? `#${r.kotMasterId}` : "-") },
+    { header: "Table", key: (r) => (r.tableId != null ? `T${r.tableId}` : "-") },
+    { header: "Method", key: "methodName" },
+    { header: "Date", key: (r) => fmtDateTime(r.createdAt) },
+    { header: "Bill (AED)", key: (r) => fmt(r.billAmount), align: "right" },
+    { header: "Tip (AED)", key: (r) => fmt(r.tipAmount), align: "right" },
+    { header: "Platform fee (AED)", key: (r) => fmt(r.platformFeeAmount), align: "right" },
+    { header: "You receive (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
+    { header: "Status", key: (r) => (r.failed ? "Failed" : r.payout?.status === "TRANSFERRED" ? "Paid to you" : "Awaiting payout") },
+    { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" }
+  ], []);
+
+  async function runExport(kind) {
+    setExporting(kind);
+    try {
+      const { data } = await api.get("/transactions/export", { params: exportParams() });
+      const rows = data.transactions || [];
+      const fileName = `payouts-${user?.displayName || "restaurant"}-${toISODate(new Date())}`.replace(/\s+/g, "-");
+      if (kind === "pdf") {
+        exportPayoutsPdf({
+          title: `${user?.displayName || "Restaurant"} - Payouts`,
+          fromDate: range.fromDate, toDate: range.toDate,
+          columns: EXPORT_COLUMNS, rows, fileName,
+          footerNote: "Platform fee is deducted per transaction; tip stays with the restaurant."
+        });
+      } else {
+        exportPayoutsExcel({
+          title: `${user?.displayName || "Restaurant"} - Payouts`,
+          fromDate: range.fromDate, toDate: range.toDate,
+          columns: EXPORT_COLUMNS, rows, fileName
+        });
+      }
+    } catch (err) {
+      console.error("Export failed:", err.message);
+      alert("Export failed. Please try again.");
+    } finally {
+      setExporting("");
+    }
+  }
 
   const load = useCallback(async (pageToLoad, append) => {
     setLoading(true);
@@ -314,15 +365,35 @@ export default function RestaurantDashboard() {
               <CalendarDays className="w-4 h-4 text-zinc-400" />
               Date range
             </div>
-            {(range.fromDate || range.toDate) && (
+            <div className="flex items-center gap-1.5">
               <button
-                onClick={clearRange}
-                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50 transition"
+                onClick={() => runExport("pdf")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 border border-zinc-200 hover:bg-zinc-50 disabled:opacity-50 transition"
+                title="Export selected range to PDF"
               >
-                <X className="w-3.5 h-3.5" />
-                Clear
+                <FileDown className="w-3.5 h-3.5" />
+                {exporting === "pdf" ? "Exporting..." : "PDF"}
               </button>
-            )}
+              <button
+                onClick={() => runExport("excel")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 border border-zinc-200 hover:bg-zinc-50 disabled:opacity-50 transition"
+                title="Export selected range to Excel"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                {exporting === "excel" ? "Exporting..." : "Excel"}
+              </button>
+              {(range.fromDate || range.toDate) && (
+                <button
+                  onClick={clearRange}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex gap-2 overflow-x-auto mt-3 -mx-4 px-4 pb-0.5">

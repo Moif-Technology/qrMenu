@@ -50,17 +50,19 @@ function resolveShopScope(req) {
 }
 
 /**
- * GET /api/payout/transactions
- * Query params: shopId (company only), status (payment PaidStatus),
- * payoutStatus (PENDING|TRANSFERRED), from, to (ISO dates),
- * sort (id|bill|paid|date|restaurant), dir (asc|desc), page, pageSize.
+ * Builds and runs the unioned transactions query shared by the list and
+ * export endpoints. Pass paginate: false to fetch every matching row
+ * (capped at MAX_EXPORT_ROWS) instead of a page.
  */
-router.get("/", requireAuth, async (req, res) => {
-  try {
+const MAX_EXPORT_ROWS = 20000;
+
+async function queryTransactions(req, { paginate = true } = {}) {
     const shopId = resolveShopScope(req);
     const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+    const pageSize = paginate
+      ? Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
+      : MAX_EXPORT_ROWS;
 
     const conditions = [];
     const attemptConds = [];
@@ -141,7 +143,7 @@ router.get("/", requireAuth, async (req, res) => {
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const attemptWhere = attemptConds.length ? `WHERE ${attemptConds.join(" AND ")}` : "";
-    params.offset = { type: mssql.Int, value: (page - 1) * pageSize };
+    params.offset = { type: mssql.Int, value: paginate ? (page - 1) * pageSize : 0 };
     params.pageSize = { type: mssql.Int, value: pageSize };
 
     const rows = await query(
@@ -248,10 +250,37 @@ router.get("/", requireAuth, async (req, res) => {
       };
     });
 
+    return { page, pageSize, total, transactions };
+}
+
+/**
+ * GET /api/payout/transactions
+ * Query params: shopId (company only), status (payment PaidStatus),
+ * payoutStatus (PENDING|TRANSFERRED), from, to (ISO dates),
+ * sort (id|bill|paid|date|restaurant), dir (asc|desc), page, pageSize.
+ */
+router.get("/", requireAuth, async (req, res) => {
+  try {
+    const { page, pageSize, total, transactions } = await queryTransactions(req, { paginate: true });
     res.json({ ok: true, page, pageSize, total, transactions });
   } catch (err) {
     console.error("[PAYOUT:TXN] List error:", err.message);
     res.status(500).json({ ok: false, error: "Failed to load transactions" });
+  }
+});
+
+/**
+ * GET /api/payout/transactions/export
+ * Same filters as the list endpoint but returns every matching row (capped
+ * at MAX_EXPORT_ROWS) instead of a page, for PDF/Excel export.
+ */
+router.get("/export", requireAuth, async (req, res) => {
+  try {
+    const { total, transactions } = await queryTransactions(req, { paginate: false });
+    res.json({ ok: true, total, truncated: total > MAX_EXPORT_ROWS, transactions });
+  } catch (err) {
+    console.error("[PAYOUT:TXN] Export error:", err.message);
+    res.status(500).json({ ok: false, error: "Failed to load transactions for export" });
   }
 });
 
