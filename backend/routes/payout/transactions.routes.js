@@ -304,16 +304,20 @@ router.get("/summary", requireAuth, async (req, res) => {
       params.shopId = { type: mssql.BigInt, value: shopId };
     }
 
+    // Restaurant's actual share, net of our service fee cut and the flat
+    // platform fee - not the raw amount the customer paid via QR.
+    const netExpr = "(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount)";
+
     const totals = await query(
       `
       SELECT
         COUNT(*)                                                            AS txnCount,
         ISNULL(SUM(p.PaidAmount), 0)                                        AS totalCollected,
-        ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ps.Amount END), 0) AS totalTransferred,
+        ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ${netExpr} END), 0) AS totalTransferred,
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
-                        THEN p.PaidAmount END), 0)                          AS totalPendingPayout,
+                        THEN ${netExpr} END), 0)                            AS totalPendingPayout,
         ISNULL(SUM(p.PlatformFeeAmount), 0)                                 AS totalPlatformFees,
-        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount), 0) AS totalRestaurantPayoutDue
+        ISNULL(SUM(${netExpr}), 0)                                          AS totalRestaurantPayoutDue
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
       ${shopFilter}
@@ -330,9 +334,9 @@ router.get("/summary", requireAuth, async (req, res) => {
           ISNULL(rm.Name, CONCAT('Shop ', p.ShopID))                        AS restaurantName,
           COUNT(*)                                                          AS txnCount,
           ISNULL(SUM(p.PaidAmount), 0)                                      AS totalCollected,
-          ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ps.Amount END), 0) AS totalTransferred,
+          ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ${netExpr} END), 0) AS totalTransferred,
           ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
-                          THEN p.PaidAmount END), 0)                        AS totalOwed
+                          THEN ${netExpr} END), 0)                          AS totalOwed
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID

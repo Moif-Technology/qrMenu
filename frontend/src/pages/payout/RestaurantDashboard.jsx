@@ -260,9 +260,7 @@ export default function RestaurantDashboard() {
     setRangePreset("");
   }
 
-  const owed = summary
-    ? Math.max(0, Number(summary.totalCollected) - Number(summary.totalTransferred))
-    : 0;
+  const owed = summary ? Number(summary.totalPendingPayout) : 0;
 
   const nextPayout = useMemo(() => getNextPayoutDate(), []);
 
