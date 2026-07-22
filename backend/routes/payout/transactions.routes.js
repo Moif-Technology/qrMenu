@@ -162,7 +162,10 @@ router.get("/", requireAuth, async (req, res) => {
           ISNULL(p.ServiceFeeAmount, 0) AS ServiceFeeAmount,
           ISNULL(p.TipAmount, 0)        AS TipAmount,
           p.PlatformFeeAmount,
-          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.TipAmount,0) - p.PlatformFeeAmount) AS RestaurantPayoutAmount
+          -- PaidAmount is the REAL total charged per leg (bill-share + fee +
+          -- tip). Tip belongs to the restaurant (kept in), only DeynoQR's own
+          -- service fee and the flat platform fee come out.
+          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount) AS RestaurantPayoutAmount
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
@@ -276,7 +279,7 @@ router.get("/summary", requireAuth, async (req, res) => {
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
                         THEN p.PaidAmount END), 0)                          AS totalPendingPayout,
         ISNULL(SUM(p.PlatformFeeAmount), 0)                                 AS totalPlatformFees,
-        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.TipAmount,0) - p.PlatformFeeAmount), 0) AS totalRestaurantPayoutDue
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount), 0) AS totalRestaurantPayoutDue
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
       ${shopFilter}

@@ -273,15 +273,15 @@ function TxnDetailModal({ txn, onClose }) {
 
           <div className="py-3">
             <p className="text-xs font-medium text-zinc-400 mb-1.5">Amounts</p>
-            <DetailRow label="Bill amount" value={`${CURRENCY} ${fmt(txn.billAmount)}`} mono />
+            <DetailRow label="Bill amount (full bill)" value={`${CURRENCY} ${fmt(txn.billAmount)}`} mono />
+            <DetailRow label="Paid amount (charged to card, this leg)" value={`${CURRENCY} ${fmt(txn.paidAmount)}`} mono />
             {!txn.failed && Number(txn.serviceFeeAmount) > 0 && (
-              <DetailRow label="Service fee (customer paid)" value={`+ ${CURRENCY} ${fmt(txn.serviceFeeAmount)}`} mono />
+              <DetailRow label="  ⤷ includes service fee (kept by DeynoQR)" value={`${CURRENCY} ${fmt(txn.serviceFeeAmount)}`} mono />
             )}
             {!txn.failed && Number(txn.tipAmount) > 0 && (
-              <DetailRow label="Tip" value={`+ ${CURRENCY} ${fmt(txn.tipAmount)}`} mono />
+              <DetailRow label="  ⤷ includes tip" value={`${CURRENCY} ${fmt(txn.tipAmount)}`} mono />
             )}
-            <DetailRow label="Paid amount" value={`${CURRENCY} ${fmt(txn.paidAmount)}`} mono />
-            <DetailRow label="Balance" value={`${CURRENCY} ${fmt(txn.balanceAmount)}`} mono />
+            <DetailRow label="Balance (remaining on bill)" value={`${CURRENCY} ${fmt(txn.balanceAmount)}`} mono />
             {!txn.failed && (
               <>
                 <DetailRow label="Platform fee (0.50 flat)" value={`- ${CURRENCY} ${fmt(txn.platformFeeAmount)}`} mono />
