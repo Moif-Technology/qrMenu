@@ -55,12 +55,12 @@ function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
   const baseFields = [
     q("PaymentID"), q("ShopID"), q("TransID"), q("MethodID"),
     q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus"),
-    q("PlatformFeeAmount")
+    q("PlatformFeeAmount"), q("CreatedAt")
   ];
   const baseParams = [
     "@PaymentID", "@ShopID", "@TransID", "@MethodID",
     "@BillAmount", "@PaidAmount", "@BalanceAmount", "@PaidStatus",
-    "@PlatformFeeAmount"
+    "@PlatformFeeAmount", "GETDATE()"
   ];
 
   if (includeTableId) {

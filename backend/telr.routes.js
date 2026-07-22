@@ -398,8 +398,8 @@ async function recordFailedAttempt(status, sessionMeta, fallbackMeta, orderRef) 
     const finalStatus = status === "CANCEL" ? "CANCELLED" : "DECLINED";
 
     await queryPaymentDb(
-      `INSERT INTO dbo.PaymentAttempts (ShopID, TransID, TableID, Amount, Mode, Status, OrderRef)
-       VALUES (1, @transId, @tableId, @amount, @mode, @status, @orderRef)`,
+      `INSERT INTO dbo.PaymentAttempts (ShopID, TransID, TableID, Amount, Mode, Status, OrderRef, CreatedAt)
+       VALUES (1, @transId, @tableId, @amount, @mode, @status, @orderRef, GETDATE())`,
       {
         transId,
         tableId,
