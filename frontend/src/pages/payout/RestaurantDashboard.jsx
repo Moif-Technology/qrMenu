@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Store, LogOut, KeyRound, RefreshCw, ReceiptText, ChevronDown, ArrowUpDown,
-  CalendarDays, X
+  CalendarDays, CalendarClock, X
 } from "lucide-react";
 import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
@@ -19,6 +19,22 @@ const fmtDate = (d) => {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   });
 };
+
+// First payout run is Tue 4 Aug 2026; every payout after that lands on the
+// following Tuesday, weekly.
+const PAYOUT_ANCHOR = new Date(Date.UTC(2026, 7, 4));
+
+function getNextPayoutDate() {
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  if (today <= PAYOUT_ANCHOR) return PAYOUT_ANCHOR;
+  const diffDays = Math.round((today - PAYOUT_ANCHOR) / 86400000);
+  const weeksPassed = Math.ceil(diffDays / 7);
+  return new Date(PAYOUT_ANCHOR.getTime() + weeksPassed * 7 * 86400000);
+}
+
+const fmtPayoutDate = (d) =>
+  d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
 
 function PayoutBadge({ status }) {
   const transferred = status === "TRANSFERRED";
@@ -194,6 +210,8 @@ export default function RestaurantDashboard() {
     ? Math.max(0, Number(summary.totalCollected) - Number(summary.totalTransferred))
     : 0;
 
+  const nextPayout = useMemo(() => getNextPayoutDate(), []);
+
   return (
     <div className="min-h-dvh">
       {/* Header */}
@@ -257,6 +275,16 @@ export default function RestaurantDashboard() {
               </p>
             </div>
           </div>
+          <div className="mt-4 flex items-center gap-2.5 rounded-xl bg-ink-900 px-3.5 py-3">
+            <CalendarClock className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm text-white font-medium">
+                Next payout: {fmtPayoutDate(nextPayout)}
+              </p>
+              <p className="text-[11px] text-zinc-500">Payouts run every Tuesday</p>
+            </div>
+          </div>
+
           <p className="text-zinc-500 text-xs mt-4">
             Payments are collected by DeynoQR and settled to your bank within about 2 working days.
           </p>
