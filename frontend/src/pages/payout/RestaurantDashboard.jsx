@@ -309,9 +309,9 @@ export default function RestaurantDashboard() {
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         {/* Earnings: the one dark anchor on the page */}
         <section className="rounded-2xl bg-ink-950 text-white p-5 sm:p-6 shadow-sm">
-          <p className="text-zinc-400 text-sm">Collected through QR payments</p>
+          <p className="text-zinc-400 text-sm">Your earnings through QR payments</p>
           <p className="num text-3xl sm:text-4xl font-semibold tracking-tight mt-1.5">
-            {CURRENCY} {fmt(summary?.totalCollected)}
+            {CURRENCY} {fmt(summary?.totalRestaurantPayoutDue)}
           </p>
           <div className="grid grid-cols-2 gap-px mt-6 rounded-xl overflow-hidden bg-ink-700">
             <div className="bg-ink-900 px-4 py-3">
