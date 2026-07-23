@@ -415,6 +415,84 @@ async function recordFailedAttempt(status, sessionMeta, fallbackMeta, orderRef) 
   }
 }
 
+/**
+ * Settle a split-mode payment (equal / custom / item) directly from the data
+ * captured in the Telr session at /api/telr/create time - NOT from anything
+ * the frontend sends back. This is what makes settlement independent of the
+ * browser surviving the cross-origin Telr redirect: sessionStorage on the
+ * client can be lost (mobile in-app browsers, closed tabs, etc.), but the
+ * session captured here server-side cannot.
+ *
+ * Used by both the AUTH redirect handler (inline, immediate) and the Telr
+ * webhook (safety net) so the two never diverge in behaviour.
+ *
+ * Returns { ok: true, result } on success or { ok: false, error } on failure.
+ * Never throws.
+ */
+async function settleSplitFromSession(session, telrRef) {
+  const mode = session?.mode || "pay-full";
+  const legPaidAmount = session?.billAmount ?? session?.amount;
+  const feeAmt = session?.serviceFeeAmount ?? 0;
+  const tipAmt = session?.tipAmount ?? 0;
+
+  try {
+    if (mode === "split-equal") {
+      const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+      if (!(legPaidAmount && fullBillAmount && session.numberOfPeople && (session.tableId || session.kotMasterID))) {
+        return { ok: false, error: "Missing data for equal split settlement" };
+      }
+      const result = await saveEqualSplitPayment({
+        billAmount: fullBillAmount,
+        paidAmount: legPaidAmount,
+        numberOfPeople: session.numberOfPeople,
+        kotMasterID: session.kotMasterID,
+        tableId: session.tableId,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    if (mode === "split-custom") {
+      const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+      if (!(legPaidAmount && (session.tableId || session.kotMasterID))) {
+        return { ok: false, error: "Missing data for custom split settlement" };
+      }
+      const result = await saveCustomSplitPayment({
+        billAmount: fullBillAmount,
+        paidAmount: legPaidAmount,
+        kotMasterID: session.kotMasterID,
+        tableId: session.tableId,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    if (mode === "split-items") {
+      if (!(Array.isArray(session.items) && session.items.length > 0 && session.kotMasterID)) {
+        return { ok: false, error: "Missing items for item split settlement" };
+      }
+      const result = await saveItemSplitPayment({
+        items: session.items,
+        tableId: session.tableId,
+        kotMasterID: session.kotMasterID,
+        totalBillAmount: session.originalBillAmount ?? legPaidAmount,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    return { ok: false, error: `Unknown split mode: ${mode}` };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
 async function handleReturn(req, res, status) {
   res.set("Content-Type", "text/html; charset=utf-8");
 
@@ -501,28 +579,61 @@ async function handleReturn(req, res, status) {
             console.warn("[Telr] Missing data to persist payment after Telr AUTH", { metaForSave });
           }
         } else {
-          // Split payment — frontend will call the correct split API after redirect.
-          // Store the Telr-verified amount so the split endpoint can validate the
-          // paidAmount the frontend claims (prevents tampered payloads).
+          // Split payment (equal / custom / item). Store the Telr-verified amount
+          // so the split endpoints can validate any paidAmount the frontend later
+          // claims (prevents tampered payloads).
           const telrVerifiedAmount = Number(telrData?.order?.amount ?? telrData?.order?.total ?? 0);
+          const splitTelrRef = {
+            orderRef: effectiveOrderRef,
+            tranRef: telrData?.transaction?.ref ?? null,
+            authCode: telrData?.transaction?.auth ?? null,
+          };
           if (sessionMeta) {
             sessionMeta.verifiedAmount = telrVerifiedAmount;
-            sessionMeta.processed = true;
           }
-          // Re-store with verifiedAmount so the split endpoints can look it up
-          // (the session was deleted above but we need it for post-redirect validation)
+
+          // CRITICAL: settle the split payment right here, server-side, using the
+          // items/amounts captured at session-creation time - do NOT wait for the
+          // frontend's follow-up call. That call depends on sessionStorage surviving
+          // a cross-origin redirect, which mobile browsers/in-app webviews can and
+          // do drop - previously that meant Telr charged the card but nothing was
+          // ever written to dbo.Payment / dbo.PaymentItems. Settling inline here
+          // makes the DB write unconditional on Telr's own redirect actually landing,
+          // which is the one thing we can rely on.
+          if (sessionMeta && !sessionMeta.processed) {
+            // Optimistic lock BEFORE awaiting the DB write, so a near-simultaneous
+            // webhook call (Telr calls it independently, timing not guaranteed)
+            // can't also settle the same charge - mirrors the guard the webhook
+            // handler already uses for itself below.
+            sessionMeta.processed = true;
+            const settle = await settleSplitFromSession(sessionMeta, splitTelrRef);
+            if (settle.ok) {
+              paymentResult = settle.result;
+              console.log("[Telr] Split payment settled inline on redirect. mode:", paymentMode, "orderRef:", effectiveOrderRef);
+            } else {
+              // Undo the lock - nothing was actually saved, so the webhook (if
+              // configured) should still be allowed to settle this later.
+              sessionMeta.processed = false;
+              console.error("[Telr] Inline split settlement failed - webhook will retry if configured. Reason:", settle.error);
+              message = "Payment authorised, but we could not update the order automatically. Please check with staff.";
+            }
+          }
+
+          // Re-store with verifiedAmount/processed so a reload of this same return
+          // URL, or a later webhook call, sees the up-to-date state (the session
+          // was deleted above but we need it to survive for post-redirect lookups).
           if (sessionKey || effectiveOrderRef) {
             storeSession(effectiveOrderRef, {
               ...(sessionMeta || {}),
               sessionKey: sessionKey || sessionMeta?.sessionKey,
               verifiedAmount: telrVerifiedAmount,
               verifiedOrderRef: effectiveOrderRef,
-              verifiedTranRef: telrData?.transaction?.ref ?? null,
-              verifiedAuthCode: telrData?.transaction?.auth ?? null,
+              verifiedTranRef: splitTelrRef.tranRef,
+              verifiedAuthCode: splitTelrRef.authCode,
               verifiedAt: Date.now(),
+              processed: sessionMeta?.processed ?? false,
             });
           }
-          console.log("[Telr] Split payment mode detected. Verified amount:", telrVerifiedAmount, "| Frontend will handle:", paymentMode);
         }
       }
     } catch (err) {
@@ -537,6 +648,8 @@ async function handleReturn(req, res, status) {
     await recordFailedAttempt("DECLINED", sessionMeta, fallbackMeta, effectiveOrderRef);
   }
 
+  const isSplitMode = !!(sessionMeta?.mode && sessionMeta.mode !== "pay-full");
+
   redirectUrl = buildRedirectUrl(
     finalStatus,
     effectiveOrderRef,
@@ -544,6 +657,13 @@ async function handleReturn(req, res, status) {
     {
       paymentId: paymentResult?.paymentId || paymentResult?.PaymentID,
       mode: sessionMeta?.mode || req.query?.mode || null,
+      // Tells the frontend the DB write already happened here inline - it should
+      // NOT re-POST the split-save endpoint itself (that would either double-count
+      // the payment or error out on "already paid" items). Only set for split
+      // modes where we actually attempted settlement.
+      settled: isSplitMode ? (sessionMeta?.processed ? "1" : "0") : undefined,
+      balanceAmount: paymentResult?.balanceAmount ?? paymentResult?.BalanceAmount,
+      paidStatus: paymentResult?.paidStatus ?? paymentResult?.PaidStatus,
     },
     fallbackMeta,
   );
@@ -696,65 +816,17 @@ router.post("/api/telr/webhook", async (req, res) => {
         console.warn("[Telr:Webhook] Missing amount/tableId/kotMasterID — cannot settle.", metaForSave);
       }
     } else {
-      // Split payment — the redirect did not process it (browser closed before the
-      // frontend's follow-up save call fired). Complete it here using the data
-      // captured at session creation, same as pay-full above. session.billAmount
-      // holds THIS leg's base share/subtotal (see /telr/create's effectiveBillAmount);
-      // session.originalBillAmount holds the full bill total for equal/item split.
-      const legPaidAmount = session.billAmount ?? session.amount;
-      const feeAmt = session.serviceFeeAmount ?? 0;
-      const tipAmt = session.tipAmount ?? 0;
-
-      if (mode === "split-equal") {
-        const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
-        if (legPaidAmount && fullBillAmount && session.numberOfPeople && (session.tableId || session.kotMasterID)) {
-          await saveEqualSplitPayment({
-            billAmount: fullBillAmount,
-            paidAmount: legPaidAmount,
-            numberOfPeople: session.numberOfPeople,
-            kotMasterID: session.kotMasterID,
-            tableId: session.tableId,
-            serviceFeeAmount: feeAmt,
-            tipAmount: tipAmt,
-            ...webhookTelrRef,
-          });
-          console.log("[Telr:Webhook] Equal split leg settled via webhook. orderRef:", orderRef);
-        } else {
-          console.warn("[Telr:Webhook] Missing data for equal split — cannot settle.", { legPaidAmount, fullBillAmount, session });
-        }
-      } else if (mode === "split-custom") {
-        const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
-        if (legPaidAmount && (session.tableId || session.kotMasterID)) {
-          await saveCustomSplitPayment({
-            billAmount: fullBillAmount,
-            paidAmount: legPaidAmount,
-            kotMasterID: session.kotMasterID,
-            tableId: session.tableId,
-            serviceFeeAmount: feeAmt,
-            tipAmount: tipAmt,
-            ...webhookTelrRef,
-          });
-          console.log("[Telr:Webhook] Custom split leg settled via webhook. orderRef:", orderRef);
-        } else {
-          console.warn("[Telr:Webhook] Missing data for custom split — cannot settle.", { legPaidAmount, session });
-        }
-      } else if (mode === "split-items") {
-        if (Array.isArray(session.items) && session.items.length > 0 && session.kotMasterID) {
-          await saveItemSplitPayment({
-            items: session.items,
-            tableId: session.tableId,
-            kotMasterID: session.kotMasterID,
-            totalBillAmount: session.originalBillAmount ?? legPaidAmount,
-            serviceFeeAmount: feeAmt,
-            tipAmount: tipAmt,
-            ...webhookTelrRef,
-          });
-          console.log("[Telr:Webhook] Item split leg settled via webhook. orderRef:", orderRef);
-        } else {
-          console.warn("[Telr:Webhook] Missing items for item split — cannot settle.", { session });
-        }
+      // Split payment — session.processed is already known false here (checked
+      // above), meaning the redirect handler either hasn't run yet or its inline
+      // settlement attempt failed (browser closed, sessionStorage lost, save
+      // threw). Same settlement logic as the redirect handler uses, via the
+      // shared helper.
+      const settle = await settleSplitFromSession(session, webhookTelrRef);
+      if (settle.ok) {
+        session.processed = true;
+        console.log(`[Telr:Webhook] ${mode} settled via webhook. orderRef:`, orderRef);
       } else {
-        console.warn("[Telr:Webhook] Unknown mode, cannot settle:", mode);
+        console.warn(`[Telr:Webhook] Could not settle ${mode} — `, settle.error);
       }
     }
   } catch (err) {

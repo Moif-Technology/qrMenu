@@ -771,6 +771,12 @@ export default function TableSummaryPremium() {
       current.searchParams.delete("tableId");
       current.searchParams.delete("kotMasterID");
       current.searchParams.delete("sessionKey");
+      current.searchParams.delete("mode");
+      current.searchParams.delete("settled");
+      current.searchParams.delete("balanceAmount");
+      current.searchParams.delete("paidStatus");
+      current.searchParams.delete("amount");
+      current.searchParams.delete("cartId");
       window.history.replaceState({}, "", current.toString());
     };
 
@@ -866,9 +872,74 @@ export default function TableSummaryPremium() {
               }
             }
 
+            // The backend's /telr/return/auth handler now settles split payments
+            // itself, inline, using the item/amount data it captured server-side
+            // at session-creation time (see telr.routes.js settleSplitFromSession).
+            // That happens BEFORE this redirect ever reaches the browser, so it
+            // does not depend on sessionStorage surviving the cross-origin trip
+            // to Telr and back - which mobile/in-app browsers can and do drop,
+            // previously causing a charge that Telr recorded but that never made
+            // it into dbo.Payment/dbo.PaymentItems.
+            //
+            // settled === "1" -> backend already wrote the row. Do NOT call the
+            // split-save endpoint again here: it would either throw ("all items
+            // already paid") or, if a save function is ever made to no-op instead
+            // of throwing, silently double-count the leg.
+            const settledParam = searchParams.get("settled");
+            const balanceAmountParam = searchParams.get("balanceAmount");
+            const paidStatusParam = searchParams.get("paidStatus");
+
+            if (actualMode && actualMode !== "pay-full" && settledParam === "1") {
+              const balance = Number(balanceAmountParam) || 0;
+              const paidStatus = paidStatusParam || (balance <= 0 ? "PAID" : "PENDING");
+              const paidValue = Number.isFinite(amountPaid) ? amountPaid : undefined;
+
+              if (balance <= 0 && paidStatus === "PAID") {
+                if (loadOrderDataRef.current) await loadOrderDataRef.current();
+                if (actualMode === "split-items" && kotMasterID) {
+                  try {
+                    setPaidKotChildIds(await getPaidItems(kotMasterID));
+                  } catch (err) {
+                    logError("Error refreshing paid items after inline settlement:", err);
+                  }
+                }
+                handlePaymentComplete({
+                  paymentId: paymentIdValue,
+                  amountPaid: paidValue,
+                  status: paidStatus,
+                });
+              } else {
+                showToast(`Paid ${fmt(paidValue || 0)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
+                setRemainingBalance(balance);
+                if (loadOrderDataRef.current) await loadOrderDataRef.current();
+                if (actualMode === "split-items" && kotMasterID) {
+                  try {
+                    setPaidKotChildIds(await getPaidItems(kotMasterID));
+                  } catch (err) {
+                    logError("Error refreshing paid items after inline settlement:", err);
+                  }
+                }
+              }
+              return;
+            }
+
+            // Fallback path: either a non-split payment, or the inline backend
+            // settlement above did not run/succeed (settledParam is "0" or
+            // absent) - try the frontend-driven save using whatever sessionStorage
+            // still has. This is the pre-existing behaviour, kept as a second
+            // safety net (the webhook is the third and last one).
             // CRITICAL: If we have a split payment, process it as split
             // NEVER create a Pay Full payment if splitPayload exists
             if (actualMode && actualMode !== "pay-full") {
+              if (!splitPayload) {
+                // Backend inline settlement didn't happen (or failed) AND we have
+                // no local record of what was selected - we genuinely cannot
+                // complete this leg from the browser. Do not silently pretend
+                // success; the webhook remains the last resort if configured.
+                logError("[FRONTEND] Split payment lost both inline settlement and sessionStorage payload — cannot complete client-side.", { actualMode, settledParam });
+                showToast("Payment authorised, but we could not confirm it against your order. Please check with staff.", "warning", "Please Check With Staff");
+                return;
+              }
               // Process split payment - this will set isProcessingTelrSplitRef to prevent redirects
               const splitResult = await completeSplitPaymentFromTelr({
                 mode: actualMode,

@@ -18,7 +18,16 @@ function prune() {
 
 export function storeSession(orderRef, payload) {
   if (!orderRef && !payload?.sessionKey) return;
-  const entry = { ...payload, createdAt: Date.now(), processed: false, orderRef };
+  // Preserve an explicitly-passed `processed`/`webhookProcessed` flag (used when
+  // re-storing a session after inline settlement) instead of always resetting it -
+  // otherwise a caller marking a session "processed" right before re-storing it
+  // would have that flag silently wiped out here.
+  const entry = {
+    ...payload,
+    createdAt: Date.now(),
+    processed: payload?.processed ?? false,
+    orderRef,
+  };
   if (orderRef)            byOrderRef.set(orderRef, entry);
   if (payload?.sessionKey) bySessionKey.set(payload.sessionKey, entry);
   prune();

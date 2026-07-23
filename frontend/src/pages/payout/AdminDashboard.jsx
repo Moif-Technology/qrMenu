@@ -5,9 +5,77 @@ import {
   KeyRound, Search, ShieldAlert, Store, ArrowUp, ArrowDown, ArrowUpDown,
   FileDown, FileSpreadsheet
 } from "lucide-react";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
 import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
+import Toast from "../../component/Toast.jsx";
 import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
+
+function nextTuesdayOnOrAfter(from) {
+  const d = new Date(from);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + ((2 - d.getDay() + 7) % 7));
+  return d;
+}
+
+function toISODate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function ScheduleDateModal({ count, onConfirm, onClose }) {
+  const [date, setDate] = useState(() => nextTuesdayOnOrAfter(new Date()));
+  const [saving, setSaving] = useState(false);
+
+  async function confirm() {
+    setSaving(true);
+    try {
+      await onConfirm(toISODate(date));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-950/40 backdrop-blur-sm px-4">
+      <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-zinc-900">Schedule for Tuesday</h3>
+          <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-sm text-zinc-500">
+          Payouts run weekly on Tuesdays. Pick which Tuesday {count > 1 ? `these ${count} payments` : "this payment"} should go out.
+        </p>
+        <DatePicker
+          selected={date}
+          onChange={setDate}
+          filterDate={(d) => d.getDay() === 2}
+          minDate={new Date()}
+          inline
+        />
+        <div className="flex gap-2 justify-end pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm rounded-xl border border-zinc-200 text-zinc-600 hover:bg-zinc-50 transition"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={saving}
+            className="px-4 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-60 text-white font-semibold transition"
+          >
+            {saving ? "Saving..." : "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const CURRENCY = "AED";
 
@@ -25,18 +93,33 @@ const fmtDate = (d) => {
   });
 };
 
+const PAYOUT_BADGE = {
+  TRANSFERRED: { label: "Transferred", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  SCHEDULED: { label: "Scheduled", cls: "bg-violet-50 text-violet-700 border-violet-200" },
+  PROCESSING: { label: "Processing", cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+  PENDING: { label: "Pending", cls: "bg-amber-50 text-amber-700 border-amber-200" }
+};
+
 function PayoutBadge({ status }) {
-  const transferred = status === "TRANSFERRED";
+  const b = PAYOUT_BADGE[status] || PAYOUT_BADGE.PENDING;
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${
-        transferred
-          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-          : "bg-amber-50 text-amber-700 border-amber-200"
-      }`}
-    >
-      {transferred ? "Transferred" : "Awaiting"}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${b.cls}`}>
+      {b.label}
     </span>
+  );
+}
+
+function BatchBadge({ code, onClick }) {
+  if (!code) return <span className="text-xs text-zinc-300">-</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100 transition"
+      title="Filter transactions to this batch"
+    >
+      {code}
+    </button>
   );
 }
 
@@ -47,7 +130,7 @@ function PaidBadge({ status }) {
       : status === "FAILED"
         ? "bg-red-50 text-red-700 border-red-200"
         : "bg-zinc-100 text-zinc-600 border-zinc-200";
-  const label = status === "PAID" ? "Paid" : status === "FAILED" ? "Failed" : "Pending";
+  const label = status === "PAID" ? "Bill settled" : status === "FAILED" ? "Failed" : "Bill pending";
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${cls}`}>
       {label}
@@ -67,7 +150,7 @@ function Stat({ label, value, tone = "default", sub }) {
   );
 }
 
-function TransferModal({ txns, scope, onClose, onDone }) {
+function TransferModal({ txns, scope, onClose, onDone, showToast }) {
   // Two modes: explicit list of transactions (txns), or "everything awaiting
   // that matches the current filters" (scope) handled server-side.
   const isAll = !txns;
@@ -103,7 +186,7 @@ function TransferModal({ txns, scope, onClose, onDone }) {
           transferDate,
           notes
         });
-        alert(`${data.transferredCount} payments marked transferred under ${data.transferRef}.`);
+        showToast(`${data.transferredCount} payments marked transferred under ${data.transferRef}.`, "success");
       } else {
         const { data } = await api.post("/payouts/bulk-transfer", {
           paymentIds: txns.map((t) => t.paymentId),
@@ -112,7 +195,10 @@ function TransferModal({ txns, scope, onClose, onDone }) {
           notes
         });
         if (data.skipped?.length) {
-          alert(`${data.transferredCount} transferred, ${data.skipped.length} skipped (already transferred or not found).`);
+          const reasons = [...new Set(data.skipped.map((s) => s.reason))].join(", ");
+          showToast(`${data.transferredCount} transferred, ${data.skipped.length} skipped (${reasons}).`, "warning");
+        } else {
+          showToast(`${data.transferredCount} payment${data.transferredCount === 1 ? "" : "s"} transferred.`, "success");
         }
       }
       onDone();
@@ -314,6 +400,12 @@ function TxnDetailModal({ txn, onClose }) {
                 value={txn.payout?.amount != null ? `${CURRENCY} ${fmt(txn.payout.amount)}` : "-"}
                 mono
               />
+              {payoutStatus === "SCHEDULED" && txn.payout?.scheduledDate && (
+                <DetailRow
+                  label="Scheduled for"
+                  value={new Date(txn.payout.scheduledDate).toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}
+                />
+              )}
               <DetailRow label="Transfer ref" value={txn.payout?.transferRef} mono />
               <DetailRow
                 label="Transfer date"
@@ -323,6 +415,148 @@ function TxnDetailModal({ txn, onClose }) {
               <DetailRow label="Notes" value={txn.payout?.notes} />
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer }) {
+  const [loading, setLoading] = useState(true);
+  const [txns, setTxns] = useState([]);
+  const [acting, setActing] = useState(false);
+
+  const fetchTxns = useCallback(() => {
+    setLoading(true);
+    return api.get("/transactions", { params: { batch: batchNo, pageSize: 500 } })
+      .then(({ data }) => setTxns(data.transactions || []))
+      .catch(() => setTxns([]))
+      .finally(() => setLoading(false));
+  }, [batchNo]);
+
+  useEffect(() => {
+    fetchTxns();
+  }, [fetchTxns]);
+
+  const total = txns.reduce((s, t) => s + Number(t.paidAmount || 0), 0);
+  const activeIds = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED").map((t) => t.paymentId);
+
+  function markBatch(status) {
+    if (!activeIds.length) return;
+    setActing(true);
+    requestStatusChange(status, activeIds, {
+      after: async () => { await fetchTxns(); setActing(false); }
+    });
+    if (status === "SCHEDULED") setActing(false); // the date modal takes over from here
+  }
+
+  function transferBatch() {
+    const activeTxns = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED");
+    if (!activeTxns.length) return;
+    onTransfer(activeTxns.map((t) => ({ paymentId: t.paymentId, paidAmount: t.paidAmount })));
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-zinc-950/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-x-0 bottom-0 flex justify-center">
+        <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-t-3xl bg-white border-t border-zinc-200 shadow-2xl">
+          <div className="pt-3 shrink-0">
+            <div className="mx-auto h-1.5 w-12 rounded-full bg-zinc-200" />
+          </div>
+          <div className="px-5 pt-3 pb-3.5 border-b border-zinc-100 flex items-start justify-between shrink-0">
+            <div>
+              <h3 className="font-semibold text-zinc-900">Batch B-{batchNo}</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {loading ? "Loading..." : `${txns.length} transaction${txns.length === 1 ? "" : "s"} · ${CURRENCY} ${fmt(total)}`}
+              </p>
+            </div>
+            <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {activeIds.length > 0 && (
+            <div className="px-5 py-3 border-b border-zinc-100 flex flex-wrap gap-2 shrink-0">
+              <button
+                onClick={() => markBatch("PROCESSING")}
+                disabled={acting}
+                className="px-3.5 py-1.5 text-sm rounded-xl bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-200 active:scale-[0.98] disabled:opacity-50 transition"
+              >
+                Mark processing
+              </button>
+              <button
+                onClick={() => markBatch("SCHEDULED")}
+                disabled={acting}
+                className="px-3.5 py-1.5 text-sm rounded-xl bg-violet-100 text-violet-700 font-semibold hover:bg-violet-200 active:scale-[0.98] disabled:opacity-50 transition"
+              >
+                Mark scheduled
+              </button>
+              <button
+                onClick={transferBatch}
+                disabled={acting}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-xl bg-emerald-500 text-ink-950 font-semibold hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-50 transition"
+              >
+                <Banknote className="w-4 h-4" /> Transfer batch
+              </button>
+            </div>
+          )}
+
+          <div className="overflow-y-auto flex-1 divide-y divide-zinc-100">
+            {loading ? (
+              <div className="px-5 py-10 text-center text-zinc-400 text-sm">Loading...</div>
+            ) : txns.length === 0 ? (
+              <div className="px-5 py-10 text-center text-zinc-400 text-sm">No transactions found</div>
+            ) : (
+              txns.map((t) => (
+                <div key={t.paymentId} className="px-5 py-3.5 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-zinc-800 truncate">
+                        {t.restaurantName} <span className="num text-zinc-400 font-normal">#{t.paymentId}</span>
+                      </p>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        {t.kotMasterId != null && `KOT ${t.kotMasterId}`}
+                        {t.tableId != null && ` · T${t.tableId}`}
+                        {t.methodName && ` · ${t.methodName}`}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="num text-sm font-semibold text-zinc-900">{fmt(t.paidAmount)}</p>
+                      <p className="num text-xs text-zinc-400">of {fmt(t.billAmount)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <PaidBadge status={t.paidStatus} />
+                    <PayoutBadge status={t.payout?.status || "PENDING"} />
+                    <span className="text-xs text-zinc-400 ml-auto">{fmtDate(t.createdAt)}</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-zinc-500">
+                    <span>Balance <span className="num text-zinc-700">{fmt(t.balanceAmount)}</span></span>
+                    <span className="text-right">Restaurant payout <span className="num text-zinc-700">{fmt(t.restaurantPayoutAmount)}</span></span>
+                    {t.payout?.status === "SCHEDULED" && t.payout?.scheduledDate && (
+                      <span className="col-span-2">
+                        Scheduled for <span className="num text-zinc-700">
+                          {new Date(t.payout.scheduledDate).toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" })}
+                        </span>
+                      </span>
+                    )}
+                    {t.payout?.transferRef && (
+                      <span className="col-span-2">
+                        Ref <span className="num text-zinc-700">{t.payout.transferRef}</span>
+                        {t.payout.transferDate &&
+                          ` · ${new Date(t.payout.transferDate).toLocaleDateString("en-AE", { timeZone: "UTC" })}`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="h-3 shrink-0" />
         </div>
       </div>
     </div>
@@ -384,6 +618,15 @@ export default function AdminDashboard() {
   const [selected, setSelected] = useState(() => new Set());
   const [sort, setSort] = useState({ key: "id", dir: "desc" });
   const [exporting, setExporting] = useState("");
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [view, setView] = useState("transactions");
+  const [batches, setBatches] = useState([]);
+  const [batchDetail, setBatchDetail] = useState(null);
+  const [scheduling, setScheduling] = useState(null);
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((message, variant = "info", title = null) => {
+    setToast({ message, variant, title });
+  }, []);
 
   const [filters, setFilters] = useState({
     shopId: "",
@@ -394,7 +637,8 @@ export default function AdminDashboard() {
     from: "",
     to: "",
     minAmount: "",
-    maxAmount: ""
+    maxAmount: "",
+    batch: ""
   });
   const [searchDraft, setSearchDraft] = useState("");
   const [amountDraft, setAmountDraft] = useState({ min: "", max: "" });
@@ -414,6 +658,7 @@ export default function AdminDashboard() {
       if (filters.to) params.to = filters.to;
       if (filters.minAmount) params.minAmount = filters.minAmount;
       if (filters.maxAmount) params.maxAmount = filters.maxAmount;
+      if (filters.batch) params.batch = filters.batch;
       params.sort = sort.key;
       params.dir = sort.dir;
 
@@ -447,7 +692,7 @@ export default function AdminDashboard() {
       { header: "Paid (AED)", key: (r) => fmt(r.paidAmount), align: "right" },
       { header: "Balance (AED)", key: (r) => fmt(r.balanceAmount), align: "right" },
       { header: "Restaurant payout (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
-      { header: "Payment", key: (r) => r.paidStatus },
+      { header: "Payment", key: (r) => (r.paidStatus === "PAID" ? "Bill settled" : r.paidStatus === "FAILED" ? "Failed" : "Bill pending") },
       { header: "Settlement", key: (r) => (r.failed ? "-" : r.payout?.status || "PENDING") },
       { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" },
       { header: "Date", key: (r) => fmtDateTime(r.createdAt) }
@@ -468,6 +713,7 @@ export default function AdminDashboard() {
       if (filters.to) params.to = filters.to;
       if (filters.minAmount) params.minAmount = filters.minAmount;
       if (filters.maxAmount) params.maxAmount = filters.maxAmount;
+      if (filters.batch) params.batch = filters.batch;
       params.sort = sort.key;
       params.dir = sort.dir;
 
@@ -560,6 +806,20 @@ export default function AdminDashboard() {
       .catch(() => {});
   }, [isCompany]);
 
+  const loadBatches = useCallback(async () => {
+    if (!isCompany) return;
+    try {
+      const { data } = await api.get("/payouts/batches");
+      setBatches(data.batches || []);
+    } catch (err) {
+      console.error("Load batches failed:", err.message);
+    }
+  }, [isCompany]);
+
+  useEffect(() => {
+    loadBatches();
+  }, [loadBatches]);
+
   async function saveServiceFee(e) {
     e.preventDefault();
     const ratePercent = Number(serviceFeeDraft);
@@ -593,6 +853,38 @@ export default function AdminDashboard() {
     } finally {
       setMethodBusy(null);
     }
+  }
+
+  async function setBulkStatus(status, ids = selectedTxns.map((t) => t.paymentId), scheduledDate) {
+    setStatusSaving(true);
+    try {
+      const body = { paymentIds: ids, status };
+      if (scheduledDate) body.scheduledDate = scheduledDate;
+      const { data } = await api.post("/payouts/bulk-status", body);
+      if (data.skipped?.length) {
+        const reasons = [...new Set(data.skipped.map((s) => s.reason))].join(", ");
+        showToast(`${data.updatedCount} updated, ${data.skipped.length} skipped (${reasons}).`, "warning");
+      } else {
+        showToast(`${data.updatedCount} payment${data.updatedCount === 1 ? "" : "s"} moved to ${status.charAt(0) + status.slice(1).toLowerCase()}.`, "success");
+      }
+      setSelected(new Set());
+      load();
+      loadBatches();
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to update status", "error");
+    } finally {
+      setStatusSaving(false);
+    }
+  }
+
+  // Scheduling always needs a Tuesday date first - route through the modal
+  // instead of calling the API directly. Other statuses go straight through.
+  function requestStatusChange(status, ids, opts = {}) {
+    if (status === "SCHEDULED") {
+      setScheduling({ ids, after: opts.after });
+      return;
+    }
+    setBulkStatus(status, ids).then(() => opts.after?.());
   }
 
   function logout() {
@@ -638,7 +930,8 @@ export default function AdminDashboard() {
 
   const hasFilters =
     filters.shopId || filters.status || filters.payoutStatus || filters.methodId ||
-    filters.search || filters.from || filters.to || filters.minAmount || filters.maxAmount;
+    filters.search || filters.from || filters.to || filters.minAmount || filters.maxAmount ||
+    filters.batch;
 
   const stats = useMemo(() => {
     if (!totals) return [];
@@ -884,8 +1177,8 @@ export default function AdminDashboard() {
               className={inputCls}
             >
               <option value="">All</option>
-              <option value="PAID">Paid</option>
-              <option value="PENDING">Pending</option>
+              <option value="PAID">Bill settled</option>
+              <option value="PENDING">Bill pending</option>
               <option value="FAILED">Failed</option>
             </select>
           </div>
@@ -897,7 +1190,9 @@ export default function AdminDashboard() {
               className={inputCls}
             >
               <option value="">All</option>
-              <option value="PENDING">Awaiting transfer</option>
+              <option value="PENDING">Pending</option>
+              <option value="PROCESSING">Processing</option>
+              <option value="SCHEDULED">Scheduled</option>
               <option value="TRANSFERRED">Transferred</option>
             </select>
           </div>
@@ -951,7 +1246,7 @@ export default function AdminDashboard() {
                 setAmountDraft({ min: "", max: "" });
                 setFilters({
                   shopId: "", status: "", payoutStatus: "", methodId: "",
-                  search: "", from: "", to: "", minAmount: "", maxAmount: ""
+                  search: "", from: "", to: "", minAmount: "", maxAmount: "", batch: ""
                 });
               }}
               className="col-span-2 sm:col-auto px-3 py-2 text-sm text-zinc-500 hover:text-zinc-700 underline underline-offset-4 text-left transition"
@@ -972,6 +1267,20 @@ export default function AdminDashboard() {
             </p>
             <div className="flex gap-2 ml-auto">
               <button
+                onClick={() => requestStatusChange("PROCESSING", selectedTxns.map((t) => t.paymentId))}
+                disabled={statusSaving}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-xl bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-200 active:scale-[0.98] disabled:opacity-50 transition"
+              >
+                Mark processing
+              </button>
+              <button
+                onClick={() => requestStatusChange("SCHEDULED", selectedTxns.map((t) => t.paymentId))}
+                disabled={statusSaving}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-xl bg-violet-100 text-violet-700 font-semibold hover:bg-violet-200 active:scale-[0.98] disabled:opacity-50 transition"
+              >
+                Mark scheduled
+              </button>
+              <button
                 onClick={() => setTransferTxns(selectedTxns)}
                 className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-xl bg-emerald-500 text-ink-950 font-semibold hover:bg-emerald-400 active:scale-[0.98] transition"
               >
@@ -988,8 +1297,120 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {/* Transactions / Batches tab switcher */}
+        {isCompany && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setView("transactions")}
+              className={`px-4 py-2 text-sm font-semibold rounded-xl border transition ${
+                view === "transactions"
+                  ? "bg-ink-950 text-white border-ink-950"
+                  : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+              }`}
+            >
+              Transactions
+            </button>
+            <button
+              onClick={() => setView("batches")}
+              className={`px-4 py-2 text-sm font-semibold rounded-xl border transition ${
+                view === "batches"
+                  ? "bg-ink-950 text-white border-ink-950"
+                  : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+              }`}
+            >
+              Batches {batches.length > 0 && <span className="num opacity-70">({batches.length})</span>}
+            </button>
+          </div>
+        )}
+
+        {/* Batches view */}
+        {isCompany && view === "batches" && (
+          <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-zinc-100">
+              <h2 className="text-sm font-semibold text-zinc-800">
+                Batches <span className="num text-zinc-400 font-normal">({batches.length})</span>
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Payments that were moved or transferred together share a batch number. Click one to see its transactions.
+              </p>
+            </div>
+            {batches.length === 0 ? (
+              <div className="px-5 py-12 text-center text-zinc-400 text-sm">No batches yet</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto hidden sm:block">
+                  <table className="w-full min-w-160 text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-zinc-400 border-b border-zinc-100">
+                        <th className="px-5 py-2.5 font-medium">Batch</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Transactions</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Total</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Restaurants</th>
+                        <th className="px-5 py-2.5 font-medium">Status</th>
+                        <th className="px-5 py-2.5 font-medium">Last updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batches.map((b) => (
+                        <tr
+                          key={b.batchNo}
+                          onClick={() => setBatchDetail(b.batchNo)}
+                          className="border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition"
+                          title="View this batch's transactions"
+                        >
+                          <td className="px-5 py-3 font-medium text-sky-700">B-{b.batchNo}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{b.txnCount}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-700 font-medium">{CURRENCY} {fmt(b.totalAmount)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{b.restaurantCount}</td>
+                          <td className="px-5 py-3">
+                            {b.status === "MIXED" ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">
+                                Mixed
+                              </span>
+                            ) : (
+                              <PayoutBadge status={b.status} />
+                            )}
+                          </td>
+                          <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtDate(b.lastUpdatedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="sm:hidden divide-y divide-zinc-100">
+                  {batches.map((b) => (
+                    <div
+                      key={b.batchNo}
+                      onClick={() => setBatchDetail(b.batchNo)}
+                      className="p-4 space-y-2 cursor-pointer hover:bg-zinc-50 transition"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sky-700">B-{b.batchNo}</span>
+                        {b.status === "MIXED" ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">
+                            Mixed
+                          </span>
+                        ) : (
+                          <PayoutBadge status={b.status} />
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-zinc-500">{b.txnCount} txns · {b.restaurantCount} restaurant{b.restaurantCount === 1 ? "" : "s"}</span>
+                        <span className="num font-semibold text-zinc-900">{CURRENCY} {fmt(b.totalAmount)}</span>
+                      </div>
+                      <p className="text-xs text-zinc-400">{fmtDate(b.lastUpdatedAt)}</p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
         {/* Transactions table */}
-        <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
+        <section className={`rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden ${isCompany && view !== "transactions" ? "hidden" : ""}`}>
           <div className="px-5 py-3.5 border-b border-zinc-100 flex flex-wrap items-center gap-3">
             <h2 className="text-sm font-semibold text-zinc-800">
               Transactions <span className="num text-zinc-400 font-normal">({total})</span>
@@ -1076,6 +1497,7 @@ export default function AdminDashboard() {
                   <th className="px-4 py-2.5 font-medium text-right">Restaurant payout</th>
                   <th className="px-4 py-2.5 font-medium">Payment</th>
                   <th className="px-4 py-2.5 font-medium">Settlement</th>
+                  <th className="px-4 py-2.5 font-medium">Batch</th>
                   <th className="px-4 py-2.5 font-medium">Transfer ref</th>
                   <SortTh label="Date" k="date" sort={sort} onSort={toggleSort} />
                   {isCompany && <th className="px-4 py-2.5 font-medium text-right pr-5">Action</th>}
@@ -1084,7 +1506,7 @@ export default function AdminDashboard() {
               <tbody>
                 {transactions.length === 0 && (
                   <tr>
-                    <td colSpan={isCompany ? 14 : 12} className="px-4 py-12 text-center text-zinc-400">
+                    <td colSpan={isCompany ? 15 : 13} className="px-4 py-12 text-center text-zinc-400">
                       {loading ? "Loading..." : "No transactions found"}
                     </td>
                   </tr>
@@ -1131,7 +1553,28 @@ export default function AdminDashboard() {
                       </td>
                       <td className="px-4 py-3"><PaidBadge status={t.paidStatus} /></td>
                       <td className="px-4 py-3">
-                        {t.failed ? <span className="text-xs text-zinc-300">-</span> : <PayoutBadge status={payoutStatus} />}
+                        {t.failed ? (
+                          <span className="text-xs text-zinc-300">-</span>
+                        ) : (
+                          <>
+                            <PayoutBadge status={payoutStatus} />
+                            {payoutStatus === "SCHEDULED" && t.payout?.scheduledDate && (
+                              <span className="num block text-xs text-zinc-400 mt-0.5">
+                                {new Date(t.payout.scheduledDate).toLocaleDateString("en-AE", { day: "2-digit", month: "short", timeZone: "UTC" })}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.failed ? (
+                          <span className="text-xs text-zinc-300">-</span>
+                        ) : (
+                          <BatchBadge
+                            code={t.payout?.batchNo != null ? `B-${t.payout.batchNo}` : null}
+                            onClick={(e) => { e.stopPropagation(); setFilter("batch", String(t.payout.batchNo)); }}
+                          />
+                        )}
                       </td>
                       <td className="px-4 py-3 text-zinc-500 text-xs">
                         <span className="num">{t.payout?.transferRef || "-"}</span>
@@ -1147,12 +1590,24 @@ export default function AdminDashboard() {
                           {t.failed ? (
                             <span className="text-xs text-zinc-300">-</span>
                           ) : payoutStatus !== "TRANSFERRED" ? (
-                            <button
-                              onClick={() => setTransferTxns([t])}
-                              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 active:scale-[0.98] transition"
-                            >
-                              Transfer
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <select
+                                value={payoutStatus}
+                                onChange={(e) => requestStatusChange(e.target.value, [t.paymentId])}
+                                className="rounded-lg border border-zinc-200 text-xs px-1.5 py-1.5 text-zinc-600 focus:outline-none focus:border-emerald-500"
+                                title="Move to a different pre-transfer status"
+                              >
+                                <option value="PENDING">Pending</option>
+                                <option value="PROCESSING">Processing</option>
+                                <option value="SCHEDULED">Scheduled</option>
+                              </select>
+                              <button
+                                onClick={() => setTransferTxns([t])}
+                                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 active:scale-[0.98] transition"
+                              >
+                                Transfer
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-xs text-zinc-400">Settled</span>
                           )}
@@ -1167,6 +1622,17 @@ export default function AdminDashboard() {
 
           {/* Mobile / tablet card list */}
           <div className="lg:hidden divide-y divide-zinc-100">
+            {selectableTxns.length > 0 && (
+              <label className="flex items-center gap-2.5 px-4 py-2.5 text-xs text-zinc-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  className="accent-emerald-600 cursor-pointer"
+                />
+                Select all awaiting on this page
+              </label>
+            )}
             {transactions.length === 0 && (
               <div className="px-4 py-12 text-center text-zinc-400">
                 {loading ? "Loading..." : "No transactions found"}
@@ -1218,6 +1684,17 @@ export default function AdminDashboard() {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <PaidBadge status={t.paidStatus} />
                     {!t.failed && <PayoutBadge status={payoutStatus} />}
+                    {!t.failed && payoutStatus === "SCHEDULED" && t.payout?.scheduledDate && (
+                      <span className="num text-xs text-zinc-400">
+                        {new Date(t.payout.scheduledDate).toLocaleDateString("en-AE", { day: "2-digit", month: "short", timeZone: "UTC" })}
+                      </span>
+                    )}
+                    {!t.failed && t.payout?.batchNo != null && (
+                      <BatchBadge
+                        code={`B-${t.payout.batchNo}`}
+                        onClick={(e) => { e.stopPropagation(); setFilter("batch", String(t.payout.batchNo)); }}
+                      />
+                    )}
                     <span className="text-xs text-zinc-400 ml-auto">{fmtDate(t.createdAt)}</span>
                   </div>
 
@@ -1230,10 +1707,20 @@ export default function AdminDashboard() {
                   )}
 
                   {isCompany && !t.failed && payoutStatus !== "TRANSFERRED" && (
-                    <div className="pt-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="pt-1 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={payoutStatus}
+                        onChange={(e) => requestStatusChange(e.target.value, [t.paymentId])}
+                        className="flex-1 rounded-xl border border-zinc-200 text-xs px-2 py-2 text-zinc-600 focus:outline-none focus:border-emerald-500"
+                        title="Move to a different pre-transfer status"
+                      >
+                        <option value="PENDING">Pending</option>
+                        <option value="PROCESSING">Processing</option>
+                        <option value="SCHEDULED">Scheduled</option>
+                      </select>
                       <button
                         onClick={() => setTransferTxns([t])}
-                        className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-emerald-300 text-emerald-700 hover:bg-emerald-50 active:scale-[0.98] transition"
+                        className="px-3 py-2 text-xs font-medium rounded-xl border border-emerald-300 text-emerald-700 hover:bg-emerald-50 active:scale-[0.98] transition"
                       >
                         Transfer
                       </button>
@@ -1250,10 +1737,12 @@ export default function AdminDashboard() {
         <TransferModal
           txns={transferTxns}
           onClose={() => setTransferTxns(null)}
+          showToast={showToast}
           onDone={() => {
             setTransferTxns(null);
             setSelected(new Set());
             load();
+            loadBatches();
           }}
         />
       )}
@@ -1271,19 +1760,44 @@ export default function AdminDashboard() {
             maxAmount: filters.maxAmount
           }}
           onClose={() => setTransferAllOpen(false)}
+          showToast={showToast}
           onDone={() => {
             setTransferAllOpen(false);
             setSelected(new Set());
             load();
+            loadBatches();
           }}
         />
       )}
 
       {detailTxn && <TxnDetailModal txn={detailTxn} onClose={() => setDetailTxn(null)} />}
 
+      {batchDetail != null && (
+        <BatchDetailSheet
+          batchNo={batchDetail}
+          onClose={() => setBatchDetail(null)}
+          requestStatusChange={requestStatusChange}
+          onTransfer={setTransferTxns}
+        />
+      )}
+
+      {scheduling && (
+        <ScheduleDateModal
+          count={scheduling.ids.length}
+          onClose={() => setScheduling(null)}
+          onConfirm={async (dateStr) => {
+            await setBulkStatus("SCHEDULED", scheduling.ids, dateStr);
+            await scheduling.after?.();
+            setScheduling(null);
+          }}
+        />
+      )}
+
       {showPasswordModal && (
         <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
       )}
+
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

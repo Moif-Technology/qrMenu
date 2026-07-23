@@ -58,7 +58,7 @@ const MAX_EXPORT_ROWS = 20000;
 
 async function queryTransactions(req, { paginate = true } = {}) {
     const shopId = resolveShopScope(req);
-    const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount } = req.query;
+    const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount, batch } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = paginate
       ? Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
@@ -105,12 +105,20 @@ async function queryTransactions(req, { paginate = true } = {}) {
       params.searchExact = { type: mssql.VarChar(30), value: term };
     }
     if (payoutStatus === "PENDING") {
-      // Two-state pipeline: anything not yet transferred (no payout row,
-      // PENDING, or a legacy APPROVED row) counts as pending.
-      conditions.push("(ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED')");
+      // Pending is implicit: no PayoutStatus row has been created yet.
+      conditions.push("ps.PayoutID IS NULL");
+      includeAttempts = false;
+    } else if (payoutStatus === "PROCESSING" || payoutStatus === "SCHEDULED") {
+      conditions.push("ps.Status = @payoutStatus");
+      params.payoutStatus = { type: mssql.VarChar(20), value: payoutStatus };
       includeAttempts = false;
     } else if (payoutStatus === "TRANSFERRED") {
       conditions.push("ps.Status = 'TRANSFERRED'");
+      includeAttempts = false;
+    }
+    if (batch !== undefined && batch !== "" && Number.isFinite(Number(batch))) {
+      conditions.push("ps.BatchNo = @batch");
+      params.batch = { type: mssql.BigInt, value: Number(batch) };
       includeAttempts = false;
     }
     const fromDate = from ? parseWallClock(from) : null;
@@ -161,6 +169,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           rm.Slug  AS RestaurantSlug,
           ps.PayoutID, ps.Status AS PayoutStatus, ps.Amount AS PayoutAmount,
           ps.TransferRef, ps.TransferDate, ps.TransferredBy, ps.Notes AS PayoutNotes,
+          ps.BatchNo, ps.ScheduledDate,
           ISNULL(p.ServiceFeeAmount, 0) AS ServiceFeeAmount,
           ISNULL(p.TipAmount, 0)        AS TipAmount,
           p.PlatformFeeAmount,
@@ -191,6 +200,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
           NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          CAST(NULL AS BIGINT) AS BatchNo, CAST(NULL AS DATE) AS ScheduledDate,
           CAST(0 AS MONEY) AS ServiceFeeAmount,
           CAST(0 AS MONEY) AS TipAmount,
           CAST(0 AS MONEY) AS PlatformFeeAmount,
@@ -243,15 +253,19 @@ async function queryTransactions(req, { paginate = true } = {}) {
           : r.PayoutID
             ? {
                 payoutId: Number(r.PayoutID),
-                // Legacy APPROVED rows surface as PENDING - the pipeline is two-state.
-                status: r.PayoutStatus === "TRANSFERRED" ? "TRANSFERRED" : "PENDING",
+                // Anything unrecognized (e.g. a legacy APPROVED row) falls back to PENDING.
+                status: ["PROCESSING", "SCHEDULED", "TRANSFERRED"].includes(r.PayoutStatus)
+                  ? r.PayoutStatus
+                  : "PENDING",
                 amount: Number(r.PayoutAmount),
                 transferRef: r.TransferRef,
                 transferDate: r.TransferDate,
                 transferredBy: r.TransferredBy,
-                notes: r.PayoutNotes
+                notes: r.PayoutNotes,
+                batchNo: r.BatchNo != null ? Number(r.BatchNo) : null,
+                scheduledDate: r.ScheduledDate || null
               }
-            : { status: "PENDING", amount: Number(r.PaidAmount) }
+            : { status: "PENDING", amount: Number(r.PaidAmount), batchNo: null, scheduledDate: null }
       };
     });
 
@@ -261,7 +275,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
 /**
  * GET /api/payout/transactions
  * Query params: shopId (company only), status (payment PaidStatus),
- * payoutStatus (PENDING|TRANSFERRED), from, to (ISO dates),
+ * payoutStatus (PENDING|PROCESSING|SCHEDULED|TRANSFERRED), batch (numeric BatchNo), from, to (ISO dates),
  * sort (id|bill|paid|date|restaurant), dir (asc|desc), page, pageSize.
  */
 router.get("/", requireAuth, async (req, res) => {

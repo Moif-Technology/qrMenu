@@ -40,17 +40,18 @@ function getNextPayoutDate() {
 const fmtPayoutDate = (d) =>
   d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
+const PAYOUT_BADGE = {
+  TRANSFERRED: { label: "Paid to you", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  SCHEDULED: { label: "Scheduled", cls: "bg-violet-50 text-violet-700 border-violet-200" },
+  PROCESSING: { label: "Processing", cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+  PENDING: { label: "Awaiting payout", cls: "bg-amber-50 text-amber-700 border-amber-200" }
+};
+
 function PayoutBadge({ status }) {
-  const transferred = status === "TRANSFERRED";
+  const b = PAYOUT_BADGE[status] || PAYOUT_BADGE.PENDING;
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${
-        transferred
-          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-          : "bg-amber-50 text-amber-700 border-amber-200"
-      }`}
-    >
-      {transferred ? "Paid to you" : "Awaiting payout"}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${b.cls}`}>
+      {b.label}
     </span>
   );
 }
@@ -58,6 +59,8 @@ function PayoutBadge({ status }) {
 const FILTER_CHIPS = [
   { key: "", label: "All" },
   { key: "PENDING", label: "Awaiting" },
+  { key: "PROCESSING", label: "Processing" },
+  { key: "SCHEDULED", label: "Scheduled" },
   { key: "TRANSFERRED", label: "Paid out" }
 ];
 
@@ -144,7 +147,7 @@ export default function RestaurantDashboard() {
     { header: "Tip (AED)", key: (r) => fmt(r.tipAmount), align: "right" },
     { header: "Platform fee (AED)", key: (r) => fmt(r.platformFeeAmount), align: "right" },
     { header: "You receive (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
-    { header: "Status", key: (r) => (r.failed ? "Failed" : r.payout?.status === "TRANSFERRED" ? "Paid to you" : "Awaiting payout") },
+    { header: "Status", key: (r) => (r.failed ? "Failed" : (PAYOUT_BADGE[r.payout?.status || "PENDING"] || PAYOUT_BADGE.PENDING).label) },
     { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" }
   ], []);
 
@@ -526,6 +529,11 @@ export default function RestaurantDashboard() {
                       </span>
                     ) : (
                       <PayoutBadge status={t.payout?.status || "PENDING"} />
+                    )}
+                    {!t.failed && t.payout?.batchNo != null && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-sky-50 text-sky-700 border-sky-200">
+                        Batch B-{t.payout.batchNo}
+                      </span>
                     )}
                     {t.payout?.transferRef && (
                       <span className="num text-xs text-zinc-400">

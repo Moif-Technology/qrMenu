@@ -22,6 +22,7 @@
     "lucide-react": "^0.545.0",
     "nanoid": "^5.1.6",
     "react": "^19.1.1",
+    "react-datepicker": "^9.1.0",
     "react-dom": "^19.1.1",
     "react-i18next": "^16.2.4",
     "react-international-phone": "^4.7.0",
