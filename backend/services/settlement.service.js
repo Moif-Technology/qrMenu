@@ -113,11 +113,18 @@ export async function settleKotToSales(kotMasterID, opts = {}) {
     await tx.begin();
 
     /* ---- 1. Load KOTMaster ---- */
+    // UPDLOCK+HOLDLOCK: without a lock here, two concurrent calls for the
+    // same kotMasterID (this genuinely happens - saveItemSplitPayment fires
+    // this off in the background the moment balance hits zero, and another
+    // caller can land at the same time) can both pass this SELECT before
+    // either commits its DELETE below, producing two SalesMaster entries for
+    // one bill. Same pattern getNextIdTx() already uses correctly in this
+    // file - the lock makes the second caller wait, then find the row gone.
     const kmReq = new mssql.Request(tx);
     kmReq.input("kotMasterID", mssql.BigInt, kmID);
     const kmSql = `
       SELECT *
-      FROM   ${T_KOTM}
+      FROM   ${T_KOTM} WITH (UPDLOCK, HOLDLOCK)
       WHERE  ${q("kotMasterID")} = @kotMasterID
     `;
     const kmResult = await kmReq.query(kmSql);

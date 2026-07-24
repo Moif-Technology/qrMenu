@@ -10,7 +10,9 @@
     "gen:qr": "node scripts/gen-qr-103.js",
     "migrate:images": "node scripts/migrate-images-to-cloudinary.js",
     "test:images": "node scripts/test-image-query.js",
-    "seed:payout-users": "node scripts/payout-seed-users.js"
+    "seed:payout-users": "node scripts/payout-seed-users.js",
+    "reconcile:payments": "node scripts/reconcile-pending-payments.js",
+    "reconcile:settlements": "node scripts/reconcile-stuck-settlements.js"
   },
   "keywords": [],
   "author": "",

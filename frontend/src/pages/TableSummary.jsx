@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { List } from "react-window";
 
 import ConfirmModal from "../component/ConfirmModal";
+import PaymentProcessingOverlay from "../component/PaymentProcessingOverlay";
 import PaymentSuccess from "../component/PaymentSuccess";
 import SplitCustomAmountSheet from "../component/SplitCustomAmountSheet";
 import SplitEqualSheet from "../component/SplitEqualSheet";
@@ -462,6 +463,9 @@ export default function TableSummaryPremium() {
         originalBillAmount = null,
       } = payload;
 
+      const MIN_PROCESSING_OVERLAY_MS = 5000;
+      const overlayStartedAt = Date.now();
+
       try {
         setIsPaymentProcessing(true);
         const timestamp = new Date();
@@ -530,6 +534,14 @@ export default function TableSummaryPremium() {
           createdAt: Date.now(),
         };
         sessionStorage.setItem("telr:lastSession", JSON.stringify(sessionData));
+
+        // Keep the "please wait" overlay up for a minimum stretch so it's
+        // actually readable, even when /telr/create responds in well under
+        // a second on a fast connection.
+        const elapsed = Date.now() - overlayStartedAt;
+        if (elapsed < MIN_PROCESSING_OVERLAY_MS) {
+          await new Promise((resolve) => setTimeout(resolve, MIN_PROCESSING_OVERLAY_MS - elapsed));
+        }
 
         window.location.href = session.url;
       } catch (err) {
@@ -2045,6 +2057,9 @@ export default function TableSummaryPremium() {
 
       {/* Toast - replaces alert() */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+
+      {/* Shown while /telr/create is in flight and just before the redirect to Telr */}
+      <PaymentProcessingOverlay show={isPaymentProcessing} />
 
       {/* Payment Complete Screen - Hidden */}
       <PaymentSuccess

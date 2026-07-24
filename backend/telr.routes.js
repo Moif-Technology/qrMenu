@@ -8,6 +8,7 @@ import {
   saveCustomSplitPayment,
   saveItemSplitPayment,
   getServiceFeeRatePercent,
+  getPaidItems,
 } from "./services/payment.service.js";
 import { queryPaymentDb } from "./config/dbConfig.js";
 import {
@@ -17,6 +18,14 @@ import {
   updateSession,
   deleteSession,
 } from "./services/telrSessionStore.js";
+import {
+  createPendingSession,
+  claimAndSettle,
+  markSessionAuthorised,
+  markSessionFailed,
+  markSessionSettled,
+  getClaimedItemIds,
+} from "./services/paymentSessionStore.js";
 
 const router = express.Router();
 
@@ -274,6 +283,34 @@ router.post("/api/telr/create", async (req, res) => {
 
     const mode = req.body?.mode || "pay-full";
 
+    // Item-split only: reserve the selected items BEFORE creating any Telr
+    // order, not just at settlement time. Two guests picking the same item
+    // within seconds of each other used to both reach Telr and both get
+    // charged - the settlement-time check only stopped the double-credit in
+    // our DB, not the second charge itself. This closes that window: a
+    // second guest gets rejected here, before their card is ever touched.
+    if (mode === "split-items" && Array.isArray(items) && items.length > 0) {
+      const requestedIds = items
+        .map((it) => Number(it?.kotChildId ?? it?.kotChildID))
+        .filter((n) => Number.isFinite(n) && n > 0);
+
+      if (requestedIds.length > 0 && kotMasterID) {
+        const [paidIds, claimedIds] = await Promise.all([
+          getPaidItems(kotMasterID),
+          getClaimedItemIds(kotMasterID),
+        ]);
+        const unavailable = requestedIds.filter(
+          (id) => paidIds.includes(id) || claimedIds.includes(id)
+        );
+        if (unavailable.length > 0) {
+          return res.status(409).json({
+            error: "One or more selected items are already being paid for by another guest. Please refresh and pick different items.",
+            unavailableItemIds: unavailable,
+          });
+        }
+      }
+    }
+
     // Service fee is company-controlled (qrmenu-dashboard admin) and must never
     // be trusted from the client — recompute it here from the current DB rate.
     // Applies to every mode, always on the amount actually being charged in
@@ -360,6 +397,26 @@ router.post("/api/telr/create", async (req, res) => {
       serviceFeeAmount: effectiveServiceFeeAmount,
       tipAmount: requestedTip,
       // Split-mode extras for webhook self-completion (see above)
+      numberOfPeople,
+      items,
+      originalBillAmount,
+    });
+
+    // Durable backstop for the in-memory session above - survives a backend
+    // restart between now and the customer's redirect/webhook, which is the
+    // one gap the July-24 fix couldn't close (in-memory Map only). Retries
+    // once internally and never throws; checkout proceeds either way.
+    await createPendingSession({
+      orderRef: data.order.ref,
+      sessionKey,
+      transId: kotMasterID,
+      tableId,
+      token,
+      mode,
+      billAmount: effectiveBillAmount,
+      amount: effectiveAmount,
+      serviceFeeAmount: effectiveServiceFeeAmount,
+      tipAmount: requestedTip,
       numberOfPeople,
       items,
       originalBillAmount,
@@ -493,6 +550,36 @@ async function settleSplitFromSession(session, telrRef) {
   }
 }
 
+/**
+ * Settle any mode (pay-full or split) from a session-shaped payload - used
+ * only by the DB-fallback recovery path (claimAndSettle), when the in-memory
+ * session is gone and the payload was rebuilt from the durable PaymentSession
+ * row instead. The normal in-memory fast path keeps using savePayFullPayment/
+ * settleSplitFromSession directly, unchanged.
+ */
+async function settleAnyModeFromPayload(payload, telrRef) {
+  const mode = payload?.mode || "pay-full";
+  if (!mode || mode === "pay-full") {
+    if (!(payload?.amount && (payload?.tableId || payload?.kotMasterID))) {
+      return { ok: false, error: "Missing data for pay-full settlement" };
+    }
+    try {
+      const result = await savePayFullPayment({
+        billAmount: payload.billAmount ?? payload.amount,
+        tableId: payload.tableId,
+        kotMasterID: payload.kotMasterID,
+        serviceFeeAmount: payload.serviceFeeAmount,
+        tipAmount: payload.tipAmount,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+  return settleSplitFromSession(payload, telrRef);
+}
+
 async function handleReturn(req, res, status) {
   res.set("Content-Type", "text/html; charset=utf-8");
 
@@ -533,6 +620,27 @@ async function handleReturn(req, res, status) {
         finalStatus = "DECLINED";
         message = "Payment could not be verified. Please try again or contact support.";
         await recordFailedAttempt("DECLINED", sessionMeta, fallbackMeta, effectiveOrderRef);
+        await markSessionFailed(effectiveOrderRef, "DECLINED");
+      } else if (!sessionMeta) {
+        // In-memory session is gone (backend restarted between /create and this
+        // redirect) - fall back to the durable PaymentSession row, which is the
+        // only place mode/items/kotMasterID survive a restart. Goes through the
+        // same atomic claim the webhook uses, so if both land close together
+        // only one of them actually settles.
+        await markSessionAuthorised(effectiveOrderRef);
+        const fallbackTelrRef = {
+          orderRef: effectiveOrderRef,
+          tranRef: telrData?.transaction?.ref ?? null,
+          authCode: telrData?.transaction?.auth ?? null,
+        };
+        const claimed = await claimAndSettle(effectiveOrderRef, fallbackTelrRef, settleAnyModeFromPayload);
+        if (claimed.ok) {
+          paymentResult = claimed.result;
+          console.log("[Telr] Settled via PaymentSession fallback (no in-memory session). orderRef:", effectiveOrderRef);
+        } else {
+          console.error("[Telr] PaymentSession fallback could not settle - webhook/reconciliation will retry. orderRef:", effectiveOrderRef, "reason:", claimed.reason || claimed.error);
+          message = "Payment authorised, but we could not update the order automatically. Please check with staff.";
+        }
       } else {
         // Determine payment mode — split modes are handled by the frontend after redirect
         // Priority: URL query param → stored session meta → default pay-full
@@ -543,6 +651,7 @@ async function handleReturn(req, res, status) {
         const isPayFull = !paymentMode || paymentMode === "pay-full";
 
         console.log("[Telr] AUTH return - mode:", paymentMode, "| isPayFull:", isPayFull);
+        await markSessionAuthorised(effectiveOrderRef);
 
         if (isPayFull) {
           const metaForSave = {
@@ -571,6 +680,7 @@ async function handleReturn(req, res, status) {
                 authCode: telrData?.transaction?.auth ?? null,
               });
               if (sessionMeta) sessionMeta.processed = true;
+              await markSessionSettled(effectiveOrderRef, paymentResult?.paymentId ?? paymentResult?.PaymentID);
             } catch (err) {
               console.error("[Telr] Failed to persist pay full payment:", err);
               message = "Payment authorised, but we could not update the order automatically. Please check with staff.";
@@ -610,6 +720,7 @@ async function handleReturn(req, res, status) {
             if (settle.ok) {
               paymentResult = settle.result;
               console.log("[Telr] Split payment settled inline on redirect. mode:", paymentMode, "orderRef:", effectiveOrderRef);
+              await markSessionSettled(effectiveOrderRef, paymentResult?.paymentId ?? paymentResult?.PaymentID);
             } else {
               // Undo the lock - nothing was actually saved, so the webhook (if
               // configured) should still be allowed to settle this later.
@@ -643,9 +754,11 @@ async function handleReturn(req, res, status) {
   } else if (status === "CANCEL") {
     message = "Payment was cancelled. You can close this window.";
     await recordFailedAttempt("CANCEL", sessionMeta, fallbackMeta, effectiveOrderRef);
+    await markSessionFailed(effectiveOrderRef, "CANCEL");
   } else if (status === "DECLINED") {
     message = "Payment was declined. Please try another method.";
     await recordFailedAttempt("DECLINED", sessionMeta, fallbackMeta, effectiveOrderRef);
+    await markSessionFailed(effectiveOrderRef, "DECLINED");
   }
 
   const isSplitMode = !!(sessionMeta?.mode && sessionMeta.mode !== "pay-full");
@@ -767,12 +880,28 @@ router.post("/api/telr/webhook", async (req, res) => {
       return;
     }
 
+    await markSessionAuthorised(orderRef);
+
     // Look up the session stored when the payment was created
     const session = getSessionByOrderRef(orderRef);
 
     if (!session) {
-      console.warn("[Telr:Webhook] No session found for orderRef:", orderRef,
-        "— payment may have already been processed via redirect, or session expired.");
+      // In-memory session gone (redirect already consumed+deleted it, backend
+      // restarted, or TTL expired) - fall back to the durable PaymentSession
+      // row via the same atomic claim the redirect fallback uses, so if both
+      // land close together only one of them actually settles.
+      const webhookTelrRef = {
+        orderRef,
+        tranRef: telrData?.transaction?.ref ?? null,
+        authCode: telrData?.transaction?.auth ?? null,
+      };
+      const claimed = await claimAndSettle(orderRef, webhookTelrRef, settleAnyModeFromPayload);
+      if (claimed.ok) {
+        console.log("[Telr:Webhook] Settled via PaymentSession fallback. orderRef:", orderRef);
+      } else {
+        console.log("[Telr:Webhook] PaymentSession fallback did not settle (reason:", claimed.reason || claimed.error, ") orderRef:", orderRef,
+          "- payment may have already been processed via redirect, or session/row expired.");
+      }
       return;
     }
 
@@ -810,8 +939,9 @@ router.post("/api/telr/webhook", async (req, res) => {
       };
 
       if (metaForSave.billAmount && (metaForSave.tableId || metaForSave.kotMasterID)) {
-        await savePayFullPayment(metaForSave);
+        const result = await savePayFullPayment(metaForSave);
         console.log("[Telr:Webhook] Pay Full settled via webhook. orderRef:", orderRef);
+        await markSessionSettled(orderRef, result?.paymentId ?? result?.PaymentID);
       } else {
         console.warn("[Telr:Webhook] Missing amount/tableId/kotMasterID — cannot settle.", metaForSave);
       }
@@ -825,6 +955,7 @@ router.post("/api/telr/webhook", async (req, res) => {
       if (settle.ok) {
         session.processed = true;
         console.log(`[Telr:Webhook] ${mode} settled via webhook. orderRef:`, orderRef);
+        await markSessionSettled(orderRef, settle.result?.paymentId ?? settle.result?.PaymentID);
       } else {
         console.warn(`[Telr:Webhook] Could not settle ${mode} — `, settle.error);
       }
