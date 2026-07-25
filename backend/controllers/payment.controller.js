@@ -1,6 +1,7 @@
 // backend/controllers/payment.controller.js
 import util from "node:util";
-import { getActivePaymentMethods, getPaymentMethodById, savePayFullPayment, saveCustomSplitPayment, saveItemSplitPayment, saveEqualSplitPayment, getPaidItems, getTableBalance, getServiceFeeRatePercent } from "../services/payment.service.js";
+import { getActivePaymentMethods, getPaymentMethodById, getPaidItems, getTableBalance, getServiceFeeRatePercent, settleAnyModeFromPayload } from "../services/payment.service.js";
+import { claimAndSettlePublic } from "../services/paymentSessionStore.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -115,53 +116,73 @@ export async function getPaymentMethod(req, res) {
 }
 
 /**
+ * Every /api/payment/* write endpoint below is public (no login on a QR menu -
+ * any diner's phone must be able to call it), which means the request body
+ * itself can never be trusted to prove a charge happened: anyone who watches
+ * their own phone's network traffic (or just replays a captured request) can
+ * send the same billAmount/tableId/kotMasterID without ever paying.
+ *
+ * The only thing that can't be forged is `orderRef` combined with the
+ * server-side PaymentSession row it points to: that row is only ever marked
+ * AUTHORISED by the Telr redirect/webhook handlers, and only after they
+ * independently re-verify the charge with Telr's own servers (telrCheck()).
+ * claimAndSettlePublic() atomically claims that row (so the same orderRef can
+ * never settle twice) and reads the actual amounts/items/mode from it -
+ * everything else in the request body is ignored for the write itself.
+ */
+async function settleFromOrderRef(req, res, reqId, label) {
+  const orderRef = req.body?.orderRef;
+  const tranRef = req.body?.tranRef || null;
+  const authCode = req.body?.authCode || null;
+
+  if (!orderRef) {
+    console.warn(`[PAYMENT][${reqId}] ${label} rejected: missing orderRef`);
+    return res.status(400).json({
+      ok: false,
+      error: "orderRef is required - this payment must be verified through Telr before it can be recorded"
+    });
+  }
+
+  console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} orderRef:`, orderRef);
+
+  const claimed = await claimAndSettlePublic(orderRef, { orderRef, tranRef, authCode }, settleAnyModeFromPayload);
+
+  if (!claimed.ok) {
+    console.warn(`[PAYMENT][${reqId}] ${label} could not settle. orderRef:`, orderRef, "reason:", claimed.reason || claimed.error);
+    if (claimed.reason) {
+      // No AUTHORISED session for this orderRef (never existed, already
+      // settled, or still awaiting Telr) - not a server error, so 409/404.
+      return res.status(claimed.reason === "no-authorised-session-for-orderref" ? 404 : 409).json({
+        ok: false,
+        error: claimed.reason === "no-authorised-session-for-orderref"
+          ? "No authorised payment session found for this orderRef. This payment has not been verified with Telr."
+          : "This payment session is already being processed or has already been settled."
+      });
+    }
+    const msg = String(claimed.error || "").toLowerCase();
+    const code = (msg.includes("required") || msg.includes("invalid") || msg.includes("positive") || msg.includes("already") || msg.includes("missing")) ? 400 : 500;
+    return res.status(code).json({
+      ok: false,
+      error: claimed.error || "Payment processing failed"
+    });
+  }
+
+  console.log(`[PAYMENT][${reqId}] ${label} OK:`, claimed.result);
+  return res.status(201).json({
+    ok: true,
+    ...claimed.result,
+    message: "Payment processed successfully"
+  });
+}
+
+/**
  * POST /api/payment/pay-full
- * Process Pay Full payment
- * For now, only saves to database - payment gateway integration will be added later
- * Payload: {
- *   billAmount: number, // total bill amount (can also be totalAmount, amount, etc.)
- *   tableId?: number    // optional, for reference
- * }
+ * Records a Pay Full payment - only for an orderRef whose PaymentSession row
+ * is already AUTHORISED by Telr (see settleFromOrderRef above).
  */
 export async function processPayFull(req, res) {
   const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-  // Support multiple field names for bill amount
-  const billAmount = req.body?.billAmount || req.body?.totalAmount || req.body?.amount || req.body?.total;
-  const tableId = req.body?.tableId;
-  const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
-
-  const preview = {
-    billAmount,
-    tableId,
-    kotMasterID,
-    methodId: 1 // Pay Full
-  };
-
-  console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
-
-  try {
-    const result = await savePayFullPayment({ billAmount, tableId, kotMasterID });
-    console.log(`[PAYMENT][${reqId}] OK:`, result);
-    return res.status(201).json({
-      ok: true,
-      ...result,
-      message: "Payment processed successfully"
-    });
-  } catch (err) {
-    const diag = unwrapSqlError(err);
-
-    console.error(`[PAYMENT][${reqId}] ERROR:`, util.inspect(diag, { depth: null, colors: true }));
-
-    const msg = String(diag.message || "").toLowerCase();
-    const code = (msg.includes("required") || msg.includes("invalid") || msg.includes("positive")) ? 400 : 500;
-
-    return res.status(code).json({
-      ok: false,
-      error: diag.message || "Payment processing failed",
-      debug: isProd ? undefined : diag
-    });
-  }
+  return settleFromOrderRef(req, res, reqId, "Pay Full");
 }
 
 /**
@@ -177,64 +198,7 @@ export async function processPayFull(req, res) {
  */
 export async function processEqualSplit(req, res) {
   const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const billAmount = req.body?.billAmount || req.body?.totalAmount || req.body?.total || null;
-  const paidAmount = req.body?.paidAmount || null; // Equal split always uses paidAmount field
-  const numberOfPeople = req.body?.numberOfPeople || req.body?.peopleCount || req.body?.count || 2;
-  const tableId = req.body?.tableId;
-  const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
-  const transId = req.body?.transId;
-  const sessionKey = req.body?.sessionKey || null; // used for tamper-check in service layer
-  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
-  const tipAmount = req.body?.tipAmount || 0;
-  
-  console.log(`[PAYMENT][${reqId}] Raw request body:`, JSON.stringify(req.body, null, 2));
-  
-  // Validate required fields
-  if (!billAmount || Number(billAmount) <= 0) {
-    console.error(`[PAYMENT][${reqId}] Validation failed: billAmount is missing or invalid:`, billAmount);
-    return res.status(400).json({
-      ok: false,
-      error: "Bill amount is required and must be greater than 0"
-    });
-  }
-  
-  if (!paidAmount || Number(paidAmount) <= 0) {
-    console.error(`[PAYMENT][${reqId}] Validation failed: paidAmount is missing or invalid:`, paidAmount);
-    return res.status(400).json({
-      ok: false,
-      error: "Paid amount is required and must be greater than 0"
-    });
-  }
-  
-  const preview = {
-    billAmount,
-    paidAmount,
-    numberOfPeople,
-    tableId,
-    kotMasterID,
-    transId,
-    methodId: 2 // Equal Split
-  };
-  console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
-  
-  try {
-    const result = await saveEqualSplitPayment({ billAmount, paidAmount, numberOfPeople, kotMasterID, transId, tableId, sessionKey, serviceFeeAmount, tipAmount });
-    console.log(`[PAYMENT][${reqId}] OK:`, result);
-    return res.status(201).json({ 
-      ok: true, 
-      ...result, 
-      message: "Equal split payment processed successfully" 
-    });
-  } catch (err) {
-    const diag = unwrapSqlError(err);
-    console.error(`[PAYMENT][${reqId}] ERROR:`, util.inspect(diag, { depth: null, colors: true }));
-    
-    return res.status(400).json({
-      ok: false,
-      error: diag.message || "Equal split payment processing failed",
-      debug: isProd ? undefined : diag
-    });
-  }
+  return settleFromOrderRef(req, res, reqId, "Equal Split");
 }
 
 /**
@@ -249,49 +213,7 @@ export async function processEqualSplit(req, res) {
  */
 export async function processCustomSplit(req, res) {
   const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  
-  // Support multiple field names
-  const billAmount = req.body?.billAmount || req.body?.totalAmount || req.body?.total || req.body?.bill;
-  const paidAmount = req.body?.paidAmount || req.body?.amount || req.body?.customAmount;
-  const transId = req.body?.transId;
-  const tableId = req.body?.tableId;
-  const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
-  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
-  const tipAmount = req.body?.tipAmount || 0;
-
-  const preview = {
-    billAmount,
-    paidAmount,
-    transId,
-    tableId,
-    kotMasterID,
-    methodId: 4 // Custom Split
-  };
-
-  console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
-
-  try {
-    const result = await saveCustomSplitPayment({ billAmount, paidAmount, transId, tableId, kotMasterID, serviceFeeAmount, tipAmount });
-    console.log(`[PAYMENT][${reqId}] OK:`, result);
-    return res.status(201).json({
-      ok: true,
-      ...result,
-      message: "Custom split payment processed successfully"
-    });
-  } catch (err) {
-    const diag = unwrapSqlError(err);
-    
-    console.error(`[PAYMENT][${reqId}] ERROR:`, util.inspect(diag, { depth: null, colors: true }));
-    
-    const msg = String(diag.message || "").toLowerCase();
-    const code = (msg.includes("required") || msg.includes("invalid") || msg.includes("positive") || msg.includes("exceed")) ? 400 : 500;
-    
-    return res.status(code).json({
-      ok: false,
-      error: diag.message || "Payment processing failed",
-      debug: isProd ? undefined : diag
-    });
-  }
+  return settleFromOrderRef(req, res, reqId, "Custom Split");
 }
 
 /**
@@ -300,36 +222,7 @@ export async function processCustomSplit(req, res) {
  */
 export async function processItemSplit(req, res) {
   const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const items = req.body?.items || req.body?.selectedItems || [];
-  const tableId = req.body?.tableId;
-  const kotMasterID = req.body?.kotMasterID || req.body?.kotMasterId || req.body?.KotMasterID || req.body?.KotMasterId;
-  const totalBillAmount = req.body?.totalBillAmount || req.body?.billAmount || null;
-  const serviceFeeAmount = req.body?.serviceFeeAmount || 0;
-  const tipAmount = req.body?.tipAmount || 0;
-
-  const preview = {
-    itemsCount: items.length, tableId, kotMasterID, totalBillAmount, methodId: 3
-  };
-  console.log(`[PAYMENT][${reqId}] POST ${req.originalUrl} payload:`, preview);
-
-  try {
-    const result = await saveItemSplitPayment({ items, tableId, kotMasterID, totalBillAmount, serviceFeeAmount, tipAmount });
-    console.log(`[PAYMENT][${reqId}] OK:`, result);
-    return res.status(201).json({ 
-      ok: true, 
-      ...result, 
-      message: "Item split payment processed successfully" 
-    });
-  } catch (err) {
-    const diag = unwrapSqlError(err);
-    console.error(`[PAYMENT][${reqId}] ERROR:`, util.inspect(diag, { depth: null, colors: true }));
-    
-    return res.status(400).json({
-      ok: false,
-      error: diag.message || "Item split payment processing failed",
-      debug: isProd ? undefined : diag
-    });
-  }
+  return settleFromOrderRef(req, res, reqId, "Item Split");
 }
 
 /**

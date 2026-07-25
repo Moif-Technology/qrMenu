@@ -87,15 +87,17 @@ export async function createPendingSession(session) {
  * if 0 rows matched (already claimed by someone else, already terminal, or
  * the row doesn't exist e.g. process never got past /create).
  */
-async function claimSession(orderRef) {
+async function claimSession(orderRef, allowedStatuses = ["PENDING", "AUTHORISED"]) {
   const pool = await connectToPaymentDb();
   const req = pool.request();
   req.input("OrderRef", mssql.NVarChar(100), orderRef);
+  const statusList = allowedStatuses.map((_, i) => `@s${i}`).join(",");
+  allowedStatuses.forEach((s, i) => req.input(`s${i}`, mssql.VarChar(20), s));
   const rs = await req.query(`
     UPDATE dbo.PaymentSession
     SET Status = 'SETTLING', UpdatedAt = GETDATE()
     OUTPUT INSERTED.*
-    WHERE OrderRef = @OrderRef AND Status IN ('PENDING', 'AUTHORISED')
+    WHERE OrderRef = @OrderRef AND Status IN (${statusList})
   `);
   return rs.recordset?.[0] || null;
 }
@@ -176,12 +178,7 @@ function sessionRowToSettlePayload(row) {
  * claimed/terminal/missing, or { ok:false, error } if settlement itself failed
  * (claim is released back to AUTHORISED so a later attempt can retry).
  */
-export async function claimAndSettle(orderRef, telrRef, settleFn) {
-  const row = await claimSession(orderRef);
-  if (!row) {
-    return { ok: false, reason: "already-claimed-or-missing" };
-  }
-
+async function settleClaimedRow(orderRef, row, telrRef, settleFn) {
   try {
     const payload = sessionRowToSettlePayload(row);
     const settle = await settleFn(payload, telrRef);
@@ -196,6 +193,33 @@ export async function claimAndSettle(orderRef, telrRef, settleFn) {
     await releaseSessionBackToAuthorised(orderRef);
     return { ok: false, error: err?.message || String(err) };
   }
+}
+
+export async function claimAndSettle(orderRef, telrRef, settleFn) {
+  const row = await claimSession(orderRef);
+  if (!row) {
+    return { ok: false, reason: "already-claimed-or-missing" };
+  }
+  return settleClaimedRow(orderRef, row, telrRef, settleFn);
+}
+
+/**
+ * Same atomic claim-then-settle as claimAndSettle(), but only for sessions
+ * already marked AUTHORISED. Used to gate the public /api/payment/* endpoints,
+ * whose caller is the customer's own browser and so can never be trusted to
+ * assert on its own that Telr authorised a charge - the stored AUTHORISED
+ * status (set only after the redirect/webhook handler independently re-checks
+ * with Telr) is the sole proof accepted here. PENDING is deliberately excluded
+ * (unlike claimAndSettle, whose callers have already re-verified with Telr
+ * directly before calling it, so a not-yet-synced PENDING row is still safe
+ * for them to settle).
+ */
+export async function claimAndSettlePublic(orderRef, telrRef, settleFn) {
+  const row = await claimSession(orderRef, ["AUTHORISED"]);
+  if (!row) {
+    return { ok: false, reason: "no-authorised-session-for-orderref" };
+  }
+  return settleClaimedRow(orderRef, row, telrRef, settleFn);
 }
 
 /**

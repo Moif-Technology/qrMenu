@@ -118,18 +118,16 @@ function PayFullButton({
   fullGrandTotal,
   disabled,
   className,
-  onPaymentComplete,
   brand,
   paidKotChildIds = [],
   lines = [],
   equalSplitInfo = null,
   onCardPay,
-  onRefreshData,
   serviceFeeAmount = 0,
   tipAmount = 0,
   showConfirm,
 }) {
-  const [processing, setProcessing] = useState(false);
+  const [processing] = useState(false);
   
   // Check if there's a custom split in progress (remainingBalance exists and is less than full total)
   const hasCustomSplitInProgress = remainingBalance !== null && fullGrandTotal !== null && remainingBalance < fullGrandTotal;
@@ -189,130 +187,31 @@ function PayFullButton({
       return;
     }
     
-    // If there's a custom split in progress (but not equal split), use custom split to pay the remaining balance
-    if (hasCustomSplitInProgress && !hasEqualSplitInProgress) {
+    // If there's a custom split or item split in progress, "Pay remaining
+    // balance" must go through Telr like every other charge - it must NEVER
+    // call processCustomSplit/processItemSplit directly, since that writes
+    // PAID to the KOT with no card ever charged. Routing through onCardPay
+    // (mode defaults to "pay-full") lets savePayFullPayment() do what it's
+    // already built for: auto-detect the existing split group (MethodID
+    // 2/3/4) and complete it with one final leg for exactly this remaining
+    // balance - same as the plain "no split" Pay Full case below.
+    if ((hasCustomSplitInProgress && !hasEqualSplitInProgress) || (hasItemSplitInProgress && !allItemsPaid)) {
       showConfirm(
         `Pay ${fmt(grandTotal)} AED?`,
         `This will pay the remaining balance and complete the payment.`,
-        async () => {
-      
-      try {
-        setProcessing(true);
-        const paymentPayload = {
-          billAmount: grandTotal,
-          paidAmount: grandTotal,
-          kotMasterID: kotMasterID,
-          tableId: tableId
-        };
-        const result = await processCustomSplit(paymentPayload);
-        
-        if (result.ok) {
-          // Check both uppercase and lowercase property names
-          const balance = result.balanceAmount || result.BalanceAmount || 0;
-          const paidStatus = result.paidStatus || result.PaidStatus || "PENDING";
-          
-          // If payment is complete (balance = 0), show payment complete screen
-          if (balance <= 0 && paidStatus === "PAID") {
-            if (onPaymentComplete) {
-              onPaymentComplete({
-                paymentId: result.paymentId,
-                amountPaid: grandTotal,
-                status: paidStatus
-              });
-            }
-          } else {
-            showToast(`Paid ${fmt(grandTotal)} AED · Remaining: ${fmt(result.balanceAmount)} AED`, "success", "Payment Successful");
-            if (onRefreshData) onRefreshData();
-          }
-        } else {
-          throw new Error(result.error || "Payment processing failed");
-        }
-      } catch (err) {
-        logError("Pay remaining balance error:", err);
-        const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-        showToast(errorMsg, "error", "Payment Failed");
-      } finally {
-        setProcessing(false);
-      }
-      },
-        { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
-      );
-    } else if (hasItemSplitInProgress && !allItemsPaid) {
-      // Item split in progress - pay for all remaining unpaid items
-      showConfirm(
-        `Pay ${fmt(grandTotal)} AED?`,
-        `This will pay for all remaining unpaid items and complete the payment.`,
-        async () => {
-      
-      try {
-        setProcessing(true);
-        // Get all unpaid items
-        const unpaidItems = lines
-          .filter(item => {
-            const kotChildId = item.KotChildID || item.kotChildID || item.kotChildId || null;
-            return !kotChildId || !paidKotChildIds.includes(Number(kotChildId));
-          })
-          .map(item => ({
-            kotChildId: item.KotChildID || item.kotChildID || item.kotChildId || null,
-            productId: item.ProductID || null,
-            qty: Number(item.Qty || 0),
-            unitPrice: Number(item.UnitPrice || 0),
-            tax: Number(item.Tax1AmountC || 0),
-            service: Number(item.ServiceFee || 0),
-            lineTotal: Number(item.LineTotal || 0),
-            desc: item.ShortDescription || `Item #${item.ProductID}`,
-            modifier: item.Modifier || null,
-          }));
-        
-        if (unpaidItems.length === 0) {
-          showToast("All items are already paid.", "info");
-          setProcessing(false);
-          return;
-        }
-        
-        const paymentPayload = {
-          items: unpaidItems,
-          tableId: tableId,
-          kotMasterID: kotMasterID,
-          totalBillAmount: fullGrandTotal // Use full grand total as original bill amount
-        };
-        const result = await processItemSplit(paymentPayload);
-        
-        if (result.ok) {
-          // Check both uppercase and lowercase property names
-          const balance = result.balanceAmount || result.BalanceAmount || 0;
-          const paidStatus = result.paidStatus || result.PaidStatus || "PENDING";
-          
-          // Always refresh paid items after item split payment (regardless of balance)
-          // The onRefreshData callback will refresh paid items via loadOrderData
-          // Call it to ensure paid items are updated in the UI
-          if (onRefreshData) {
-            onRefreshData();
-          }
-          
-          // If payment is complete (balance = 0), show payment complete screen
-          if (balance <= 0 && paidStatus === "PAID") {
-            if (onPaymentComplete) {
-              onPaymentComplete({
-                paymentId: result.paymentId,
-                amountPaid: result.PaidAmount || result.paidAmount || result.itemsPaid || grandTotal,
-                status: paidStatus
-              });
-            }
-          } else {
-            showToast(`Paid ${fmt(result.itemsPaid || grandTotal)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
-            if (onRefreshData) onRefreshData();
-          }
-        } else {
-          throw new Error(result.error || "Payment processing failed");
-        }
-      } catch (err) {
-        logError("Pay remaining items error:", err);
-        const errorMsg = err?.response?.data?.error || err.message || "Payment failed. Please try again.";
-        showToast(errorMsg, "error", "Payment Failed");
-      } finally {
-        setProcessing(false);
-      }
+        () => {
+          const feeAmt = Number(serviceFeeAmount) || 0;
+          const tip = Number(tipAmount) || 0;
+          onCardPay?.({
+            amount: Number(grandTotal),
+            billAmount: Number(grandTotal),
+            serviceFeeAmount: feeAmt,
+            tipAmount: tip,
+            tableId,
+            kotMasterID,
+            token,
+            brand,
+          });
         },
         { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
       );
@@ -566,7 +465,7 @@ export default function TableSummaryPremium() {
   }, [startTelrSession]);
 
   const completeSplitPaymentFromTelr = useCallback(
-    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, serviceFeeAmount = 0, tipAmount = 0 }) => {
+    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, orderRef, serviceFeeAmount = 0, tipAmount = 0 }) => {
       if (!mode || mode === "pay-full") return false;
       if (!splitPayload) return false;
 
@@ -583,8 +482,10 @@ export default function TableSummaryPremium() {
             amountPerPerson,
             numberOfPeople
           });
-          // Include sessionKey so backend can verify paidAmount vs Telr-verified amount
-          const result = await processEqualSplit({ ...paymentPayload, sessionKey: sessionKey || undefined, serviceFeeAmount, tipAmount });
+          // orderRef is mandatory server-side: the backend settles strictly from
+          // the Telr-authorised PaymentSession row it identifies, not from any
+          // amount in this payload (see payment.controller.js settleFromOrderRef).
+          const result = await processEqualSplit({ ...paymentPayload, sessionKey: sessionKey || undefined, orderRef, serviceFeeAmount, tipAmount });
 
           if (!result.ok) {
             throw new Error(result.error || "Equal split payment processing failed");
@@ -631,7 +532,7 @@ export default function TableSummaryPremium() {
             throw new Error("No items found in payment payload for item split payment");
           }
           
-          const result = await processItemSplit({ ...paymentPayload, serviceFeeAmount, tipAmount });
+          const result = await processItemSplit({ ...paymentPayload, orderRef, serviceFeeAmount, tipAmount });
           if (!result.ok) {
             throw new Error(result.error || "Item split payment processing failed");
           }
@@ -697,7 +598,7 @@ export default function TableSummaryPremium() {
 
         if (mode === "split-custom") {
           const { paymentPayload, paidAmount } = splitPayload;
-          const result = await processCustomSplit({ ...paymentPayload, serviceFeeAmount, tipAmount });
+          const result = await processCustomSplit({ ...paymentPayload, orderRef, serviceFeeAmount, tipAmount });
 
           if (!result.ok) {
             throw new Error(result.error || "Payment processing failed");
@@ -958,6 +859,9 @@ export default function TableSummaryPremium() {
                 splitPayload,
                 telrPaymentId: paymentIdValue,
                 amountPaid: Number.isFinite(amountPaid) ? amountPaid : undefined,
+                // orderRef identifies the Telr-authorised PaymentSession row the
+                // backend settles from - mandatory now (see settleFromOrderRef).
+                orderRef: orderRef || stored?.orderRef || null,
                 // Pass sessionKey so the backend can verify the paidAmount
                 // against what Telr actually charged (tamper protection)
                 sessionKey: sessionKeyParam || stored?.sessionKey || null,

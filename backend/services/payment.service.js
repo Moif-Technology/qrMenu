@@ -1727,3 +1727,106 @@ export async function getTableBalance(tableId, kotMasterID = null) {
     equalSplitInfo: balance > 0 ? equalSplitInfo : null
   };
 }
+
+/**
+ * Settle a split-mode payment (equal / custom / item) purely from a
+ * session-shaped payload (mode/billAmount/items/etc as captured server-side
+ * at /api/telr/create time) - never from anything a caller sends directly.
+ * Shared by the Telr redirect/webhook handlers (telr.routes.js) and by
+ * claimAndSettlePublic() (the guard in front of the public /api/payment/*
+ * endpoints - see paymentSessionStore.js). Never throws; callers dispatch on
+ * the returned { ok } flag.
+ */
+export async function settleSplitFromSession(session, telrRef) {
+  const mode = session?.mode || "pay-full";
+  const legPaidAmount = session?.billAmount ?? session?.amount;
+  const feeAmt = session?.serviceFeeAmount ?? 0;
+  const tipAmt = session?.tipAmount ?? 0;
+
+  try {
+    if (mode === "split-equal") {
+      const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+      if (!(legPaidAmount && fullBillAmount && session.numberOfPeople && (session.tableId || session.kotMasterID))) {
+        return { ok: false, error: "Missing data for equal split settlement" };
+      }
+      const result = await saveEqualSplitPayment({
+        billAmount: fullBillAmount,
+        paidAmount: legPaidAmount,
+        numberOfPeople: session.numberOfPeople,
+        kotMasterID: session.kotMasterID,
+        tableId: session.tableId,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    if (mode === "split-custom") {
+      const fullBillAmount = session.originalBillAmount ?? legPaidAmount;
+      if (!(legPaidAmount && (session.tableId || session.kotMasterID))) {
+        return { ok: false, error: "Missing data for custom split settlement" };
+      }
+      const result = await saveCustomSplitPayment({
+        billAmount: fullBillAmount,
+        paidAmount: legPaidAmount,
+        kotMasterID: session.kotMasterID,
+        tableId: session.tableId,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    if (mode === "split-items") {
+      if (!(Array.isArray(session.items) && session.items.length > 0 && session.kotMasterID)) {
+        return { ok: false, error: "Missing items for item split settlement" };
+      }
+      const result = await saveItemSplitPayment({
+        items: session.items,
+        tableId: session.tableId,
+        kotMasterID: session.kotMasterID,
+        totalBillAmount: session.originalBillAmount ?? legPaidAmount,
+        serviceFeeAmount: feeAmt,
+        tipAmount: tipAmt,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    }
+
+    return { ok: false, error: `Unknown split mode: ${mode}` };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Settle any mode (pay-full or split) from a session-shaped payload - the
+ * single dispatch point used by the DB-fallback recovery path
+ * (claimAndSettle) and by claimAndSettlePublic() guarding the public
+ * /api/payment/* endpoints. Both pass a payload built exclusively from the
+ * durable PaymentSession row, never from a client-supplied body.
+ */
+export async function settleAnyModeFromPayload(payload, telrRef) {
+  const mode = payload?.mode || "pay-full";
+  if (!mode || mode === "pay-full") {
+    if (!(payload?.amount && (payload?.tableId || payload?.kotMasterID))) {
+      return { ok: false, error: "Missing data for pay-full settlement" };
+    }
+    try {
+      const result = await savePayFullPayment({
+        billAmount: payload.billAmount ?? payload.amount,
+        tableId: payload.tableId,
+        kotMasterID: payload.kotMasterID,
+        serviceFeeAmount: payload.serviceFeeAmount,
+        tipAmount: payload.tipAmount,
+        ...telrRef,
+      });
+      return { ok: true, result };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+  return settleSplitFromSession(payload, telrRef);
+}
