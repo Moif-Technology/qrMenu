@@ -150,7 +150,17 @@ function PayFullButton({
 
   const handlePayFull = async () => {
     if (processing || disabled || grandTotal <= 0) return;
-    
+
+    // Snapshot the order's items now, before the Telr redirect - once payment
+    // settles the bill, /r/resolve stops returning line items for this KOT,
+    // so this is the last point where they're reliably available.
+    const itemsSnapshot = lines.map((it) => ({
+      name: it.ShortDescription || `Item #${it.ProductID}`,
+      qty: it.Qty,
+      unitPrice: it.UnitPrice,
+      total: it.LineTotal,
+    }));
+
     // If there's an equal split in progress, continue with equal split method
     if (hasEqualSplitInProgress && equalSplitInfo) {
       const numberOfPeople = equalSplitInfo.numberOfPeople || 1;
@@ -177,6 +187,7 @@ function PayFullButton({
           mode: "split-equal",
           numberOfPeople,
           originalBillAmount: fullGrandTotal,
+          items: itemsSnapshot,
           splitPayload: {
             paymentPayload,
             amountPerPerson: amountToCharge, // This payment: one person pays remaining
@@ -211,6 +222,7 @@ function PayFullButton({
             kotMasterID,
             token,
             brand,
+            items: itemsSnapshot,
           });
         },
         { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
@@ -230,6 +242,7 @@ function PayFullButton({
         kotMasterID,
         token,
         brand,
+        items: itemsSnapshot,
       });
     }
   };
@@ -275,6 +288,15 @@ export default function TableSummaryPremium() {
     brand: "Restaurant",
   });
   const [lines, setLines] = useState([]);
+  // Telr-return handling runs inside callbacks whose dependency arrays don't
+  // (and shouldn't) include `lines` - they'd need to be recreated every time
+  // order data refreshes. Without this ref, those callbacks close over the
+  // `lines` value from whenever they were last created (often still [] from
+  // initial mount), so the receipt's item list silently comes back empty.
+  const linesRef = useRef([]);
+  useEffect(() => {
+    linesRef.current = lines;
+  }, [lines]);
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [kotMasterID, setKotMasterID] = useState(null); // Store kotMasterID from order lines
   const [splitTransId, setSplitTransId] = useState(null); // Store TransID for split payments
@@ -430,6 +452,10 @@ export default function TableSummaryPremium() {
           token: payloadToken,
           mode: mode || "pay-full", // Ensure mode is always set
           splitPayload: splitPayload || null,
+          // Order item snapshot taken before the Telr redirect - once payment
+          // settles the bill, /r/resolve stops returning line items for this
+          // KOT, so the return handler can't rebuild this list from live data.
+          items: Array.isArray(items) && items.length > 0 ? items : null,
           createdAt: Date.now(),
         };
         sessionStorage.setItem("telr:lastSession", JSON.stringify(sessionData));
@@ -465,7 +491,7 @@ export default function TableSummaryPremium() {
   }, [startTelrSession]);
 
   const completeSplitPaymentFromTelr = useCallback(
-    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, orderRef, serviceFeeAmount = 0, tipAmount = 0 }) => {
+    async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, orderRef, serviceFeeAmount = 0, tipAmount = 0, items = null }) => {
       if (!mode || mode === "pay-full") return false;
       if (!splitPayload) return false;
 
@@ -503,6 +529,20 @@ export default function TableSummaryPremium() {
               paymentId: telrPaymentId || result.paymentId,
               amountPaid: paidValue,
               status: paidStatus,
+              mode: "split-equal",
+              serviceFeeAmount,
+              tipAmount,
+              tableLabel: meta.tableName || (meta.tableNo ? `Table ${meta.tableNo}` : null),
+              brand: meta.brand,
+              splitInfo: { numberOfPeople, amountPerPerson: amountPerPerson || paidValue },
+              items:
+                items ||
+                linesRef.current.map((it) => ({
+                  name: it.ShortDescription || `Item #${it.ProductID}`,
+                  qty: it.Qty,
+                  unitPrice: it.UnitPrice,
+                  total: it.LineTotal,
+                })),
             });
           } else {
             showToast(`Paid ${fmt(paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
@@ -575,6 +615,17 @@ export default function TableSummaryPremium() {
               paymentId: telrPaymentId || result.paymentId,
               amountPaid: paidValue,
               status: paidStatus,
+              mode: "split-items",
+              serviceFeeAmount,
+              tipAmount,
+              tableLabel: meta.tableName || (meta.tableNo ? `Table ${meta.tableNo}` : null),
+              brand: meta.brand,
+              items: (paymentPayload.items || []).map((it) => ({
+                name: it.desc || `Item #${it.productId ?? ""}`,
+                qty: it.qty,
+                unitPrice: it.unitPrice,
+                total: it.lineTotal,
+              })),
             });
           } else {
             showToast(`Paid ${fmt(paidValue)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
@@ -622,6 +673,19 @@ export default function TableSummaryPremium() {
               status: paidStatus,
               totalPaid,
               billAmount: result.originalBillAmount || result.billAmount || result.BillAmount,
+              mode: "split-custom",
+              serviceFeeAmount,
+              tipAmount,
+              tableLabel: meta.tableName || (meta.tableNo ? `Table ${meta.tableNo}` : null),
+              brand: meta.brand,
+              items:
+                items ||
+                linesRef.current.map((it) => ({
+                  name: it.ShortDescription || `Item #${it.ProductID}`,
+                  qty: it.Qty,
+                  unitPrice: it.UnitPrice,
+                  total: it.LineTotal,
+                })),
             });
             setRemainingBalance(null);
             setSplitTransId(null);
@@ -820,6 +884,20 @@ export default function TableSummaryPremium() {
                   paymentId: paymentIdValue,
                   amountPaid: paidValue,
                   status: paidStatus,
+                  mode: actualMode,
+                  serviceFeeAmount: stored?.serviceFeeAmount || 0,
+                  tipAmount: stored?.tipAmount || 0,
+                  tableLabel: meta.tableName || (meta.tableNo ? `Table ${meta.tableNo}` : null),
+                  brand: meta.brand,
+                  items:
+                    actualMode === "split-items" && splitPayload?.paymentPayload?.items
+                      ? splitPayload.paymentPayload.items.map((it) => ({
+                          name: it.desc || `Item #${it.productId ?? ""}`,
+                          qty: it.qty,
+                          unitPrice: it.unitPrice,
+                          total: it.lineTotal,
+                        }))
+                      : null,
                 });
               } else {
                 showToast(`Paid ${fmt(paidValue || 0)} AED · Remaining: ${fmt(balance)} AED`, "success", "Payment Successful");
@@ -868,6 +946,7 @@ export default function TableSummaryPremium() {
                 // Server-recomputed fee charged for this leg (see startTelrSession)
                 serviceFeeAmount: stored?.serviceFeeAmount || 0,
                 tipAmount: stored?.tipAmount || 0,
+                items: stored?.items || null,
               });
               // If split payment has balance, don't do anything else - stay on page
               // The completeSplitPaymentFromTelr already handled the balance display
@@ -890,6 +969,19 @@ export default function TableSummaryPremium() {
                 billAmount: Number.isFinite(amountPaid) ? amountPaid : undefined,
                 status: "PAID",
                 telrOrderRef: orderRef || telrData?.order?.ref || stored?.orderRef,
+                mode: "pay-full",
+                serviceFeeAmount: stored?.serviceFeeAmount || 0,
+                tipAmount: stored?.tipAmount || 0,
+                tableLabel: meta.tableName || (meta.tableNo ? `Table ${meta.tableNo}` : null),
+                brand: meta.brand,
+                items:
+                  stored?.items ||
+                  linesRef.current.map((it) => ({
+                    name: it.ShortDescription || `Item #${it.ProductID}`,
+                    qty: it.Qty,
+                    unitPrice: it.UnitPrice,
+                    total: it.LineTotal,
+                  })),
               });
             }
           }
@@ -1836,6 +1928,12 @@ export default function TableSummaryPremium() {
                 brand: meta.brand,
                 numberOfPeople,
                 originalBillAmount,
+                items: lines.map((it) => ({
+                  name: it.ShortDescription || `Item #${it.ProductID}`,
+                  qty: it.Qty,
+                  unitPrice: it.UnitPrice,
+                  total: it.LineTotal,
+                })),
                 splitPayload: { paymentPayload, amountPerPerson, numberOfPeople },
               });
             } catch (err) {
@@ -1945,6 +2043,12 @@ export default function TableSummaryPremium() {
                 token,
                 brand: meta.brand,
                 originalBillAmount: grand,
+                items: lines.map((it) => ({
+                  name: it.ShortDescription || `Item #${it.ProductID}`,
+                  qty: it.Qty,
+                  unitPrice: it.UnitPrice,
+                  total: it.LineTotal,
+                })),
                 splitPayload: { paymentPayload, paidAmount },
               });
             } catch (err) {

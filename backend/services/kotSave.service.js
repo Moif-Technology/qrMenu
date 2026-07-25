@@ -380,9 +380,14 @@ export async function saveKot(payload) {
         SET ${q("SubTotalM")} = ${q("SubTotalM")} + @SubTotalM,
             ${q("Tax1AmountM")} = ${q("Tax1AmountM")} + @Tax1AmountM,
             ${q("Amount")} = ${q("Amount")} + @Amount,
+            -- New items raise the bill total above, so the still-owed-online
+            -- figure must grow with it here too - otherwise it stays frozen
+            -- at its pre-addition value and POS's Split Payment screen ends up
+            -- treating newly added, never-paid items as already covered online.
+            ${q("QrBalanceAmount")} = (${q("Amount")} + @Amount) - ISNULL(${q("QrPaidAmount")}, 0),
             ${q("ModBy")} = @ModBy,
             ${q("ModOn")} = GETDATE(),
-            ${q("Remarks")} = CASE 
+            ${q("Remarks")} = CASE
               WHEN @Remarks = '' THEN ${q("Remarks")}
               ELSE ${q("Remarks")} + CHAR(13) + CHAR(10) + @Remarks
             END
