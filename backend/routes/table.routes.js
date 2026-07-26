@@ -9,13 +9,15 @@ const router = Router();
 // Query to get all unpaid orders for display (regardless of acceptance status)
 // Note: We'll filter out fully paid orders by checking Payment table separately
 const LIST_SQL = `
-SELECT 
+SELECT
   km.kotMasterID,
   km.KotStatus,
   kc.AndroidPrint,
   ISNULL(km.BillID, 0)    AS BillID,
   km.TableID,
   km.CrOn,
+  km.Amount               AS KotAmount,
+  ISNULL(km.BillDiscount, 0) AS BillDiscount,
   kc.KotChildID,
   kc.ProductID,
   kc.ShortDescription,
@@ -32,6 +34,15 @@ WHERE km.TableID = @TableID
   AND ISNULL(km.KotStatus, '') <> 'CANCELLED'
 ORDER BY km.kotMasterID, kc.KotChildID;
 `;
+
+// A POS-applied bill discount lives only on KOTMaster (BillDiscount, applied
+// pre-tax on the subtotal) and is already baked into KOTMaster.Amount - but the
+// QR menu builds its total by summing KOTChild.LineTotal, which is NOT
+// discounted, so the guest gets overcharged. (Item-level discounts already sit
+// inside each LineTotal, so those are fine.) We surface KotAmount + BillDiscount
+// per line (both are KOTMaster-level, repeated on each child row here) and the
+// frontend uses them to show a discount line and land the total on Amount.
+// Nothing is scaled here - the raw item prices are preserved for display.
 
 /**
  * GET /api/tables/by-area/:areaId

@@ -178,8 +178,16 @@ function PayFullButton({
       };
       
       if (onCardPay) {
+        // Carry the tip (and fee) the guest chose on THIS "Pay remaining"
+        // screen - without these, the split-equal branch dropped the tip
+        // entirely (it returns below before reaching the pay-full branches
+        // that pass them), so a tip added here never reached Telr/the DB.
+        const feeAmt = Number(serviceFeeAmount) || 0;
+        const tip = Number(tipAmount) || 0;
         onCardPay({
           amount: amountToCharge,
+          serviceFeeAmount: feeAmt,
+          tipAmount: tip,
           tableId,
           kotMasterID,
           token,
@@ -1057,9 +1065,28 @@ export default function TableSummaryPremium() {
   //                      → Custom LOCKED (item-based vs amount-based conflict)
   //                      → Item   OPEN   (continue picking items)
 
-  // Full bill total (for lock rules; same value as fullGrand used later)
+  // Full bill total (for lock rules; same value as fullGrand used later).
+  // Must use the discounted KOTMaster.Amount when a POS bill discount exists,
+  // so split detection compares against the same discounted total the backend's
+  // remainingBalance is derived from - otherwise a discounted-but-fully-paid
+  // bill could look like a partial (custom) split.
   const fullGrandTotal = useMemo(
-    () => lines.reduce((a, x) => a + (Number(x.LineTotal) || 0) + (Number(x.ServiceFee) || 0), 0),
+    () => {
+      const seen = new Set();
+      let sumLine = 0, sumKotAmount = 0, sumDiscount = 0, svc = 0;
+      for (const x of lines) {
+        sumLine += Number(x.LineTotal) || 0;
+        svc += Number(x.ServiceFee) || 0;
+        const kotId = x.kotMasterID ?? x.kotMasterId ?? x.KotMasterID;
+        if (kotId != null && !seen.has(kotId)) {
+          seen.add(kotId);
+          sumKotAmount += Number(x.KotAmount) || 0;
+          sumDiscount += Number(x.BillDiscount) || 0;
+        }
+      }
+      const billTotal = (sumDiscount > 0 && sumKotAmount > 0) ? sumKotAmount : sumLine;
+      return billTotal + svc;
+    },
     [lines]
   );
 
@@ -1328,31 +1355,53 @@ export default function TableSummaryPremium() {
     loadOrderData();
   }, [loadOrderData]);
 
-  // Auto-refresh only while the order is waiting to become payable.
-  // Once payment is enabled, repeated polling can exhaust the backend rate limit.
+  // Auto-refresh every 10s, even after the order is payable, so POS-side
+  // changes (bill discount applied, items added/removed) show without a manual
+  // refresh. Only fires while the tab is visible, so a backgrounded phone makes
+  // no calls. /r/resolve allows 300 req/min per IP - 6/min here is well under.
   useEffect(() => {
-    if (canPay || lines.length === 0 || loading) return;
+    if (lines.length === 0 || loading) return;
     const tick = () => {
       if (document.visibilityState === "visible") loadOrderData();
     };
-    const interval = setInterval(tick, 15000);
+    const interval = setInterval(tick, 10000);
     return () => clearInterval(interval);
-  }, [canPay, lines.length, loading, loadOrderData]);
+  }, [lines.length, loading, loadOrderData]);
 
   const totals = useMemo(
-    () =>
-      lines.reduce(
+    () => {
+      const seenKots = new Set();
+      return lines.reduce(
         (a, x) => {
           a.sub += Number(x.Qty || 0) * Number(x.UnitPrice || 0);
           a.tax += Number(x.Tax1AmountC || 0);
           a.svc += Number(x.ServiceFee || 0);
           a.sum += Number(x.LineTotal || 0);
+          // KotAmount (KOTMaster.Amount, already discounted) and BillDiscount are
+          // master-level values repeated on every child line - count once per KOT.
+          const kotId = x.kotMasterID ?? x.kotMasterId ?? x.KotMasterID;
+          if (kotId != null && !seenKots.has(kotId)) {
+            seenKots.add(kotId);
+            a.kotAmount += Number(x.KotAmount || 0);
+            a.discount += Number(x.BillDiscount || 0);
+          }
           return a;
         },
-        { sub: 0, tax: 0, svc: 0, sum: 0 }
-      ),
+        { sub: 0, tax: 0, svc: 0, sum: 0, kotAmount: 0, discount: 0 }
+      );
+    },
     [lines]
   );
+
+  // A POS bill discount lives only on KOTMaster (pre-tax, on the subtotal) and
+  // is already baked into KOTMaster.Amount. When present, the payable total is
+  // that discounted Amount - NOT the sum of un-discounted line totals - and tax
+  // = total − discounted subtotal. No discount → behaves exactly as before.
+  const billHasDiscount = totals.discount > 0 && totals.kotAmount > 0;
+  const billTotalAmount = billHasDiscount ? totals.kotAmount : totals.sum;
+  const displayTax = billHasDiscount
+    ? Math.max(0, billTotalAmount - (totals.sub - totals.discount))
+    : totals.tax;
 
   // Calculate unpaid items totals (for item split payments)
   const unpaidTotals = useMemo(
@@ -1382,7 +1431,7 @@ export default function TableSummaryPremium() {
     [lines, paidKotChildIds, totals]
   );
 
-  const fullGrand = totals.sum + totals.svc;
+  const fullGrand = billTotalAmount + totals.svc;
   
   // Calculate unpaid grand total (for item split payments)
   const unpaidGrand = unpaidTotals.sum + unpaidTotals.svc;
@@ -1546,6 +1595,11 @@ export default function TableSummaryPremium() {
               </span>
               <span className="text-[13px] text-gray-500">AED</span>
             </div>
+            {billHasDiscount && (
+              <div className="mt-0.5 text-[11px] text-green-600">
+                Bill discount applied −{fmt(totals.discount)} AED
+              </div>
+            )}
             {tipAmount > 0 && (
               <div className="mt-0.5 text-[11px] text-gray-500">
                 Includes {fmt(tipAmount)} AED tip
@@ -1567,7 +1621,7 @@ export default function TableSummaryPremium() {
               >
                 <div className="text-[11px] text-gray-500 mb-1">Tax</div>
                 <div className="text-sm font-semibold text-gray-900">
-                  {fmt(totals.tax)}
+                  {fmt(displayTax)}
                 </div>
               </div>
               <div

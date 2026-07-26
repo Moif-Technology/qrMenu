@@ -54,12 +54,12 @@ const PLATFORM_FEE_AMOUNT = 0.525;
 function buildPaymentInsertSql(includeTableId = false, includeFee = false) {
   const baseFields = [
     q("PaymentID"), q("ShopID"), q("TransID"), q("MethodID"),
-    q("BillAmount"), q("PaidAmount"), q("BalanceAmount"), q("PaidStatus"),
+    q("BillAmount"), q("PaidAmount"), q("PaidBillAmount"), q("BalanceAmount"), q("PaidStatus"),
     q("PlatformFeeAmount"), q("OrderRef"), q("TranRef"), q("AuthCode"), q("CreatedAt")
   ];
   const baseParams = [
     "@PaymentID", "@ShopID", "@TransID", "@MethodID",
-    "@BillAmount", "@PaidAmount", "@BalanceAmount", "@PaidStatus",
+    "@BillAmount", "@PaidAmount", "@PaidBillAmount", "@BalanceAmount", "@PaidStatus",
     "@PlatformFeeAmount", "@OrderRef", "@TranRef", "@AuthCode", "GETDATE()"
   ];
 
@@ -371,6 +371,7 @@ export async function savePayFullPayment(payload) {
         insertReq.input("MethodID", mssql.BigInt, existingMethodID);
         insertReq.input("BillAmount", mssql.Money, originalBillAmount);
         insertReq.input("PaidAmount", mssql.Money, legTotalCharged); // real charge: bill share + fee + tip
+        insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
         insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
         insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
         insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -443,6 +444,7 @@ export async function savePayFullPayment(payload) {
       paymentData.TableID = toInt(tableId);
     }
 
+    req.input("PaidBillAmount", mssql.Money, r2(billAmt)); // bill share only, no fee/tip
     req.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
     req.input("ServiceFeeAmount", mssql.Money, feeAmt);
     req.input("TipAmount", mssql.Money, tipAmt);
@@ -639,6 +641,7 @@ export async function saveEqualSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, groupMethodID);
       insertReq.input("BillAmount", mssql.Money, billAmountToUse);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -679,6 +682,7 @@ export async function saveEqualSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, 2);
       insertReq.input("BillAmount", mssql.Money, billAmt);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -865,6 +869,7 @@ export async function saveCustomSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, groupMethodID);
       insertReq.input("BillAmount", mssql.Money, originalBillAmount);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -900,6 +905,7 @@ export async function saveCustomSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, 4);
       insertReq.input("BillAmount", mssql.Money, originalBillAmount);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -1219,6 +1225,7 @@ export async function saveItemSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, 3);
       insertReq.input("BillAmount", mssql.Money, billAmountToUse);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);
@@ -1256,6 +1263,7 @@ export async function saveItemSplitPayment(payload) {
       insertReq.input("MethodID", mssql.BigInt, 3);
       insertReq.input("BillAmount", mssql.Money, originalBillAmount);
       insertReq.input("PaidAmount", mssql.Money, legTotalCharged);
+      insertReq.input("PaidBillAmount", mssql.Money, r2(legTotalCharged - feeAmt - tipAmt)); // bill share only, no fee/tip
       insertReq.input("BalanceAmount", mssql.Money, newBalanceAmount);
       insertReq.input("PaidStatus", mssql.VarChar(50), paidStatus);
       insertReq.input("PlatformFeeAmount", mssql.Money, PLATFORM_FEE_AMOUNT);

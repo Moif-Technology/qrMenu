@@ -11,32 +11,52 @@ export default function SplitPickItemsSheet({
   onRemoveSplit,       // optional: () => void
   serviceFeeRate = 0,
 }) {
-  // selected count per line (0..Qty)
-  const [pick, setPick] = useState([]);
+  // Selected count keyed by kotChildId (NOT array index) so a background
+  // refresh of `items` can't lose or misalign the guest's selection.
+  const [pick, setPick] = useState({}); // { [kotChildId]: count }
   const [tipPreset, setTipPreset] = useState(null); // number | "roundup" | "custom" | null
   const [customTip, setCustomTip] = useState("");
 
+  // Stable per-line key. KOTChild rows always carry a KotChildID; index is only
+  // a last-resort fallback for a row that somehow lacks one.
+  const keyOf = (row, i) =>
+    String(row?.KotChildID ?? row?.kotChildID ?? row?.kotChildId ?? `idx-${i}`);
+
+  // Reconcile selection when items/paid change (e.g. the 10s auto-refresh, or
+  // another guest paying an item). Preserve every still-present, unpaid pick -
+  // clamped to the item's current Qty - and drop only items that vanished or
+  // just got paid. Never blanket-reset, which would wipe an in-progress choice.
   useEffect(() => {
-    // Initialize pick array - set to 0 for all items
-    // Paid items will be disabled but can't be selected
-    setPick(items.map(() => 0));
+    setPick((prev) => {
+      const next = {};
+      items.forEach((row, i) => {
+        const kotChildId = row.KotChildID || row.kotChildID || row.kotChildId || null;
+        const isPaid = kotChildId && paidKotChildIds.includes(Number(kotChildId));
+        if (isPaid) return; // drop paid items from selection
+        const k = keyOf(row, i);
+        const prevVal = Number(prev[k] || 0);
+        if (prevVal > 0) {
+          const max = Math.max(0, Number(row.Qty || 0));
+          next[k] = Math.min(prevVal, max);
+        }
+      });
+      return next;
+    });
   }, [items, paidKotChildIds]);
 
   const setQty = (i, v) => {
-    const max = Math.max(0, Number(items[i]?.Qty || 0));
+    const row = items[i];
+    const k = keyOf(row, i);
+    const max = Math.max(0, Number(row?.Qty || 0));
     const val = Math.min(Math.max(0, v), max);
-    setPick((p) => {
-      const next = p.slice();
-      next[i] = val;
-      return next;
-    });
+    setPick((p) => ({ ...p, [k]: val }));
   };
 
   // compute "Your share" from selected units (unit price + per-unit tax + per-unit service)
   const share = useMemo(() => {
     let total = 0;
     items.forEach((row, i) => {
-      const sel = Number(pick[i] || 0);
+      const sel = Number(pick[keyOf(row, i)] || 0);
       if (!sel) return;
 
       const q  = Number(row.Qty || 0) || 1;
@@ -65,7 +85,7 @@ export default function SplitPickItemsSheet({
   const makePayload = () => {
     const out = [];
     items.forEach((row, i) => {
-      const sel = Number(pick[i] || 0);
+      const sel = Number(pick[keyOf(row, i)] || 0);
       if (!sel) return;
       
       // Skip if item is already paid
@@ -98,7 +118,7 @@ export default function SplitPickItemsSheet({
     const title = row.ShortDescription || `Item #${row.ProductID}`;
     const price = Number(row.UnitPrice || 0);
     const max   = Math.max(0, Number(row.Qty || 0));
-    const sel   = Number(pick[i] || 0);
+    const sel   = Number(pick[keyOf(row, i)] || 0);
     
     // Check if this item is already paid
     const kotChildId = row.KotChildID || row.kotChildID || row.kotChildId || null;
@@ -287,7 +307,7 @@ export default function SplitPickItemsSheet({
               <button
                 onClick={() => {
                   if (onRemoveSplit) onRemoveSplit();
-                  setPick(items.map(() => 0));
+                  setPick({});
                 }}
                 className="flex-1 h-12 rounded-full bg-rose-50 text-rose-600 font-semibold"
               >
