@@ -320,20 +320,28 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
  */
 router.get("/batches", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
+    // JOIN Payment for the money/date detail (gross charged, txn dates). The
+    // PayoutStatus row is 1:1 with a Payment, so COUNT/SUM cardinality is safe.
     const rows = await query(`
       SELECT
-        BatchNo,
-        COUNT(*)                                                      AS txnCount,
-        SUM(Amount)                                                   AS totalAmount,
-        COUNT(DISTINCT ShopID)                                        AS restaurantCount,
-        MAX(UpdatedAt)                                                AS lastUpdatedAt,
-        SUM(CASE WHEN Status = 'PROCESSING' THEN 1 ELSE 0 END)        AS processingCount,
-        SUM(CASE WHEN Status = 'SCHEDULED'  THEN 1 ELSE 0 END)        AS scheduledCount,
-        SUM(CASE WHEN Status = 'TRANSFERRED' THEN 1 ELSE 0 END)       AS transferredCount
-      FROM dbo.PayoutStatus
-      WHERE BatchNo IS NOT NULL
-      GROUP BY BatchNo
-      ORDER BY BatchNo DESC
+        ps.BatchNo,
+        COUNT(*)                                                         AS txnCount,
+        SUM(ps.Amount)                                                   AS totalAmount,
+        ISNULL(SUM(p.PaidAmount), 0)                                     AS totalTxnAmount,
+        COUNT(DISTINCT ps.ShopID)                                        AS restaurantCount,
+        MAX(ps.UpdatedAt)                                                AS lastUpdatedAt,
+        MIN(p.CreatedAt)                                                 AS firstTxnAt,
+        MAX(p.CreatedAt)                                                 AS lastTxnAt,
+        MAX(ps.TransferDate)                                             AS transferDate,
+        MAX(ps.ScheduledDate)                                            AS scheduledDate,
+        SUM(CASE WHEN ps.Status = 'PROCESSING' THEN 1 ELSE 0 END)        AS processingCount,
+        SUM(CASE WHEN ps.Status = 'SCHEDULED'  THEN 1 ELSE 0 END)        AS scheduledCount,
+        SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN 1 ELSE 0 END)       AS transferredCount
+      FROM dbo.PayoutStatus ps
+      LEFT JOIN dbo.Payment p ON p.PaymentID = ps.PaymentID
+      WHERE ps.BatchNo IS NOT NULL
+      GROUP BY ps.BatchNo
+      ORDER BY ps.BatchNo DESC
     `);
     const batches = rows.map((r) => {
       const txnCount = Number(r.txnCount);
@@ -348,7 +356,17 @@ router.get("/batches", requireAuth, requireSuperAdmin, async (req, res) => {
       return {
         batchNo: Number(r.BatchNo),
         txnCount,
+        // totalAmount = net payout total (PayoutStatus.Amount); totalTxnAmount =
+        // gross charged (Payment.PaidAmount). serviceFee/tax are 0 placeholders
+        // until a confirmed source is wired.
         totalAmount: Number(r.totalAmount),
+        totalTxnAmount: Number(r.totalTxnAmount),
+        serviceFee: 0,
+        tax: 0,
+        firstTxnAt: r.firstTxnAt,
+        lastTxnAt: r.lastTxnAt,
+        transferDate: r.transferDate || null,
+        scheduledDate: r.scheduledDate || null,
         restaurantCount: Number(r.restaurantCount),
         lastUpdatedAt: r.lastUpdatedAt,
         processingCount,
@@ -360,6 +378,76 @@ router.get("/batches", requireAuth, requireSuperAdmin, async (req, res) => {
     res.json({ ok: true, batches });
   } catch (err) {
     console.error("[PAYOUT:PAYOUT] List batches error:", err.message);
+    res.status(500).json({ ok: false, error: "Failed to load batches" });
+  }
+});
+
+/**
+ * GET /api/payout/payouts/my-batches
+ * Restaurant-facing batch settlement view (Telr-balance style). Scoped hard to
+ * the caller's own shop. Money is framed as the restaurant sees it:
+ *   gross  = paidBillAmount + tip  (= PaidAmount - service fee, so the service
+ *            fee DeynoQR keeps never appears)
+ *   fees   = platform fee (the only cut the restaurant is shown)
+ *   tax    = 0 placeholder until a confirmed source is wired
+ *   payout = gross - fees  (what actually lands in their bank)
+ */
+router.get("/my-batches", requireAuth, async (req, res) => {
+  try {
+    const shopId = req.user.role === "restaurant" ? req.user.shopId : Number(req.query.shopId);
+    if (!Number.isFinite(Number(shopId))) {
+      return res.status(400).json({ ok: false, error: "shopId required" });
+    }
+    const rows = await query(
+      `
+      SELECT
+        ps.BatchNo,
+        COUNT(*)                                                         AS txnCount,
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0)), 0)     AS gross,
+        ISNULL(SUM(p.PlatformFeeAmount), 0)                             AS fees,
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - p.PlatformFeeAmount), 0) AS payoutAmount,
+        MIN(p.CreatedAt)                                                 AS firstTxnAt,
+        MAX(p.CreatedAt)                                                 AS lastTxnAt,
+        MAX(ps.TransferDate)                                             AS transferDate,
+        MAX(ps.ScheduledDate)                                            AS scheduledDate,
+        SUM(CASE WHEN ps.Status = 'PROCESSING'  THEN 1 ELSE 0 END)       AS processingCount,
+        SUM(CASE WHEN ps.Status = 'SCHEDULED'   THEN 1 ELSE 0 END)       AS scheduledCount,
+        SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN 1 ELSE 0 END)       AS transferredCount
+      FROM dbo.PayoutStatus ps
+      INNER JOIN dbo.Payment p ON p.PaymentID = ps.PaymentID
+      WHERE ps.BatchNo IS NOT NULL AND ps.ShopID = @shopId
+      GROUP BY ps.BatchNo
+      ORDER BY ps.BatchNo DESC
+      `,
+      { shopId: { type: mssql.BigInt, value: Number(shopId) } }
+    );
+    const batches = rows.map((r) => {
+      const txnCount = Number(r.txnCount);
+      const transferredCount = Number(r.transferredCount);
+      const scheduledCount = Number(r.scheduledCount);
+      const processingCount = Number(r.processingCount);
+      const status =
+        transferredCount === txnCount ? "TRANSFERRED" :
+        transferredCount > 0 ? "MIXED" :
+        scheduledCount === txnCount ? "SCHEDULED" :
+        processingCount === txnCount ? "PROCESSING" : "PENDING";
+      return {
+        batchNo: Number(r.BatchNo),
+        txnCount,
+        gross: Number(r.gross),
+        fees: Number(r.fees),
+        tax: 0,
+        payoutAmount: Number(r.payoutAmount),
+        firstTxnAt: r.firstTxnAt,
+        lastTxnAt: r.lastTxnAt,
+        transferDate: r.transferDate || null,
+        scheduledDate: r.scheduledDate || null,
+        status
+      };
+    });
+    res.json({ ok: true, batches });
+  } catch (err) {
+    console.error("[PAYOUT:PAYOUT] List my-batches error:", err.message);
     res.status(500).json({ ok: false, error: "Failed to load batches" });
   }
 });

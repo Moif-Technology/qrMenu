@@ -180,7 +180,7 @@ export async function settleKotToSales(kotMasterID, opts = {}) {
     smReq.input("BalancePaid",            mssql.Money,            0);
     smReq.input("TransactionType",        mssql.VarChar(1),       "S");
     smReq.input("PaidCurrency",           mssql.VarChar(50),      "AED");
-    smReq.input("StationID",             mssql.BigInt,           toInt(km.StationID, 0));
+    smReq.input("StationID",             mssql.BigInt,           10);
     smReq.input("DBLocation",             mssql.VarChar(50),      "0");
     smReq.input("UploadStatusM",          mssql.VarChar(50),      "PENDING");
     smReq.input("CounterCloseStatus",     mssql.VarChar(50),      "PENDING");

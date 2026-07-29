@@ -162,8 +162,9 @@ async function queryTransactions(req, { paginate = true } = {}) {
           'P'                      AS Kind,
           p.ShopID, p.TransID, p.MethodID,
           CAST(NULL AS VARCHAR(30)) AS ModeName,
-          p.BillAmount, p.PaidAmount, p.BalanceAmount, p.PaidStatus,
+          p.BillAmount, p.PaidAmount, p.PaidBillAmount, p.BalanceAmount, p.PaidStatus,
           p.TableID, tm.TableNO AS TableNo, p.CreatedAt,
+          sm.BillNo AS BillNo,
           CAST(NULL AS NVARCHAR(100)) AS OrderRef,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
@@ -181,6 +182,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
         LEFT JOIN Moifcore.dbo.TableMaster tm ON tm.TableID = p.TableID
+        LEFT JOIN Moifcore.dbo.SalesMaster sm ON sm.SalesID = p.SalesID
         ${whereClause}
 
         UNION ALL
@@ -193,9 +195,11 @@ async function queryTransactions(req, { paginate = true } = {}) {
           a.Mode                   AS ModeName,
           a.Amount                 AS BillAmount,
           CAST(0 AS MONEY)         AS PaidAmount,
+          CAST(0 AS MONEY)         AS PaidBillAmount,
           a.Amount                 AS BalanceAmount,
           a.Status                 AS PaidStatus,
           a.TableID, tm2.TableNO AS TableNo, a.CreatedAt,
+          CAST(NULL AS NUMERIC(18,0)) AS BillNo,
           a.OrderRef,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
@@ -228,12 +232,14 @@ async function queryTransactions(req, { paginate = true } = {}) {
         restaurantName: r.RestaurantName || `Shop ${r.ShopID}`,
         restaurantSlug: r.RestaurantSlug || null,
         kotMasterId: r.TransID != null ? Number(r.TransID) : null,
+        billNo: r.BillNo != null ? Number(r.BillNo) : null,
         methodId: r.MethodID != null ? Number(r.MethodID) : null,
         methodName: failed
           ? MODE_LABELS[r.ModeName] || "Telr"
           : METHOD_NAMES[Number(r.MethodID)] || `Method ${r.MethodID}`,
         billAmount: Number(r.BillAmount),
         paidAmount: Number(r.PaidAmount),
+        paidBillAmount: failed ? null : Number(r.PaidBillAmount),
         balanceAmount: Number(r.BalanceAmount),
         serviceFeeAmount: failed ? null : Number(r.ServiceFeeAmount),
         tipAmount: failed ? null : Number(r.TipAmount),
@@ -246,6 +252,8 @@ async function queryTransactions(req, { paginate = true } = {}) {
         // TableID is TableMaster's internal PK from the QR token; TableNo is
         // the physical table number printed on receipts - show that instead,
         // falling back to the raw ID if the table row is gone.
+        tableMasterId: r.TableID != null ? Number(r.TableID) : null,
+        tableNo: r.TableNo != null ? Number(r.TableNo) : null,
         tableId: r.TableNo != null ? Number(r.TableNo) : (r.TableID != null ? Number(r.TableID) : null),
         createdAt: r.CreatedAt,
         payout: failed

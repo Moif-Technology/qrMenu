@@ -13,6 +13,10 @@ const CURRENCY = "AED";
 const fmt = (n) =>
   Number(n || 0).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Round half-up to 2 decimals so a fee like 0.525 shows as 0.53, not 0.52
+// (the EPSILON nudge fixes float repr where 0.525*100 lands just under 52.5).
+const r2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
 // CreatedAt comes from the backend as a "wall clock tagged UTC" ISO string
 // (see backend/utils/payoutDates.js) - timeZone: "UTC" reads those digits
 // back literally instead of re-converting them into the viewer's local time.
@@ -39,6 +43,35 @@ function getNextPayoutDate() {
 
 const fmtPayoutDate = (d) =>
   d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+
+const fmtExportPayoutDate = (row) => {
+  const date = row.payout?.transferDate || row.payout?.scheduledDate;
+  if (!date) return "-";
+  const dt = new Date(date);
+  return Number.isNaN(dt.getTime())
+    ? "-"
+    : dt.toLocaleDateString("en-AE", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+};
+
+// Date-only (no time) for batch settlement rows, UTC-literal like fmtDate.
+const fmtDay = (d) => {
+  if (!d) return "-";
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? "-" : dt.toLocaleDateString("en-AE", {
+    day: "2-digit", month: "short", year: "numeric", timeZone: "UTC"
+  });
+};
+
+// A batch spans many transactions - collapse to a single day or a range.
+const fmtTxnRange = (from, to) => {
+  const s = fmtDay(from);
+  const e = fmtDay(to);
+  if (s === "-") return e;
+  return s === e ? s : `${s} – ${e}`;
+};
+
+// Payout (value) date: real transfer date once paid, else the scheduled Tuesday.
+const fmtValueDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
 const PAYOUT_BADGE = {
   TRANSFERRED: { label: "Paid to you", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -114,6 +147,119 @@ function RangeField({ label, idPrefix, date, time, onDate, onTime }) {
   );
 }
 
+// Bottom sheet: a batch's full transaction list, restaurant-framed (gross =
+// bill share + tip, platform fee shown, service fee never shown).
+function BatchDetailSheet({ batch, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [txns, setTxns] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    api.get("/transactions", { params: { batch: batch.batchNo, pageSize: 500 } })
+      .then(({ data }) => { if (alive) setTxns(data.transactions || []); })
+      .catch(() => { if (alive) setTxns([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [batch.batchNo]);
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-zinc-950/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-x-0 bottom-0 flex justify-center">
+        <div className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-t-3xl bg-white border-t border-zinc-200 shadow-2xl">
+          <div className="pt-3 shrink-0">
+            <div className="mx-auto h-1.5 w-12 rounded-full bg-zinc-200" />
+          </div>
+
+          {/* Header: batch settlement summary */}
+          <div className="px-5 pt-3 pb-4 border-b border-zinc-100 shrink-0">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-zinc-900">Payout batch</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  {fmtTxnRange(batch.firstTxnAt, batch.lastTxnAt)} · <span className="num">{batch.txnCount}</span> transaction{batch.txnCount === 1 ? "" : "s"}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {batch.status === "MIXED"
+                  ? <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">Mixed</span>
+                  : <PayoutBadge status={batch.status} />}
+                <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 rounded-xl bg-ink-950 px-4 py-3 flex items-end justify-between gap-3">
+              <div>
+                <p className="text-[11px] text-zinc-400">Net payout</p>
+                <p className="num text-xl font-semibold text-white mt-0.5">{CURRENCY} {fmt(batch.payoutAmount)}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-[11px] text-zinc-500">Payout date</p>
+                <p className="text-sm text-emerald-400 font-medium mt-0.5">{fmtValueDay(batch)}</p>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-zinc-50 py-2">
+                <p className="text-[10px] text-zinc-400">Gross</p>
+                <p className="num text-sm text-zinc-800 mt-0.5">{fmt(batch.gross)}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-50 py-2">
+                <p className="text-[10px] text-zinc-400">Platform fee</p>
+                <p className="num text-sm text-zinc-600 mt-0.5">− {fmt(batch.fees)}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-50 py-2">
+                <p className="text-[10px] text-zinc-400">Tax</p>
+                <p className="num text-sm text-zinc-600 mt-0.5">− {fmt(batch.tax)}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Transaction list */}
+          <div className="overflow-y-auto flex-1 divide-y divide-zinc-100">
+            {loading ? (
+              <div className="px-5 py-10 text-center text-zinc-400 text-sm">Loading...</div>
+            ) : txns.length === 0 ? (
+              <div className="px-5 py-10 text-center text-zinc-400 text-sm">No transactions found</div>
+            ) : (
+              txns.map((t) => {
+                const gross = Number(t.paidBillAmount ?? 0) + Number(t.tipAmount ?? 0);
+                return (
+                  <div key={t.paymentId} className="px-5 py-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-zinc-800">
+                          {t.billNo != null
+                            ? <>Bill <span className="num">#{t.billNo}</span></>
+                            : (t.kotMasterId != null ? <>Order <span className="num">#{t.kotMasterId}</span></> : "Payment")}
+                          {t.tableId != null && <span className="text-zinc-400 font-normal"> · Table {t.tableId}</span>}
+                        </p>
+                        <p className="text-xs text-zinc-400 mt-0.5">
+                          {t.methodName}{fmtDate(t.createdAt) !== "-" && ` · ${fmtDate(t.createdAt)}`}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="num text-sm font-semibold text-zinc-900">{CURRENCY} {fmt(r2(t.restaurantPayoutAmount))}</p>
+                        <p className="text-[10px] text-zinc-400">you receive</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <span className="text-zinc-400">Gross <span className="num text-zinc-700">{fmt(gross)}</span></span>
+                      <span className="text-center text-zinc-400">Fee <span className="num text-zinc-700">− {fmt(r2(t.platformFeeAmount))}</span></span>
+                      <span className="text-right text-zinc-400">Tip <span className="num text-zinc-700">{fmt(t.tipAmount)}</span></span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <div className="h-3 shrink-0" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RestaurantDashboard() {
   const navigate = useNavigate();
   const user = getStoredUser();
@@ -129,6 +275,9 @@ export default function RestaurantDashboard() {
   const [loading, setLoading] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [exporting, setExporting] = useState("");
+  const [batches, setBatches] = useState([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchDetail, setBatchDetail] = useState(null);
 
   const exportParams = useCallback(() => {
     const params = {};
@@ -139,16 +288,16 @@ export default function RestaurantDashboard() {
   }, [payoutFilter, range]);
 
   const EXPORT_COLUMNS = useMemo(() => [
-    { header: "Order", key: (r) => (r.kotMasterId != null ? `#${r.kotMasterId}` : "-") },
-    { header: "Table", key: (r) => (r.tableId != null ? `T${r.tableId}` : "-") },
+    { header: "Transaction date and time", key: (r) => fmtDateTime(r.createdAt) },
+    { header: "Bill number", key: (r) => (r.billNo != null ? `#${r.billNo}` : (r.failed ? "-" : "Ongoing")) },
+    { header: "Table", key: (r) => (r.tableNo ?? r.tableId) != null ? `T${r.tableNo ?? r.tableId}` : "-" },
     { header: "Method", key: "methodName" },
-    { header: "Date", key: (r) => fmtDateTime(r.createdAt) },
-    { header: "Bill (AED)", key: (r) => fmt(r.billAmount), align: "right" },
-    { header: "Tip (AED)", key: (r) => fmt(r.tipAmount), align: "right" },
-    { header: "Platform fee (AED)", key: (r) => fmt(r.platformFeeAmount), align: "right" },
-    { header: "You receive (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
-    { header: "Status", key: (r) => (r.failed ? "Failed" : (PAYOUT_BADGE[r.payout?.status || "PENDING"] || PAYOUT_BADGE.PENDING).label) },
-    { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" }
+    { header: "Transaction amount", key: (r) => fmt(r.paidBillAmount ?? r.paidAmount), align: "right" },
+    { header: "Tip", key: (r) => fmt(r.tipAmount), align: "right" },
+    { header: "Transaction fee", key: (r) => fmt(r.platformFeeAmount), align: "right" },
+    { header: "Payout Amt", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
+    { header: "Payout Date", key: (r) => (r.failed ? "-" : fmtExportPayoutDate(r)) },
+    { header: "Status", key: (r) => (r.failed ? "Failed" : (PAYOUT_BADGE[r.payout?.status || "PENDING"] || PAYOUT_BADGE.PENDING).label) }
   ], []);
 
   async function runExport(kind) {
@@ -213,6 +362,22 @@ export default function RestaurantDashboard() {
     load(1, false);
     setPage(1);
   }, [load]);
+
+  const loadBatches = useCallback(async () => {
+    setBatchesLoading(true);
+    try {
+      const { data } = await api.get("/payouts/my-batches");
+      setBatches(data.batches || []);
+    } catch (err) {
+      console.error("Load batches failed:", err.message);
+    } finally {
+      setBatchesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBatches();
+  }, [loadBatches]);
 
   // Split payments (equal/custom/item) create one row per payer sharing the
   // same kotMasterId - without a marker these look like duplicate orders.
@@ -362,6 +527,89 @@ export default function RestaurantDashboard() {
           ))}
         </div>
 
+        {/* Scheduled tab shows payout batches as settlement cards; tapping one
+            opens its full transaction breakdown. Every other chip is the feed. */}
+        {payoutFilter === "SCHEDULED" && (
+          <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-zinc-100">
+              <h2 className="text-sm font-semibold text-zinc-800">Scheduled payout batches</h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Each settlement groups the transactions paid out together. Tap a batch to see its transactions.
+              </p>
+            </div>
+
+            {batches.length === 0 ? (
+              <div className="px-5 py-12 text-center text-zinc-400 text-sm">
+                {batchesLoading ? "Loading..." : "No payout batches yet"}
+              </div>
+            ) : (
+              <div className="p-4 sm:p-5 space-y-4">
+                {batches.map((b) => (
+                  <button
+                    key={b.batchNo}
+                    type="button"
+                    onClick={() => setBatchDetail(b)}
+                    className="w-full text-left rounded-2xl border border-zinc-200 overflow-hidden hover:border-zinc-300 hover:shadow-sm transition"
+                  >
+                    {/* Card head: what & when */}
+                    <div className="flex items-start justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-zinc-900">Sales</p>
+                        <p className="text-xs text-zinc-400 mt-0.5">
+                          {fmtTxnRange(b.firstTxnAt, b.lastTxnAt)} · <span className="num">{b.txnCount}</span> transaction{b.txnCount === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      {b.status === "MIXED" ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">
+                          Mixed
+                        </span>
+                      ) : (
+                        <PayoutBadge status={b.status} />
+                      )}
+                    </div>
+
+                    {/* Net payout: the headline number + when it lands */}
+                    <div className="mx-4 sm:mx-5 rounded-xl bg-ink-950 px-4 py-3.5 flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] text-zinc-400">Net payout</p>
+                        <p className="num text-2xl sm:text-3xl font-semibold text-white mt-0.5 tracking-tight">
+                          {CURRENCY} {fmt(b.payoutAmount)}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-[11px] text-zinc-500">Payout date</p>
+                        <p className="text-sm text-emerald-400 font-medium mt-0.5">{fmtValueDay(b)}</p>
+                      </div>
+                    </div>
+
+                    {/* Breakdown: gross → fees → tax (service fee never shown) */}
+                    <div className="px-4 sm:px-5 py-4 space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Gross</span>
+                        <span className="num text-zinc-800">{CURRENCY} {fmt(b.gross)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Platform fee</span>
+                        <span className="num text-zinc-500">− {CURRENCY} {fmt(b.fees)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Tax</span>
+                        <span className="num text-zinc-500">− {CURRENCY} {fmt(b.tax)}</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 mt-1 border-t border-zinc-100">
+                        <span className="text-zinc-700 font-medium">You receive</span>
+                        <span className="num text-zinc-900 font-semibold">{CURRENCY} {fmt(b.payoutAmount)}</span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 pt-1">Tap to view all {b.txnCount} transaction{b.txnCount === 1 ? "" : "s"} →</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {payoutFilter !== "SCHEDULED" && (<>
         {/* Date and time range */}
         <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm p-4">
           <div className="flex items-center justify-between gap-2">
@@ -484,10 +732,15 @@ export default function RestaurantDashboard() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-medium text-zinc-900">
-                        {t.kotMasterId != null ? (
-                          <>Order <span className="num">#{t.kotMasterId}</span></>
-                        ) : (
+                        {t.failed ? (
                           "Payment attempt"
+                        ) : t.billNo != null ? (
+                          <>Bill <span className="num">#{t.billNo}</span></>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200 align-middle">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                            Bill ongoing
+                          </span>
                         )}
                         {t.tableId != null && (
                           <span className="text-zinc-400 font-normal"> · Table {t.tableId}</span>
@@ -505,7 +758,7 @@ export default function RestaurantDashboard() {
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`num text-lg font-semibold ${t.failed ? "text-zinc-400 line-through" : "text-zinc-900"}`}>
-                        {CURRENCY} {fmt(t.failed ? t.billAmount : t.restaurantPayoutAmount)}
+                        {CURRENCY} {fmt(t.failed ? t.billAmount : r2(t.restaurantPayoutAmount))}
                       </p>
                       {!t.failed && <p className="text-[10px] text-zinc-400">you receive</p>}
                       {!t.failed && Number(t.balanceAmount) > 0 && (
@@ -516,9 +769,9 @@ export default function RestaurantDashboard() {
 
                   {!t.failed && (
                     <p className="text-xs text-zinc-400 mt-1">
-                      Bill {CURRENCY} {fmt(t.billAmount)}
+                      Bill {CURRENCY} {fmt(t.paidBillAmount ?? t.billAmount)}
                       {Number(t.tipAmount) > 0 && ` + tip ${fmt(t.tipAmount)}`}
-                      {" "}− {CURRENCY} {fmt(t.platformFeeAmount)} platform fee
+                      {" "}− {CURRENCY} {fmt(r2(t.platformFeeAmount))} platform fee
                     </p>
                   )}
 
@@ -559,10 +812,15 @@ export default function RestaurantDashboard() {
             </button>
           )}
         </section>
+        </>)}
       </main>
 
       {showPasswordModal && (
         <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
+      )}
+
+      {batchDetail && (
+        <BatchDetailSheet batch={batchDetail} onClose={() => setBatchDetail(null)} />
       )}
     </div>
   );

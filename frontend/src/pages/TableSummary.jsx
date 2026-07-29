@@ -10,11 +10,13 @@ import SplitCustomAmountSheet from "../component/SplitCustomAmountSheet";
 import SplitEqualSheet from "../component/SplitEqualSheet";
 import SplitOptionsSheet from "../component/SplitOptionSheet";
 import SplitPickItemsSheet from "../component/SplitPickItemsSheet";
+import TipPromptSheet from "../component/TipPromptSheet";
 import Toast from "../component/Toast";
 import { API } from "../lib/api";
 
 import { log, error as logError } from "../lib/logger";
 import { isOrderMode } from "../lib/orderMode";
+import { POPULAR_TIP, TIP_PRESETS } from "../lib/tipOptions";
 import { checkTelrStatus, createTelrSession, getBalance, getPaidItems, getPaymentMethods, processCustomSplit, processEqualSplit, processItemSplit } from "../services/payment.service";
 import { useCart } from "../store/cartStore";
 
@@ -215,24 +217,32 @@ function PayFullButton({
     // 2/3/4) and complete it with one final leg for exactly this remaining
     // balance - same as the plain "no split" Pay Full case below.
     if ((hasCustomSplitInProgress && !hasEqualSplitInProgress) || (hasItemSplitInProgress && !allItemsPaid)) {
+      const feeAmt = Number(serviceFeeAmount) || 0;
+      const tip = Number(tipAmount) || 0;
+      const payRemaining = () => onCardPay?.({
+        amount: Number(grandTotal),
+        billAmount: Number(grandTotal),
+        serviceFeeAmount: feeAmt,
+        tipAmount: tip,
+        tableId,
+        kotMasterID,
+        token,
+        brand,
+        items: itemsSnapshot,
+      });
+
+      // No tip picked yet? The tip prompt that follows is itself a confirm
+      // step ("Pay 123.45 AED"), so stacking this modal on top of it would
+      // make the guest tap through two dialogs for one payment.
+      if (tip === 0) {
+        payRemaining();
+        return;
+      }
+
       showConfirm(
         `Pay ${fmt(grandTotal)} AED?`,
         `This will pay the remaining balance and complete the payment.`,
-        () => {
-          const feeAmt = Number(serviceFeeAmount) || 0;
-          const tip = Number(tipAmount) || 0;
-          onCardPay?.({
-            amount: Number(grandTotal),
-            billAmount: Number(grandTotal),
-            serviceFeeAmount: feeAmt,
-            tipAmount: tip,
-            tableId,
-            kotMasterID,
-            token,
-            brand,
-            items: itemsSnapshot,
-          });
-        },
+        payRemaining,
         { confirmLabel: `Pay ${fmt(grandTotal)} AED`, variant: "success" }
       );
     } else {
@@ -324,6 +334,7 @@ export default function TableSummaryPremium() {
   const [showPaymentComplete, setShowPaymentComplete] = useState(false);
   const [paymentCompleteData, setPaymentCompleteData] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
+  const [pendingPayPayload, setPendingPayPayload] = useState(null); // pay payload held by the tip prompt
   const [toast, setToast] = useState(null);
   const [serviceFeeRate, setServiceFeeRate] = useState(DEFAULT_SERVICE_FEE_RATE);
 
@@ -490,13 +501,31 @@ export default function TableSummaryPremium() {
 
   // "Pay fully" goes straight to the Telr-hosted checkout — no in-app payment
   // method picker, since Card is the only working option today.
-  const handlePayFullRequest = useCallback((payload) => {
+  const dispatchPayRequest = useCallback((payload) => {
     if (payload.mode === "split-equal" && payload.splitPayload) {
       startTelrSession({ ...payload, mode: "split-equal" });
     } else {
       startTelrSession({ ...payload, mode: "pay-full", splitPayload: null });
     }
   }, [startTelrSession]);
+
+  // Last-chance tip prompt: only when the guest never picked a tip on the
+  // summary. Holds the pay payload until they decide, then forwards it with
+  // (or without) the tip they chose.
+  const handlePayFullRequest = useCallback((payload) => {
+    if (Number(payload?.tipAmount) > 0) {
+      dispatchPayRequest(payload);
+      return;
+    }
+    setPendingPayPayload(payload);
+  }, [dispatchPayRequest]);
+
+  const resolveTipPrompt = useCallback((tip) => {
+    const payload = pendingPayPayload;
+    setPendingPayPayload(null);
+    if (!payload) return;
+    dispatchPayRequest({ ...payload, tipAmount: Number(tip) || 0 });
+  }, [pendingPayPayload, dispatchPayRequest]);
 
   const completeSplitPaymentFromTelr = useCallback(
     async ({ mode, splitPayload, telrPaymentId, amountPaid, sessionKey, orderRef, serviceFeeAmount = 0, tipAmount = 0, items = null }) => {
@@ -1446,25 +1475,21 @@ export default function TableSummaryPremium() {
     ? remainingBalance
     : (hasItemSplitInProgress ? unpaidGrand : fullGrand);
 
-  // Customer convenience/service fee — rate is company-controlled (qrmenu-dashboard)
-  const serviceFee = grand * serviceFeeRate;
-
-  // Round-off tip: brings bill+fee up to the next multiple of 5 AED
-  // (93 → 95, 98 → 100; if already exactly on a multiple of 5, next one: 95 → 100)
-  const baseDue = grand + serviceFee;
-  const roundUpRemainder = Math.ceil(baseDue / 5) * 5 - baseDue;
-  const roundUpTip = roundUpRemainder < 0.01 ? 5 : roundUpRemainder;
-
-  // Tip (not subject to service fee)
+  // Tip — charged on top of the bill, and part of the service-fee base below.
   const tipAmount = tipPreset === "custom"
     ? Math.max(0, Number(customTip) || 0)
-    : tipPreset === "roundup"
-      ? roundUpTip
-      : Number(tipPreset) || 0;
+    : Number(tipPreset) || 0;
+
+  // Customer convenience/service fee — rate is company-controlled (qrmenu-dashboard)
+  // and applies to bill + tip, matching the backend's charge-time formula
+  // (telr.routes.js). Display only: the backend always recomputes it.
+  const serviceFee = (grand + tipAmount) * serviceFeeRate;
+
+  const baseDue = grand + serviceFee;
 
   const grandWithFee = baseDue + tipAmount;
 
-  // Tiered message under pay buttons, based on displayed total (bill + fee, excl. tip)
+  // Tiered message under pay buttons, based on displayed total (bill + fee)
   const tierMessage =
     baseDue >= 500
       ? { icon:null, text: "Premium Guests Pay the Premium Way.", premium: true }
@@ -1661,34 +1686,17 @@ export default function TableSummaryPremium() {
                 <span className="text-[11px] text-gray-400">Optional</span>
               )}
             </div>
-            <div className="grid grid-cols-4 gap-2">
-              <button
-                onClick={() => setTipPreset(tipPreset === "roundup" ? null : "roundup")}
-                aria-pressed={tipPreset === "roundup"}
-                className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
-                  tipPreset === "roundup"
-                    ? "font-semibold text-white shadow-md border border-transparent"
-                    : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
-                }`}
-                style={
-                  tipPreset === "roundup"
-                    ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
-                    : { borderColor: "rgba(139,111,71,0.3)" }
-                }
-              >
-                <span className="block leading-tight">Quick tip</span>
-                <span className={`block text-[10px] leading-tight ${tipPreset === "roundup" ? "text-white/70" : "text-gray-400"}`}>
-                  +{fmt(roundUpTip)}
-                </span>
-              </button>
-              {[5, 10].map((amt) => {
+            <div className="grid grid-cols-4 gap-2 pt-2">
+              {TIP_PRESETS.map((amt) => {
                 const active = tipPreset === amt;
+                const popular = amt === POPULAR_TIP;
                 return (
                   <button
                     key={amt}
                     onClick={() => setTipPreset(active ? null : amt)}
                     aria-pressed={active}
-                    className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
+                    aria-label={popular ? `Tip ${amt} AED, most loved` : `Tip ${amt} AED`}
+                    className={`relative h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
                       active
                         ? "font-semibold text-white shadow-md border border-transparent"
                         : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
@@ -1696,31 +1704,42 @@ export default function TableSummaryPremium() {
                     style={
                       active
                         ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
-                        : { borderColor: "rgba(139,111,71,0.3)" }
+                        : popular
+                          ? { borderColor: "transparent", boxShadow: "0 0 0 1px var(--grad-end)", background: "var(--grad-start-soft)" }
+                          : { borderColor: "rgba(139,111,71,0.3)" }
                     }
                   >
+                    {popular && (
+                      <span
+                        className="absolute -top-[9px] left-1/2 -translate-x-1/2 flex items-center gap-[2px] whitespace-nowrap rounded-full border bg-white px-1.5 py-[1px] text-[8px] font-semibold tracking-wide shadow-sm"
+                        style={{ borderColor: "var(--grad-end-soft)", color: "var(--grad-end)" }}
+                      >
+                        <span className="text-[8px] leading-none">❤️</span>
+                        Most loved
+                      </span>
+                    )}
                     {amt}
                     <span className={`ml-1 text-[10px] ${active ? "text-white/70" : "text-gray-400"}`}>AED</span>
                   </button>
                 );
               })}
-              <button
-                onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
-                aria-pressed={tipPreset === "custom"}
-                className={`h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
-                  tipPreset === "custom"
-                    ? "font-semibold text-white shadow-md border border-transparent"
-                    : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
-                }`}
-                style={
-                  tipPreset === "custom"
-                    ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
-                    : { borderColor: "rgba(139,111,71,0.3)" }
-                }
-              >
-                Custom
-              </button>
             </div>
+            <button
+              onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
+              aria-pressed={tipPreset === "custom"}
+              className={`mt-2 w-full h-9 rounded-xl text-[13px] transition-all duration-200 active:scale-[0.96] ${
+                tipPreset === "custom"
+                  ? "font-semibold text-white shadow-md border border-transparent"
+                  : "font-medium text-gray-700 bg-white border shadow-sm hover:-translate-y-[1px] hover:shadow"
+              }`}
+              style={
+                tipPreset === "custom"
+                  ? { background: "linear-gradient(90deg, var(--grad-start), var(--grad-end))" }
+                  : { borderColor: "rgba(139,111,71,0.3)" }
+              }
+            >
+              Custom
+            </button>
 
             {tipPreset === "custom" && (
               <div
@@ -2119,6 +2138,17 @@ export default function TableSummaryPremium() {
 
       {/* Toast - replaces alert() */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+
+      {/* Last-chance tip prompt - only when no tip was picked on the summary */}
+      {pendingPayPayload && (
+        <TipPromptSheet
+          billAmount={Number(pendingPayPayload.amount || 0)}
+          serviceFeeRate={serviceFeeRate}
+          onCancel={() => setPendingPayPayload(null)}
+          onSkip={() => resolveTipPrompt(0)}
+          onConfirm={(tip) => resolveTipPrompt(tip)}
+        />
+      )}
 
       {/* Shown while /telr/create is in flight and just before the redirect to Telr */}
       <PaymentProcessingOverlay show={isPaymentProcessing} />

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { POPULAR_TIP, TIP_PRESETS } from "../lib/tipOptions";
+
 const fmt = (n) => Number(n || 0).toFixed(2);
 
 export default function SplitPickItemsSheet({
@@ -14,7 +16,7 @@ export default function SplitPickItemsSheet({
   // Selected count keyed by kotChildId (NOT array index) so a background
   // refresh of `items` can't lose or misalign the guest's selection.
   const [pick, setPick] = useState({}); // { [kotChildId]: count }
-  const [tipPreset, setTipPreset] = useState(null); // number | "roundup" | "custom" | null
+  const [tipPreset, setTipPreset] = useState(null); // number | "custom" | null
   const [customTip, setCustomTip] = useState("");
 
   // Stable per-line key. KOTChild rows always carry a KotChildID; index is only
@@ -71,15 +73,12 @@ export default function SplitPickItemsSheet({
 
   // Fee + tip preview — fee is display-only, backend always recomputes it
   // from the live DB rate at charge time.
-  const feeAmt = Math.round(share * serviceFeeRate * 100) / 100;
-  const baseDue = share + feeAmt;
-  const roundUpRemainder = Math.ceil(baseDue / 5) * 5 - baseDue;
-  const roundUpTip = roundUpRemainder < 0.01 ? 5 : roundUpRemainder;
   const tipAmount = tipPreset === "custom"
     ? Math.max(0, Number(customTip) || 0)
-    : tipPreset === "roundup"
-      ? roundUpTip
-      : Number(tipPreset) || 0;
+    : Number(tipPreset) || 0;
+  // Fee base is items subtotal + tip, same formula the backend charges on.
+  const feeAmt = Math.round((share + tipAmount) * serviceFeeRate * 100) / 100;
+  const baseDue = share + feeAmt;
   const totalToPay = baseDue + tipAmount;
 
   const makePayload = () => {
@@ -254,38 +253,45 @@ export default function SplitPickItemsSheet({
                     <span className="text-[11px] text-gray-400">Optional</span>
                   )}
                 </div>
-                <div className="grid grid-cols-4 gap-2">
-                  <button
-                    onClick={() => setTipPreset(tipPreset === "roundup" ? null : "roundup")}
-                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "roundup" ? "text-white" : "bg-white text-gray-700"}`}
-                    style={tipPreset === "roundup"
-                      ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
-                      : { borderColor: "var(--grad-end-soft)" }}
-                  >
-                    +{fmt(roundUpTip)}
-                  </button>
-                  {[5, 10].map((amt) => (
-                    <button
-                      key={amt}
-                      onClick={() => setTipPreset(tipPreset === amt ? null : amt)}
-                      className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === amt ? "text-white" : "bg-white text-gray-700"}`}
-                      style={tipPreset === amt
-                        ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
-                        : { borderColor: "var(--grad-end-soft)" }}
-                    >
-                      {amt} {currency}
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
-                    className={`h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "custom" ? "text-white" : "bg-white text-gray-700"}`}
-                    style={tipPreset === "custom"
-                      ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
-                      : { borderColor: "var(--grad-end-soft)" }}
-                  >
-                    Custom
-                  </button>
+                <div className="grid grid-cols-4 gap-2 pt-2">
+                  {TIP_PRESETS.map((amt) => {
+                    const active = tipPreset === amt;
+                    const popular = amt === POPULAR_TIP;
+                    return (
+                      <button
+                        key={amt}
+                        onClick={() => setTipPreset(active ? null : amt)}
+                        aria-label={popular ? `Tip ${amt} ${currency}, most loved` : `Tip ${amt} ${currency}`}
+                        className={`relative h-9 rounded-xl text-[12px] font-medium border ${active ? "text-white" : "bg-white text-gray-700"}`}
+                        style={active
+                          ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
+                          : popular
+                            ? { borderColor: "var(--grad-end, #C91A4D)", background: "var(--grad-start-soft)" }
+                            : { borderColor: "var(--grad-end-soft)" }}
+                      >
+                        {popular && (
+                          <span
+                            className="absolute -top-[9px] left-1/2 -translate-x-1/2 flex items-center gap-[2px] whitespace-nowrap rounded-full border bg-white px-1.5 py-[1px] text-[8px] font-semibold tracking-wide shadow-sm"
+                            style={{ borderColor: "var(--grad-end-soft)", color: "var(--grad-end, #C91A4D)" }}
+                          >
+                            <span className="text-[8px] leading-none">❤️</span>
+                            Most loved
+                          </span>
+                        )}
+                        {amt} {currency}
+                      </button>
+                    );
+                  })}
                 </div>
+                <button
+                  onClick={() => setTipPreset(tipPreset === "custom" ? null : "custom")}
+                  className={`mt-2 w-full h-9 rounded-xl text-[12px] font-medium border ${tipPreset === "custom" ? "text-white" : "bg-white text-gray-700"}`}
+                  style={tipPreset === "custom"
+                    ? { background: "linear-gradient(90deg, var(--grad-start, #7A0026), var(--grad-end, #C91A4D))" }
+                    : { borderColor: "var(--grad-end-soft)" }}
+                >
+                  Custom
+                </button>
                 {tipPreset === "custom" && (
                   <input
                     type="number"

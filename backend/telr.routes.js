@@ -320,6 +320,10 @@ router.post("/api/telr/create", async (req, res) => {
     // items subtotal for item split, typed amount for custom split) — not the
     // original full bill amount, so split legs each carry their own
     // proportional share of the fee.
+    //
+    // The fee base is bill + tip: the tip is part of what this leg puts through
+    // the card, so it carries the same rate as the bill. Every frontend total
+    // (summary screen, split sheets, tip prompt) mirrors this formula.
     let effectiveBillAmount = billAmount != null ? Number(billAmount) : Number(amount);
     const legBaseAmount = Number(amount);
     let effectiveServiceFeeAmount = 0;
@@ -328,7 +332,7 @@ router.post("/api/telr/create", async (req, res) => {
 
     if (legBaseAmount > 0) {
       const ratePercent = await getServiceFeeRatePercent();
-      effectiveServiceFeeAmount = Math.round(legBaseAmount * (ratePercent / 100) * 100) / 100;
+      effectiveServiceFeeAmount = Math.round((legBaseAmount + requestedTip) * (ratePercent / 100) * 100) / 100;
       effectiveAmount = Math.round((legBaseAmount + effectiveServiceFeeAmount + requestedTip) * 100) / 100;
     }
 

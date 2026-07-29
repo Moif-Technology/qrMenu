@@ -93,6 +93,27 @@ const fmtDate = (d) => {
   });
 };
 
+// Date-only (no time) for batch summaries, UTC-literal like fmtDate.
+const fmtDay = (d) => {
+  if (!d) return "-";
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? "-" : dt.toLocaleDateString("en-AE", {
+    day: "2-digit", month: "short", year: "numeric", timeZone: "UTC"
+  });
+};
+
+// A batch spans many transactions - collapse to a single day or a range.
+const fmtTxnRange = (from, to) => {
+  const s = fmtDay(from);
+  const e = fmtDay(to);
+  if (s === "-") return e;
+  return s === e ? s : `${s} – ${e}`;
+};
+
+// Transferred batches show the real transfer date; scheduled ones the planned
+// Tuesday; anything else has no payout date yet.
+const fmtPayoutDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
+
 const PAYOUT_BADGE = {
   TRANSFERRED: { label: "Transferred", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   SCHEDULED: { label: "Scheduled", cls: "bg-violet-50 text-violet-700 border-violet-200" },
@@ -1339,15 +1360,18 @@ export default function AdminDashboard() {
             ) : (
               <>
                 <div className="overflow-x-auto hidden sm:block">
-                  <table className="w-full min-w-160 text-sm">
+                  <table className="w-full min-w-240 text-sm">
                     <thead>
                       <tr className="text-left text-xs text-zinc-400 border-b border-zinc-100">
                         <th className="px-5 py-2.5 font-medium">Batch</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Transactions</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Total</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Restaurants</th>
+                        <th className="px-5 py-2.5 font-medium whitespace-nowrap">Transaction date</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Total transactions</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap">Total transaction amount</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Service fee</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Tax</th>
+                        <th className="px-5 py-2.5 font-medium whitespace-nowrap">Payout date</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Payout amount</th>
                         <th className="px-5 py-2.5 font-medium">Status</th>
-                        <th className="px-5 py-2.5 font-medium">Last updated</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1359,9 +1383,13 @@ export default function AdminDashboard() {
                           title="View this batch's transactions"
                         >
                           <td className="px-5 py-3 font-medium text-sky-700">B-{b.batchNo}</td>
+                          <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtTxnRange(b.firstTxnAt, b.lastTxnAt)}</td>
                           <td className="num px-5 py-3 text-right text-zinc-500">{b.txnCount}</td>
-                          <td className="num px-5 py-3 text-right text-zinc-700 font-medium">{CURRENCY} {fmt(b.totalAmount)}</td>
-                          <td className="num px-5 py-3 text-right text-zinc-500">{b.restaurantCount}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-700">{CURRENCY} {fmt(b.totalTxnAmount)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.serviceFee)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.tax)}</td>
+                          <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtPayoutDay(b)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-900 font-medium">{CURRENCY} {fmt(b.totalAmount)}</td>
                           <td className="px-5 py-3">
                             {b.status === "MIXED" ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">
@@ -1371,7 +1399,6 @@ export default function AdminDashboard() {
                               <PayoutBadge status={b.status} />
                             )}
                           </td>
-                          <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtDate(b.lastUpdatedAt)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1384,7 +1411,7 @@ export default function AdminDashboard() {
                     <div
                       key={b.batchNo}
                       onClick={() => setBatchDetail(b.batchNo)}
-                      className="p-4 space-y-2 cursor-pointer hover:bg-zinc-50 transition"
+                      className="p-4 space-y-2.5 cursor-pointer hover:bg-zinc-50 transition"
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-medium text-sky-700">B-{b.batchNo}</span>
@@ -1396,11 +1423,22 @@ export default function AdminDashboard() {
                           <PayoutBadge status={b.status} />
                         )}
                       </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-zinc-500">{b.txnCount} txns · {b.restaurantCount} restaurant{b.restaurantCount === 1 ? "" : "s"}</span>
-                        <span className="num font-semibold text-zinc-900">{CURRENCY} {fmt(b.totalAmount)}</span>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                        <span className="text-zinc-400">Transaction date</span>
+                        <span className="text-right text-zinc-600">{fmtTxnRange(b.firstTxnAt, b.lastTxnAt)}</span>
+                        <span className="text-zinc-400">Total transactions</span>
+                        <span className="num text-right text-zinc-600">{b.txnCount}</span>
+                        <span className="text-zinc-400">Total transaction amount</span>
+                        <span className="num text-right text-zinc-700">{CURRENCY} {fmt(b.totalTxnAmount)}</span>
+                        <span className="text-zinc-400">Service fee</span>
+                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.serviceFee)}</span>
+                        <span className="text-zinc-400">Tax</span>
+                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.tax)}</span>
+                        <span className="text-zinc-400">Payout date</span>
+                        <span className="text-right text-zinc-600">{fmtPayoutDay(b)}</span>
+                        <span className="text-zinc-400">Payout amount</span>
+                        <span className="num text-right font-semibold text-zinc-900">{CURRENCY} {fmt(b.totalAmount)}</span>
                       </div>
-                      <p className="text-xs text-zinc-400">{fmtDate(b.lastUpdatedAt)}</p>
                     </div>
                   ))}
                 </div>
