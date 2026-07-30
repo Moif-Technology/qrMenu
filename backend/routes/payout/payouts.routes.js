@@ -23,6 +23,14 @@ import { parseWallClock } from "../../utils/payoutDates.js";
 
 const router = express.Router();
 
+// Bank/gateway charge for pushing one transaction out in a batch transfer, and
+// the VAT on that charge. Both are DeynoQR's own cost - they are reported per
+// batch for reference and are NOT deducted from the restaurant's payout.
+const TRANSFER_FEE_PER_TXN = 0.5;
+const TRANSFER_FEE_TAX_RATE = 0.05; // 5% UAE VAT
+
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
 async function nextBatchNo() {
   const rows = await query(`SELECT NEXT VALUE FOR dbo.PayoutBatchSeq AS n`);
   return Number(rows[0].n);
@@ -65,7 +73,8 @@ async function resolveBatchNo(paymentIds) {
 
 async function getPayment(paymentId) {
   const rows = await query(
-    `SELECT PaymentID, ShopID, PaidAmount, PaidStatus
+    `SELECT PaymentID, ShopID, PaidAmount, PaidStatus,
+            (PaidAmount - ISNULL(ServiceFeeAmount, 0) - ISNULL(PlatformFeeAmount, 0)) AS RestaurantPayoutAmount
      FROM dbo.Payment WHERE PaymentID = @paymentId`,
     { paymentId: { type: mssql.BigInt, value: paymentId } }
   );
@@ -84,7 +93,7 @@ async function markTransferred(payment, existing, { transferRef, transferDate, t
   const params = {
     paymentId: { type: mssql.BigInt, value: Number(payment.PaymentID) },
     shopId: { type: mssql.BigInt, value: Number(payment.ShopID) },
-    amount: { type: mssql.Money, value: Number(payment.PaidAmount) },
+    amount: { type: mssql.Money, value: Number(payment.RestaurantPayoutAmount) },
     transferRef: { type: mssql.NVarChar(200), value: transferRef },
     transferDate: { type: mssql.Date, value: transferDate },
     transferredBy: { type: mssql.NVarChar(100), value: transferredBy },
@@ -294,7 +303,7 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
           {
             paymentId: { type: mssql.BigInt, value: paymentId },
             shopId: { type: mssql.BigInt, value: Number(payment.ShopID) },
-            amount: { type: mssql.Money, value: Number(payment.PaidAmount) },
+            amount: { type: mssql.Money, value: Number(payment.RestaurantPayoutAmount) },
             status: { type: mssql.VarChar(20), value: status },
             batchNo: { type: mssql.BigInt, value: batchNo },
             scheduledDate: { type: mssql.Date, value: scheduledDate }
@@ -326,8 +335,22 @@ router.get("/batches", requireAuth, requireSuperAdmin, async (req, res) => {
       SELECT
         ps.BatchNo,
         COUNT(*)                                                         AS txnCount,
-        SUM(ps.Amount)                                                   AS totalAmount,
+        -- What the restaurant is actually owed, derived live from Payment:
+        -- gross charged, minus the service fee DeynoQR keeps, minus the
+        -- platform fee. NOT SUM(ps.Amount) - that column is a snapshot taken
+        -- when the payout row was first created, so rows written before the
+        -- fee columns were populated still hold the gross and made this read
+        -- back identical to the Telr total.
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 0) AS totalAmount,
+        ISNULL(SUM(ps.Amount), 0)                                        AS storedPayoutAmount,
         ISNULL(SUM(p.PaidAmount), 0)                                     AS totalTxnAmount,
+        -- Bill only: what the guest paid for food, with the service fee
+        -- DeynoQR keeps and the tip both stripped out.
+        ISNULL(SUM(ISNULL(p.PaidBillAmount,
+                          p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.TipAmount, 0))), 0) AS billAmount,
+        ISNULL(SUM(ISNULL(p.TipAmount, 0)), 0)                           AS tipAmount,
+        ISNULL(SUM(ISNULL(p.ServiceFeeAmount, 0)), 0)                    AS serviceFee,
+        ISNULL(SUM(ISNULL(p.PlatformFeeAmount, 0)), 0)                   AS platformFee,
         COUNT(DISTINCT ps.ShopID)                                        AS restaurantCount,
         MAX(ps.UpdatedAt)                                                AS lastUpdatedAt,
         MIN(p.CreatedAt)                                                 AS firstTxnAt,
@@ -353,16 +376,30 @@ router.get("/batches", requireAuth, requireSuperAdmin, async (req, res) => {
         transferredCount > 0 ? "MIXED" :
         scheduledCount === txnCount ? "SCHEDULED" :
         processingCount === txnCount ? "PROCESSING" : "MIXED";
+      // Bank transfer cost for this batch: one flat fee per transaction, plus
+      // VAT on that fee. DeynoQR's cost, reported only - never deducted from
+      // totalAmount (the restaurant payout).
+      const transferFee = r2(txnCount * TRANSFER_FEE_PER_TXN);
+      const transferFeeTax = r2(transferFee * TRANSFER_FEE_TAX_RATE);
       return {
         batchNo: Number(r.BatchNo),
         txnCount,
-        // totalAmount = net payout total (PayoutStatus.Amount); totalTxnAmount =
-        // gross charged (Payment.PaidAmount). serviceFee/tax are 0 placeholders
-        // until a confirmed source is wired.
+        // totalAmount = live restaurant payout (bill + tip - platform fee);
+        // totalTxnAmount = full amount charged through Telr, service fee
+        // included. storedPayoutAmount is the PayoutStatus snapshot, kept only
+        // so a drift between the two can be spotted.
         totalAmount: Number(r.totalAmount),
+        storedPayoutAmount: Number(r.storedPayoutAmount),
         totalTxnAmount: Number(r.totalTxnAmount),
-        serviceFee: 0,
-        tax: 0,
+        billAmount: Number(r.billAmount),
+        tipAmount: Number(r.tipAmount),
+        serviceFee: Number(r.serviceFee),
+        platformFee: Number(r.platformFee),
+        transferFee,
+        transferFeeTax,
+        transferFeeRate: TRANSFER_FEE_PER_TXN,
+        // Legacy alias - the old UI read `tax` for this column.
+        tax: transferFeeTax,
         firstTxnAt: r.firstTxnAt,
         lastTxnAt: r.lastTxnAt,
         transferDate: r.transferDate || null,
@@ -404,8 +441,8 @@ router.get("/my-batches", requireAuth, async (req, res) => {
         ps.BatchNo,
         COUNT(*)                                                         AS txnCount,
         ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0)), 0)     AS gross,
-        ISNULL(SUM(p.PlatformFeeAmount), 0)                             AS fees,
-        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - p.PlatformFeeAmount), 0) AS payoutAmount,
+        ISNULL(SUM(ISNULL(p.PlatformFeeAmount, 0)), 0)                  AS fees,
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 0) AS payoutAmount,
         MIN(p.CreatedAt)                                                 AS firstTxnAt,
         MAX(p.CreatedAt)                                                 AS lastTxnAt,
         MAX(ps.TransferDate)                                             AS transferDate,
@@ -464,7 +501,19 @@ function buildScopeFilters(body, params) {
     conditions.push("p.ShopID = @shopId");
     params.shopId = { type: mssql.BigInt, value: shopId };
   }
-  if (body?.status) {
+  if (body?.status === "PAID") {
+    conditions.push(`(p.PaidStatus = @status OR EXISTS (
+      SELECT 1 FROM dbo.PaymentSession pss
+      WHERE pss.OrderRef = p.OrderRef AND pss.Status = 'SETTLED'
+    ))`);
+    params.status = { type: mssql.VarChar(50), value: String(body.status) };
+  } else if (body?.status === "PENDING") {
+    conditions.push(`(p.PaidStatus = @status AND NOT EXISTS (
+      SELECT 1 FROM dbo.PaymentSession pss
+      WHERE pss.OrderRef = p.OrderRef AND pss.Status = 'SETTLED'
+    ))`);
+    params.status = { type: mssql.VarChar(50), value: String(body.status) };
+  } else if (body?.status) {
     conditions.push("p.PaidStatus = @status");
     params.status = { type: mssql.VarChar(50), value: String(body.status) };
   }
@@ -515,7 +564,7 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
     const pendingWhere = `${scope.join(" AND ")} AND (ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED')`;
 
     const previewRows = await query(
-      `SELECT COUNT(*) AS cnt, ISNULL(SUM(p.PaidAmount), 0) AS amount
+      `SELECT COUNT(*) AS cnt, ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 0) AS amount
        FROM dbo.Payment p
        LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
        WHERE ${pendingWhere}`,
@@ -551,7 +600,7 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       BEGIN TRAN;
 
       UPDATE ps
-      SET Status = 'TRANSFERRED', Amount = p.PaidAmount, TransferRef = @transferRef,
+      SET Status = 'TRANSFERRED', Amount = (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), TransferRef = @transferRef,
           TransferDate = @transferDate, TransferredBy = @transferredBy,
           Notes = ISNULL(@notes, ps.Notes), BatchNo = @batchNo, UpdatedAt = SYSDATETIME()
       FROM dbo.PayoutStatus ps
@@ -560,7 +609,7 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
 
       INSERT INTO dbo.PayoutStatus
         (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, UpdatedAt)
-      SELECT p.PaymentID, p.ShopID, p.PaidAmount, 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME()
+      SELECT p.PaymentID, p.ShopID, (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME()
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
       WHERE ${scope.join(" AND ")} AND ps.PayoutID IS NULL;

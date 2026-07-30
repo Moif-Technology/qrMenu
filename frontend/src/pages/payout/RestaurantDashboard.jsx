@@ -223,7 +223,7 @@ function BatchDetailSheet({ batch, onClose }) {
               <div className="px-5 py-10 text-center text-zinc-400 text-sm">No transactions found</div>
             ) : (
               txns.map((t) => {
-                const gross = Number(t.paidBillAmount ?? 0) + Number(t.tipAmount ?? 0);
+                const gross = Number(t.restaurantGrossAmount ?? ((Number(t.paidBillAmount ?? 0) + Number(t.tipAmount ?? 0))));
                 return (
                   <div key={t.paymentId} className="px-5 py-3.5">
                     <div className="flex items-start justify-between gap-3">
@@ -292,7 +292,7 @@ export default function RestaurantDashboard() {
     { header: "Bill number", key: (r) => (r.billNo != null ? `#${r.billNo}` : (r.failed ? "-" : "Ongoing")) },
     { header: "Table", key: (r) => (r.tableNo ?? r.tableId) != null ? `T${r.tableNo ?? r.tableId}` : "-" },
     { header: "Method", key: "methodName" },
-    { header: "Transaction amount", key: (r) => fmt(r.paidBillAmount ?? r.paidAmount), align: "right" },
+    { header: "Transaction amount", key: (r) => fmt(r.restaurantGrossAmount ?? ((Number(r.paidBillAmount ?? 0) + Number(r.tipAmount ?? 0)) || r.paidAmount)), align: "right" },
     { header: "Tip", key: (r) => fmt(r.tipAmount), align: "right" },
     { header: "Transaction fee", key: (r) => fmt(r.platformFeeAmount), align: "right" },
     { header: "Payout Amt", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
@@ -769,8 +769,7 @@ export default function RestaurantDashboard() {
 
                   {!t.failed && (
                     <p className="text-xs text-zinc-400 mt-1">
-                      Bill {CURRENCY} {fmt(t.paidBillAmount ?? t.billAmount)}
-                      {Number(t.tipAmount) > 0 && ` + tip ${fmt(t.tipAmount)}`}
+                      Gross {CURRENCY} {fmt(t.restaurantGrossAmount ?? ((Number(t.paidBillAmount ?? 0) + Number(t.tipAmount ?? 0)) || t.billAmount))}
                       {" "}− {CURRENCY} {fmt(r2(t.platformFeeAmount))} platform fee
                     </p>
                   )}

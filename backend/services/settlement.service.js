@@ -162,10 +162,13 @@ export async function settleKotToSales(kotMasterID, opts = {}) {
     /* ---- 5. Insert SalesMaster ---- */
     const counterNo = toNum(km.CounterNo, 0);  // KOTMaster.CounterNo is varchar, cast to numeric
     const customerID = toInt(km.CustomerID, 0) > 0 ? toInt(km.CustomerID) : 1;
+    const salesManID = toInt(km.SalesManID, 0) > 0
+      ? toInt(km.SalesManID, 0)
+      : toInt(km.WaiterID, 0);
 
     const smReq = new mssql.Request(tx);
     smReq.input("SalesID",                mssql.BigInt,           salesID);
-    smReq.input("SalesManID",             mssql.BigInt,           toInt(km.SalesManID, 0));
+    smReq.input("SalesManID",             mssql.BigInt,           salesManID);
     smReq.input("CounterNo",              mssql.Numeric(18, 0),   counterNo);
     smReq.input("BillNo",                 mssql.Numeric(18, 0),   billNo);
     smReq.input("CustomerID",             mssql.BigInt,           customerID);
@@ -286,7 +289,7 @@ export async function settleKotToSales(kotMasterID, opts = {}) {
     spsReq.input("StationID",     mssql.BigInt,       toInt(km.StationID, 0));
     spsReq.input("CounterID",     mssql.BigInt,       counterNo);
     spsReq.input("StaffID",       mssql.BigInt,       0);
-    spsReq.input("SalesManID",    mssql.BigInt,       toInt(km.SalesManID, 0));
+    spsReq.input("SalesManID",    mssql.BigInt,       salesManID);
     spsReq.input("CounterCloseStatus", mssql.VarChar(20), "PENDING");
     spsReq.input("CreditCardTypeID",   mssql.BigInt,      0);
 

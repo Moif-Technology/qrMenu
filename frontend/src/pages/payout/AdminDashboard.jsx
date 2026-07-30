@@ -144,16 +144,26 @@ function BatchBadge({ code, onClick }) {
   );
 }
 
-function PaidBadge({ status }) {
+function PaidBadge({ status, qrBillStatus, telrStatus }) {
+  const settledSplit = status === "PAID" && qrBillStatus === "PENDING" && telrStatus === "SETTLED";
   const cls =
     status === "PAID"
       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
       : status === "FAILED"
         ? "bg-red-50 text-red-700 border-red-200"
         : "bg-zinc-100 text-zinc-600 border-zinc-200";
-  const label = status === "PAID" ? "Bill settled" : status === "FAILED" ? "Failed" : "Bill pending";
+  const label = settledSplit
+    ? "Online settled"
+    : status === "PAID"
+      ? "Bill settled"
+      : status === "FAILED"
+        ? "Failed"
+        : "Bill pending";
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${cls}`}>
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border ${cls}`}
+      title={settledSplit ? "Telr leg is settled; the remaining bill may have been closed in POS." : undefined}
+    >
       {label}
     </span>
   );
@@ -193,7 +203,7 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
 
   const totalAmount = isAll
     ? preview?.amount
-    : txns.reduce((s, t) => s + Number(t.paidAmount || 0), 0);
+    : txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
 
   async function submit(e) {
     e.preventDefault();
@@ -400,7 +410,7 @@ function TxnDetailModal({ txn, onClose }) {
                 <DetailRow label="Restaurant payout" value={`${CURRENCY} ${fmt(txn.restaurantPayoutAmount)}`} mono />
               </>
             )}
-            <DetailRow label="Payment status" value={<PaidBadge status={txn.paidStatus} />} />
+            <DetailRow label="Payment status" value={<PaidBadge status={txn.paidStatus} qrBillStatus={txn.qrBillStatus} telrStatus={txn.telrStatus} />} />
           </div>
 
           {txn.failed ? (
@@ -459,7 +469,7 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
     fetchTxns();
   }, [fetchTxns]);
 
-  const total = txns.reduce((s, t) => s + Number(t.paidAmount || 0), 0);
+  const total = txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
   const activeIds = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED").map((t) => t.paymentId);
 
   function markBatch(status) {
@@ -474,7 +484,9 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
   function transferBatch() {
     const activeTxns = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED");
     if (!activeTxns.length) return;
-    onTransfer(activeTxns.map((t) => ({ paymentId: t.paymentId, paidAmount: t.paidAmount })));
+    // TransferModal totals on restaurantPayoutAmount - passing it as paidAmount
+    // made the confirm dialog read AED 0.00 for a batch transfer.
+    onTransfer(activeTxns.map((t) => ({ paymentId: t.paymentId, restaurantPayoutAmount: t.restaurantPayoutAmount })));
     onClose();
   }
 
@@ -550,7 +562,7 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <PaidBadge status={t.paidStatus} />
+                    <PaidBadge status={t.paidStatus} qrBillStatus={t.qrBillStatus} telrStatus={t.telrStatus} />
                     <PayoutBadge status={t.payout?.status || "PENDING"} />
                     <span className="text-xs text-zinc-400 ml-auto">{fmtDate(t.createdAt)}</span>
                   </div>
@@ -643,6 +655,8 @@ export default function AdminDashboard() {
   const [view, setView] = useState("transactions");
   const [batches, setBatches] = useState([]);
   const [batchDetail, setBatchDetail] = useState(null);
+  const [selectedBatches, setSelectedBatches] = useState(() => new Set());
+  const [batchPayoutLoading, setBatchPayoutLoading] = useState(false);
   const [scheduling, setScheduling] = useState(null);
   const [toast, setToast] = useState(null);
   const showToast = useCallback((message, variant = "info", title = null) => {
@@ -713,7 +727,18 @@ export default function AdminDashboard() {
       { header: "Paid (AED)", key: (r) => fmt(r.paidAmount), align: "right" },
       { header: "Balance (AED)", key: (r) => fmt(r.balanceAmount), align: "right" },
       { header: "Restaurant payout (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
-      { header: "Payment", key: (r) => (r.paidStatus === "PAID" ? "Bill settled" : r.paidStatus === "FAILED" ? "Failed" : "Bill pending") },
+      {
+        header: "Payment",
+        key: (r) => (
+          r.paidStatus === "PAID" && r.qrBillStatus === "PENDING" && r.telrStatus === "SETTLED"
+            ? "Online settled"
+            : r.paidStatus === "PAID"
+              ? "Bill settled"
+              : r.paidStatus === "FAILED"
+                ? "Failed"
+                : "Bill pending"
+        )
+      },
       { header: "Settlement", key: (r) => (r.failed ? "-" : r.payout?.status || "PENDING") },
       { header: "Transfer ref", key: (r) => r.payout?.transferRef || "-" },
       { header: "Date", key: (r) => fmtDateTime(r.createdAt) }
@@ -945,6 +970,67 @@ export default function AdminDashboard() {
 
   function toggleSelectAll() {
     setSelected(allSelected ? new Set() : new Set(selectableTxns.map((t) => t.paymentId)));
+  }
+
+  // ---- batch selection helpers ----
+  // A fully TRANSFERRED batch is settled and final, so it can be inspected but
+  // never re-paid; only the rest can be picked for a payout run.
+  const payableBatches = batches.filter((b) => b.status !== "TRANSFERRED");
+  const selectedBatchRows = batches.filter((b) => selectedBatches.has(b.batchNo));
+  const allBatchesSelected =
+    payableBatches.length > 0 && payableBatches.every((b) => selectedBatches.has(b.batchNo));
+
+  const batchSelectionTotals = selectedBatchRows.reduce(
+    (acc, b) => ({
+      txnCount: acc.txnCount + Number(b.txnCount || 0),
+      payout: acc.payout + Number(b.totalAmount || 0),
+      transferFee: acc.transferFee + Number(b.transferFee || 0),
+      transferFeeTax: acc.transferFeeTax + Number(b.transferFeeTax ?? b.tax ?? 0)
+    }),
+    { txnCount: 0, payout: 0, transferFee: 0, transferFeeTax: 0 }
+  );
+  const selectedPayableBatches = selectedBatchRows.filter((b) => b.status !== "TRANSFERRED");
+
+  function toggleBatch(batchNo) {
+    setSelectedBatches((prev) => {
+      const next = new Set(prev);
+      if (next.has(batchNo)) next.delete(batchNo);
+      else next.add(batchNo);
+      return next;
+    });
+  }
+
+  function toggleAllBatches() {
+    setSelectedBatches(allBatchesSelected ? new Set() : new Set(payableBatches.map((b) => b.batchNo)));
+  }
+
+  // Batches are a live GROUP BY, not a stored entity, so a payout run has to
+  // resolve the selection back to the individual payments the transfer API
+  // works on. Already-transferred and failed rows are dropped here.
+  async function payoutSelectedBatches() {
+    if (!selectedPayableBatches.length) return;
+    setBatchPayoutLoading(true);
+    try {
+      const lists = await Promise.all(
+        selectedPayableBatches.map((b) =>
+          api
+            .get("/transactions", { params: { batch: b.batchNo, pageSize: 500 } })
+            .then(({ data }) => data.transactions || [])
+        )
+      );
+      const txns = lists
+        .flat()
+        .filter((t) => !t.failed && (t.payout?.status || "PENDING") !== "TRANSFERRED");
+      if (!txns.length) {
+        showToast("Nothing left to transfer in the selected batches.", "warning");
+        return;
+      }
+      setTransferTxns(txns);
+    } catch {
+      showToast("Failed to load the transactions for these batches.", "error");
+    } finally {
+      setBatchPayoutLoading(false);
+    }
   }
 
   const totals = summary?.totals;
@@ -1198,7 +1284,7 @@ export default function AdminDashboard() {
               className={inputCls}
             >
               <option value="">All</option>
-              <option value="PAID">Bill settled</option>
+              <option value="PAID">Online settled</option>
               <option value="PENDING">Bill pending</option>
               <option value="FAILED">Failed</option>
             </select>
@@ -1283,7 +1369,7 @@ export default function AdminDashboard() {
             <p className="text-sm font-medium">
               {selected.size} selected ·{" "}
               <span className="num">
-                {CURRENCY} {fmt(selectedTxns.reduce((s, t) => s + Number(t.paidAmount || 0), 0))}
+                {CURRENCY} {fmt(selectedTxns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0))}
               </span>
             </p>
             <div className="flex gap-2 ml-auto">
@@ -1360,17 +1446,30 @@ export default function AdminDashboard() {
             ) : (
               <>
                 <div className="overflow-x-auto hidden sm:block">
-                  <table className="w-full min-w-240 text-sm">
+                  <table className="w-full min-w-[1320px] text-sm">
                     <thead>
                       <tr className="text-left text-xs text-zinc-400 border-b border-zinc-100">
+                        <th className="pl-5 pr-2 py-2.5 w-10">
+                          <input
+                            type="checkbox"
+                            checked={allBatchesSelected}
+                            onChange={toggleAllBatches}
+                            disabled={payableBatches.length === 0}
+                            aria-label="Select all payable batches"
+                            className="w-4 h-4 rounded border-zinc-300 accent-sky-600 cursor-pointer disabled:cursor-not-allowed"
+                          />
+                        </th>
                         <th className="px-5 py-2.5 font-medium">Batch</th>
                         <th className="px-5 py-2.5 font-medium whitespace-nowrap">Transaction date</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Total transactions</th>
-                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap">Total transaction amount</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Service fee</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Tax</th>
+                        <th className="px-5 py-2.5 font-semibold text-zinc-600 text-right whitespace-nowrap">Total transactions</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="Full amount charged through Telr, service fee included">Telr total</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="Bill paid, excluding tip and service fee">Bill amount</th>
+                        <th className="px-5 py-2.5 font-medium text-right">Tip</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="DeynoQR commission, deducted from the payout">Platform fee</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="Transactions x AED 0.50">Transfer fee</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="5% VAT on the transfer fee">Transfer fee tax</th>
                         <th className="px-5 py-2.5 font-medium whitespace-nowrap">Payout date</th>
-                        <th className="px-5 py-2.5 font-medium text-right">Payout amount</th>
+                        <th className="px-5 py-2.5 font-medium text-right whitespace-nowrap" title="Excludes service fee, platform fee deducted">Payout to restaurant</th>
                         <th className="px-5 py-2.5 font-medium">Status</th>
                       </tr>
                     </thead>
@@ -1379,15 +1478,29 @@ export default function AdminDashboard() {
                         <tr
                           key={b.batchNo}
                           onClick={() => setBatchDetail(b.batchNo)}
-                          className="border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition"
+                          className={`border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition ${selectedBatches.has(b.batchNo) ? "bg-sky-50/60" : ""}`}
                           title="View this batch's transactions"
                         >
+                          <td className="pl-5 pr-2 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedBatches.has(b.batchNo)}
+                              onChange={() => toggleBatch(b.batchNo)}
+                              disabled={b.status === "TRANSFERRED"}
+                              aria-label={`Select batch B-${b.batchNo}`}
+                              title={b.status === "TRANSFERRED" ? "Already transferred" : "Select this batch"}
+                              className="w-4 h-4 rounded border-zinc-300 accent-sky-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                            />
+                          </td>
                           <td className="px-5 py-3 font-medium text-sky-700">B-{b.batchNo}</td>
                           <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtTxnRange(b.firstTxnAt, b.lastTxnAt)}</td>
-                          <td className="num px-5 py-3 text-right text-zinc-500">{b.txnCount}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-900 font-bold text-[15px]">{b.txnCount}</td>
                           <td className="num px-5 py-3 text-right text-zinc-700">{CURRENCY} {fmt(b.totalTxnAmount)}</td>
-                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.serviceFee)}</td>
-                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.tax)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-700">{CURRENCY} {fmt(b.billAmount)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.tipAmount)}</td>
+                          <td className="num px-5 py-3 text-right text-rose-600">-{CURRENCY} {fmt(b.platformFee)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.transferFee)}</td>
+                          <td className="num px-5 py-3 text-right text-zinc-500">{CURRENCY} {fmt(b.transferFeeTax ?? b.tax)}</td>
                           <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtPayoutDay(b)}</td>
                           <td className="num px-5 py-3 text-right text-zinc-900 font-medium">{CURRENCY} {fmt(b.totalAmount)}</td>
                           <td className="px-5 py-3">
@@ -1411,10 +1524,21 @@ export default function AdminDashboard() {
                     <div
                       key={b.batchNo}
                       onClick={() => setBatchDetail(b.batchNo)}
-                      className="p-4 space-y-2.5 cursor-pointer hover:bg-zinc-50 transition"
+                      className={`p-4 space-y-2.5 cursor-pointer hover:bg-zinc-50 transition ${selectedBatches.has(b.batchNo) ? "bg-sky-50/60" : ""}`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-sky-700">B-{b.batchNo}</span>
+                        <span className="flex items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedBatches.has(b.batchNo)}
+                            onChange={() => toggleBatch(b.batchNo)}
+                            onClick={(e) => e.stopPropagation()}
+                            disabled={b.status === "TRANSFERRED"}
+                            aria-label={`Select batch B-${b.batchNo}`}
+                            className="w-4 h-4 rounded border-zinc-300 accent-sky-600 disabled:opacity-40"
+                          />
+                          <span className="font-medium text-sky-700">B-{b.batchNo}</span>
+                        </span>
                         {b.status === "MIXED" ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">
                             Mixed
@@ -1426,17 +1550,23 @@ export default function AdminDashboard() {
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                         <span className="text-zinc-400">Transaction date</span>
                         <span className="text-right text-zinc-600">{fmtTxnRange(b.firstTxnAt, b.lastTxnAt)}</span>
-                        <span className="text-zinc-400">Total transactions</span>
-                        <span className="num text-right text-zinc-600">{b.txnCount}</span>
-                        <span className="text-zinc-400">Total transaction amount</span>
+                        <span className="text-zinc-500 font-semibold">Total transactions</span>
+                        <span className="num text-right text-zinc-900 font-bold text-[15px]">{b.txnCount}</span>
+                        <span className="text-zinc-400">Telr total (incl. service fee)</span>
                         <span className="num text-right text-zinc-700">{CURRENCY} {fmt(b.totalTxnAmount)}</span>
-                        <span className="text-zinc-400">Service fee</span>
-                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.serviceFee)}</span>
-                        <span className="text-zinc-400">Tax</span>
-                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.tax)}</span>
+                        <span className="text-zinc-400">Bill amount (excl. tip)</span>
+                        <span className="num text-right text-zinc-700">{CURRENCY} {fmt(b.billAmount)}</span>
+                        <span className="text-zinc-400">Tip</span>
+                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.tipAmount)}</span>
+                        <span className="text-zinc-400">Platform fee</span>
+                        <span className="num text-right text-rose-600">-{CURRENCY} {fmt(b.platformFee)}</span>
+                        <span className="text-zinc-400">Transfer fee</span>
+                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.transferFee)}</span>
+                        <span className="text-zinc-400">Transfer fee tax</span>
+                        <span className="num text-right text-zinc-600">{CURRENCY} {fmt(b.transferFeeTax ?? b.tax)}</span>
                         <span className="text-zinc-400">Payout date</span>
                         <span className="text-right text-zinc-600">{fmtPayoutDay(b)}</span>
-                        <span className="text-zinc-400">Payout amount</span>
+                        <span className="text-zinc-400">Payout to restaurant</span>
                         <span className="num text-right font-semibold text-zinc-900">{CURRENCY} {fmt(b.totalAmount)}</span>
                       </div>
                     </div>
@@ -1589,7 +1719,7 @@ export default function AdminDashboard() {
                       <td className="num px-4 py-3 text-right text-zinc-600">
                         {t.failed ? "-" : fmt(t.restaurantPayoutAmount)}
                       </td>
-                      <td className="px-4 py-3"><PaidBadge status={t.paidStatus} /></td>
+                      <td className="px-4 py-3"><PaidBadge status={t.paidStatus} qrBillStatus={t.qrBillStatus} telrStatus={t.telrStatus} /></td>
                       <td className="px-4 py-3">
                         {t.failed ? (
                           <span className="text-xs text-zinc-300">-</span>
@@ -1720,7 +1850,7 @@ export default function AdminDashboard() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <PaidBadge status={t.paidStatus} />
+                    <PaidBadge status={t.paidStatus} qrBillStatus={t.qrBillStatus} telrStatus={t.telrStatus} />
                     {!t.failed && <PayoutBadge status={payoutStatus} />}
                     {!t.failed && payoutStatus === "SCHEDULED" && t.payout?.scheduledDate && (
                       <span className="num text-xs text-zinc-400">
@@ -1771,6 +1901,54 @@ export default function AdminDashboard() {
         </section>
       </main>
 
+      {/* Batch selection bar - floats over the page bottom so the payout action
+          stays reachable on a phone without scrolling back up. */}
+      {view === "batches" && selectedBatches.size > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 pointer-events-none">
+          <div className="pointer-events-auto mx-auto max-w-3xl rounded-2xl bg-ink-950 text-white shadow-2xl px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold truncate">
+                  {selectedBatches.size} batch{selectedBatches.size === 1 ? "" : "es"} ·{" "}
+                  <span className="num">{batchSelectionTotals.txnCount}</span> txns
+                </p>
+                <p className="text-[11px] text-zinc-400 truncate">
+                  Transfer fee <span className="num">{CURRENCY} {fmt(batchSelectionTotals.transferFee)}</span>
+                  {" · "}Tax <span className="num">{CURRENCY} {fmt(batchSelectionTotals.transferFeeTax)}</span>
+                </p>
+              </div>
+
+              <div className="text-right shrink-0">
+                <p className="text-[10px] uppercase tracking-wide text-zinc-400">Payout</p>
+                <p className="num text-base font-bold leading-tight">
+                  {CURRENCY} {fmt(batchSelectionTotals.payout)}
+                </p>
+              </div>
+
+              {selectedPayableBatches.length > 0 && (
+                <button
+                  onClick={payoutSelectedBatches}
+                  disabled={batchPayoutLoading}
+                  className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-xl bg-emerald-500 text-ink-950 font-semibold hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-50 transition"
+                >
+                  <Banknote className="w-4 h-4" />
+                  {batchPayoutLoading ? "Loading..." : "Payout"}
+                </button>
+              )}
+
+              <button
+                onClick={() => setSelectedBatches(new Set())}
+                className="shrink-0 p-2 rounded-xl hover:bg-ink-800 transition"
+                title="Clear selection"
+                aria-label="Clear batch selection"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {transferTxns && (
         <TransferModal
           txns={transferTxns}
@@ -1779,6 +1957,7 @@ export default function AdminDashboard() {
           onDone={() => {
             setTransferTxns(null);
             setSelected(new Set());
+            setSelectedBatches(new Set());
             load();
             loadBatches();
           }}

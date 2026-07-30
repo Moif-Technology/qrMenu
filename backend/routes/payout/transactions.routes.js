@@ -80,6 +80,14 @@ async function queryTransactions(req, { paginate = true } = {}) {
     if (status === "FAILED") {
       // Only the failed attempts branch should return rows.
       conditions.push("1 = 0");
+    } else if (status === "PAID") {
+      conditions.push("(p.PaidStatus = @status OR pss.Status = 'SETTLED')");
+      params.status = { type: mssql.VarChar(50), value: String(status) };
+      includeAttempts = false;
+    } else if (status === "PENDING") {
+      conditions.push("(p.PaidStatus = @status AND ISNULL(pss.Status, '') <> 'SETTLED')");
+      params.status = { type: mssql.VarChar(50), value: String(status) };
+      includeAttempts = false;
     } else if (status) {
       conditions.push("p.PaidStatus = @status");
       params.status = { type: mssql.VarChar(50), value: String(status) };
@@ -163,9 +171,16 @@ async function queryTransactions(req, { paginate = true } = {}) {
           p.ShopID, p.TransID, p.MethodID,
           CAST(NULL AS VARCHAR(30)) AS ModeName,
           p.BillAmount, p.PaidAmount, p.PaidBillAmount, p.BalanceAmount, p.PaidStatus,
+          pss.Status AS TelrStatus,
+          pss.Mode AS TelrMode,
           p.TableID, tm.TableNO AS TableNo, p.CreatedAt,
           sm.BillNo AS BillNo,
-          CAST(NULL AS NVARCHAR(100)) AS OrderRef,
+          p.OrderRef AS OrderRef,
+          CASE
+            WHEN sm.SalesID IS NULL THEN 'OPEN_IN_POS'
+            WHEN CAST(ISNULL(sm.PaidAmount, 0) AS DECIMAL(18,4)) >= CAST(ISNULL(sm.Amount, 0) AS DECIMAL(18,4)) THEN 'CLOSED_IN_POS'
+            ELSE 'PARTIAL_IN_POS'
+          END AS PosBillStatus,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
           ps.PayoutID, ps.Status AS PayoutStatus, ps.Amount AS PayoutAmount,
@@ -173,14 +188,16 @@ async function queryTransactions(req, { paginate = true } = {}) {
           ps.BatchNo, ps.ScheduledDate,
           ISNULL(p.ServiceFeeAmount, 0) AS ServiceFeeAmount,
           ISNULL(p.TipAmount, 0)        AS TipAmount,
-          p.PlatformFeeAmount,
+          ISNULL(p.PlatformFeeAmount, 0) AS PlatformFeeAmount,
           -- PaidAmount is the REAL total charged per leg (bill-share + fee +
           -- tip). Tip belongs to the restaurant (kept in), only DeynoQR's own
           -- service fee and the flat platform fee come out.
-          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount) AS RestaurantPayoutAmount
+          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0)) AS RestaurantGrossAmount,
+          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.PlatformFeeAmount,0)) AS RestaurantPayoutAmount
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
+        LEFT JOIN dbo.PaymentSession pss ON pss.OrderRef = p.OrderRef
         LEFT JOIN Moifcore.dbo.TableMaster tm ON tm.TableID = p.TableID
         LEFT JOIN Moifcore.dbo.SalesMaster sm ON sm.SalesID = p.SalesID
         ${whereClause}
@@ -198,9 +215,12 @@ async function queryTransactions(req, { paginate = true } = {}) {
           CAST(0 AS MONEY)         AS PaidBillAmount,
           a.Amount                 AS BalanceAmount,
           a.Status                 AS PaidStatus,
+          a.Status                 AS TelrStatus,
+          a.Mode                   AS TelrMode,
           a.TableID, tm2.TableNO AS TableNo, a.CreatedAt,
           CAST(NULL AS NUMERIC(18,0)) AS BillNo,
           a.OrderRef,
+          CAST('OPEN_IN_POS' AS VARCHAR(20)) AS PosBillStatus,
           rm.Name  AS RestaurantName,
           rm.Slug  AS RestaurantSlug,
           NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -208,6 +228,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
           CAST(0 AS MONEY) AS ServiceFeeAmount,
           CAST(0 AS MONEY) AS TipAmount,
           CAST(0 AS MONEY) AS PlatformFeeAmount,
+          CAST(0 AS MONEY) AS RestaurantGrossAmount,
           CAST(0 AS MONEY) AS RestaurantPayoutAmount
         FROM dbo.PaymentAttempts a
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = a.ShopID
@@ -244,9 +265,17 @@ async function queryTransactions(req, { paginate = true } = {}) {
         serviceFeeAmount: failed ? null : Number(r.ServiceFeeAmount),
         tipAmount: failed ? null : Number(r.TipAmount),
         platformFeeAmount: failed ? null : Number(r.PlatformFeeAmount),
+        restaurantGrossAmount: failed ? null : Number(r.RestaurantGrossAmount),
         restaurantPayoutAmount: failed ? null : Number(r.RestaurantPayoutAmount),
         // DECLINED and CANCELLED both surface as FAILED to keep it simple.
-        paidStatus: failed ? "FAILED" : r.PaidStatus,
+        // For split payments, Payment.PaidStatus can remain PENDING because
+        // QR did not pay the whole bill. PaymentSession.SETTLED is the actual
+        // Telr success signal for this leg.
+        paidStatus: failed ? "FAILED" : (r.TelrStatus === "SETTLED" ? "PAID" : r.PaidStatus),
+        qrBillStatus: failed ? null : r.PaidStatus,
+        telrStatus: failed ? r.TelrStatus : (r.TelrStatus || null),
+        telrMode: failed ? r.TelrMode : (r.TelrMode || null),
+        posBillStatus: failed ? null : (r.PosBillStatus || null),
         failReason: failed ? r.PaidStatus : null,
         orderRef: r.OrderRef || null,
         // TableID is TableMaster's internal PK from the QR token; TableNo is
@@ -265,7 +294,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
                 status: ["PROCESSING", "SCHEDULED", "TRANSFERRED"].includes(r.PayoutStatus)
                   ? r.PayoutStatus
                   : "PENDING",
-                amount: Number(r.PayoutAmount),
+                amount: Number(r.RestaurantPayoutAmount),
                 transferRef: r.TransferRef,
                 transferDate: r.TransferDate,
                 transferredBy: r.TransferredBy,
@@ -273,7 +302,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
                 batchNo: r.BatchNo != null ? Number(r.BatchNo) : null,
                 scheduledDate: r.ScheduledDate || null
               }
-            : { status: "PENDING", amount: Number(r.PaidAmount), batchNo: null, scheduledDate: null }
+            : { status: "PENDING", amount: Number(r.RestaurantPayoutAmount), batchNo: null, scheduledDate: null }
       };
     });
 
@@ -282,7 +311,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
 
 /**
  * GET /api/payout/transactions
- * Query params: shopId (company only), status (payment PaidStatus),
+ * Query params: shopId (company only), status (effective online status),
  * payoutStatus (PENDING|PROCESSING|SCHEDULED|TRANSFERRED), batch (numeric BatchNo), from, to (ISO dates),
  * sort (id|bill|paid|date|restaurant), dir (asc|desc), page, pageSize.
  */
@@ -328,7 +357,7 @@ router.get("/summary", requireAuth, async (req, res) => {
 
     // Restaurant's actual share, net of our service fee cut and the flat
     // platform fee - not the raw amount the customer paid via QR.
-    const netExpr = "(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - p.PlatformFeeAmount)";
+    const netExpr = "(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.PlatformFeeAmount,0))";
 
     const totals = await query(
       `
@@ -338,7 +367,7 @@ router.get("/summary", requireAuth, async (req, res) => {
         ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ${netExpr} END), 0) AS totalTransferred,
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
                         THEN ${netExpr} END), 0)                            AS totalPendingPayout,
-        ISNULL(SUM(p.PlatformFeeAmount), 0)                                 AS totalPlatformFees,
+        ISNULL(SUM(ISNULL(p.PlatformFeeAmount, 0)), 0)                      AS totalPlatformFees,
         ISNULL(SUM(${netExpr}), 0)                                          AS totalRestaurantPayoutDue
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
