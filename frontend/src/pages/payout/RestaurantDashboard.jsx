@@ -1,12 +1,21 @@
+import {
+  ArrowUpDown,
+  CalendarClock,
+  CalendarDays,
+  ChevronDown,
+  FileDown, FileSpreadsheet,
+  KeyRound,
+  LogOut,
+  ReceiptText,
+  RefreshCw,
+  Store,
+  X
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Store, LogOut, KeyRound, RefreshCw, ReceiptText, ChevronDown, ArrowUpDown,
-  CalendarDays, CalendarClock, X, FileDown, FileSpreadsheet
-} from "lucide-react";
-import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
-import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
+import { exportPayoutsExcel, exportPayoutsPdf, fmtDateTime } from "../../lib/exportPayouts.js";
+import api, { clearSession, getStoredUser } from "../../lib/payoutApi.js";
 
 const CURRENCY = "AED";
 
@@ -522,9 +531,7 @@ export default function RestaurantDashboard() {
             </div>
           </div>
 
-          <p className="text-zinc-500 text-xs mt-4">
-            Payments are collected by DeynoQR and settled to your bank within about 2 working days.
-          </p>
+     
         </section>
 
         {/* Filter chips */}
