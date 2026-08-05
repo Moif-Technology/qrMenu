@@ -428,7 +428,12 @@ export default function RestaurantDashboard() {
     setRangePreset("");
   }
 
-  const owed = summary ? Number(summary.totalPendingPayout) : 0;
+  const paidOut = Number(summary?.totalTransferred || 0);
+  const scheduledPayout = Number(summary?.totalScheduledPayout || 0);
+  const processingPayout = Number(summary?.totalProcessingPayout || 0);
+  const pendingPayout = summary?.totalAwaitingPayout != null
+    ? Number(summary.totalAwaitingPayout)
+    : Math.max(0, Number(summary?.totalPendingPayout || 0) - scheduledPayout - processingPayout);
 
   const nextPayout = useMemo(() => getNextPayoutDate(), []);
 
@@ -483,15 +488,27 @@ export default function RestaurantDashboard() {
           </p>
           <div className="grid grid-cols-2 gap-px mt-6 rounded-xl overflow-hidden bg-ink-700">
             <div className="bg-ink-900 px-4 py-3">
-              <p className="text-xs text-zinc-400">Awaiting payout</p>
-              <p className="num text-base sm:text-lg font-semibold text-amber-400 mt-0.5">
-                {CURRENCY} {fmt(owed)}
+              <p className="text-xs text-zinc-400">Scheduled</p>
+              <p className="num text-base sm:text-lg font-semibold text-violet-300 mt-0.5">
+                {CURRENCY} {fmt(scheduledPayout)}
               </p>
             </div>
             <div className="bg-ink-900 px-4 py-3">
-              <p className="text-xs text-zinc-400">Paid to you</p>
+              <p className="text-xs text-zinc-400">Processing</p>
+              <p className="num text-base sm:text-lg font-semibold text-indigo-300 mt-0.5">
+                {CURRENCY} {fmt(processingPayout)}
+              </p>
+            </div>
+            <div className="bg-ink-900 px-4 py-3">
+              <p className="text-xs text-zinc-400">Pending</p>
+              <p className="num text-base sm:text-lg font-semibold text-amber-400 mt-0.5">
+                {CURRENCY} {fmt(pendingPayout)}
+              </p>
+            </div>
+            <div className="bg-ink-900 px-4 py-3">
+              <p className="text-xs text-zinc-400">Paid out</p>
               <p className="num text-base sm:text-lg font-semibold text-emerald-400 mt-0.5">
-                {CURRENCY} {fmt(summary?.totalTransferred)}
+                {CURRENCY} {fmt(paidOut)}
               </p>
             </div>
           </div>

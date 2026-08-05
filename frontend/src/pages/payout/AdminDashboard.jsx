@@ -171,12 +171,32 @@ function PaidBadge({ status, qrBillStatus, telrStatus }) {
 
 function Stat({ label, value, tone = "default", sub }) {
   const valueCls =
-    tone === "amber" ? "text-amber-400" : tone === "emerald" ? "text-emerald-400" : "text-white";
+    tone === "amber" ? "text-amber-400"
+      : tone === "emerald" ? "text-emerald-400"
+        : tone === "violet" ? "text-violet-300"
+          : tone === "indigo" ? "text-indigo-300"
+            : tone === "sky" ? "text-sky-300"
+              : "text-white";
   return (
-    <div className="px-5 py-4">
-      <p className="text-xs text-zinc-400">{label}</p>
-      <p className={`num text-xl sm:text-2xl font-semibold mt-1 ${valueCls}`}>{value}</p>
-      {sub && <p className="text-xs text-zinc-500 mt-0.5">{sub}</p>}
+    <div className="min-w-0 px-3 py-3 sm:px-5 sm:py-4">
+      <p className="text-[10px] sm:text-xs text-zinc-400 truncate">{label}</p>
+      <p className={`num text-[15px] sm:text-xl font-semibold mt-0.5 sm:mt-1 leading-tight ${valueCls}`}>
+        {value}
+      </p>
+      {sub && <p className="text-[10px] sm:text-xs text-zinc-500 mt-0.5 truncate">{sub}</p>}
+    </div>
+  );
+}
+
+function StatGroup({ title, stats }) {
+  return (
+    <div className="border-b border-ink-700 last:border-b-0">
+      <div className="px-3 pt-3 sm:px-5 sm:pt-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y divide-ink-700">
+        {stats.map((s) => <Stat key={s.label} {...s} />)}
+      </div>
     </div>
   );
 }
@@ -1040,16 +1060,76 @@ export default function AdminDashboard() {
     filters.search || filters.from || filters.to || filters.minAmount || filters.maxAmount ||
     filters.batch;
 
-  const stats = useMemo(() => {
+  const statGroups = useMemo(() => {
     if (!totals) return [];
+    const pendingPayout = totals.totalAwaitingPayout != null
+      ? Number(totals.totalAwaitingPayout)
+      : Math.max(
+          0,
+          Number(totals.totalPendingPayout || 0)
+            - Number(totals.totalScheduledPayout || 0)
+            - Number(totals.totalProcessingPayout || 0)
+        );
     return [
       {
-        label: "Collected",
-        value: `${CURRENCY} ${fmt(totals.totalCollected)}`,
-        sub: `${totals.txnCount} transactions`
+        title: "Collections",
+        stats: [
+          {
+            label: "Total charged",
+            value: `${CURRENCY} ${fmt(totals.totalCollected)}`,
+            sub: "Service fee included"
+          },
+          {
+            label: "Without service fee",
+            value: `${CURRENCY} ${fmt(totals.totalCollectedExcludingServiceFee)}`
+          },
+          {
+            label: "Service fee total",
+            value: `${CURRENCY} ${fmt(totals.totalServiceFeeAmount)}`,
+            tone: "sky"
+          },
+          {
+            label: "Tip total",
+            value: `${CURRENCY} ${fmt(totals.totalTipAmount)}`,
+            tone: "emerald",
+            sub: `${totals.txnCount} transactions`
+          }
+        ]
       },
-      { label: "Awaiting transfer", value: `${CURRENCY} ${fmt(totals.totalPendingPayout)}`, tone: "amber" },
-      { label: "Transferred", value: `${CURRENCY} ${fmt(totals.totalTransferred)}`, tone: "emerald" }
+      {
+        title: "Today",
+        stats: [
+          {
+            label: "Today charged",
+            value: `${CURRENCY} ${fmt(totals.todayCollected)}`,
+            sub: "Service fee included"
+          },
+          {
+            label: "Today without service fee",
+            value: `${CURRENCY} ${fmt(totals.todayCollectedExcludingServiceFee)}`
+          },
+          {
+            label: "Today service fee",
+            value: `${CURRENCY} ${fmt(totals.todayServiceFeeAmount)}`,
+            tone: "sky"
+          },
+          {
+            label: "Today tips",
+            value: `${CURRENCY} ${fmt(totals.todayTipAmount)}`,
+            tone: "emerald",
+            sub: `${totals.todayTxnCount || 0} transactions`
+          }
+        ]
+      },
+      {
+        title: "Settlement",
+        stats: [
+          { label: "Scheduled", value: `${CURRENCY} ${fmt(totals.totalScheduledPayout)}`, tone: "violet" },
+          { label: "Processing", value: `${CURRENCY} ${fmt(totals.totalProcessingPayout)}`, tone: "indigo" },
+          { label: "Pending", value: `${CURRENCY} ${fmt(pendingPayout)}`, tone: "amber" },
+          { label: "Paid out", value: `${CURRENCY} ${fmt(totals.totalTransferred)}`, tone: "emerald" }
+        ]
+      }
     ];
   }, [totals]);
 
@@ -1097,14 +1177,14 @@ export default function AdminDashboard() {
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Money position: the one dark anchor on the page */}
-        <section className="rounded-2xl bg-ink-950 shadow-sm grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-ink-700 overflow-hidden">
-          {stats.length === 0 ? (
-            <div className="px-5 py-4 sm:col-span-3">
+        <section className="rounded-2xl bg-ink-950 shadow-sm overflow-hidden">
+          {statGroups.length === 0 ? (
+            <div className="px-5 py-4">
               <div className="h-4 w-24 rounded bg-ink-800 animate-pulse" />
               <div className="h-7 w-40 rounded bg-ink-800 animate-pulse mt-2" />
             </div>
           ) : (
-            stats.map((s) => <Stat key={s.label} {...s} />)
+            statGroups.map((g) => <StatGroup key={g.title} {...g} />)
           )}
         </section>
 

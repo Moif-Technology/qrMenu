@@ -358,13 +358,26 @@ router.get("/summary", requireAuth, async (req, res) => {
     // Restaurant's actual share, net of our service fee cut and the flat
     // platform fee - not the raw amount the customer paid via QR.
     const netExpr = "(p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.PlatformFeeAmount,0))";
+    const todayExpr = "CAST(p.CreatedAt AS date) = CAST(SYSDATETIME() AS date)";
 
     const totals = await query(
       `
       SELECT
         COUNT(*)                                                            AS txnCount,
         ISNULL(SUM(p.PaidAmount), 0)                                        AS totalCollected,
+        ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0)), 0)        AS totalCollectedExcludingServiceFee,
+        ISNULL(SUM(ISNULL(p.ServiceFeeAmount, 0)), 0)                       AS totalServiceFeeAmount,
+        ISNULL(SUM(ISNULL(p.TipAmount, 0)), 0)                              AS totalTipAmount,
+        ISNULL(SUM(CASE WHEN ${todayExpr} THEN 1 ELSE 0 END), 0)            AS todayTxnCount,
+        ISNULL(SUM(CASE WHEN ${todayExpr} THEN p.PaidAmount ELSE 0 END), 0) AS todayCollected,
+        ISNULL(SUM(CASE WHEN ${todayExpr} THEN p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) ELSE 0 END), 0) AS todayCollectedExcludingServiceFee,
+        ISNULL(SUM(CASE WHEN ${todayExpr} THEN ISNULL(p.ServiceFeeAmount, 0) ELSE 0 END), 0) AS todayServiceFeeAmount,
+        ISNULL(SUM(CASE WHEN ${todayExpr} THEN ISNULL(p.TipAmount, 0) ELSE 0 END), 0) AS todayTipAmount,
         ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ${netExpr} END), 0) AS totalTransferred,
+        ISNULL(SUM(CASE WHEN ps.Status = 'SCHEDULED' THEN ${netExpr} END), 0) AS totalScheduledPayout,
+        ISNULL(SUM(CASE WHEN ps.Status = 'PROCESSING' THEN ${netExpr} END), 0) AS totalProcessingPayout,
+        ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status NOT IN ('PROCESSING', 'SCHEDULED', 'TRANSFERRED')
+                        THEN ${netExpr} END), 0)                            AS totalAwaitingPayout,
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED'
                         THEN ${netExpr} END), 0)                            AS totalPendingPayout,
         ISNULL(SUM(ISNULL(p.PlatformFeeAmount, 0)), 0)                      AS totalPlatformFees,
