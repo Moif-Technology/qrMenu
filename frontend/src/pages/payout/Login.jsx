@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { QrCode, ArrowRight } from "lucide-react";
-import api, { storeSession } from "../../lib/payoutApi.js";
+import api, { clearSession, storeSession } from "../../lib/payoutApi.js";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -9,6 +9,27 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const token = localStorage.getItem("dash_token");
+    if (!token) return () => { alive = false; };
+
+    api.get("/auth/me")
+      .then(({ data }) => {
+        if (!alive) return;
+        if (data?.user) {
+          storeSession(token, data.user);
+          navigate("/", { replace: true });
+        }
+      })
+      .catch(() => {
+        if (!alive) return;
+        clearSession();
+      });
+
+    return () => { alive = false; };
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();
