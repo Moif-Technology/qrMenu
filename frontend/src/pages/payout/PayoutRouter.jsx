@@ -10,6 +10,7 @@ import AdminDashboard from "./AdminDashboard.jsx";
 import RestaurantDashboard from "./RestaurantDashboard.jsx";
 import api, { getStoredUser, storeSession, clearSession } from "../../lib/payoutApi.js";
 
+
 function Home() {
   const [user, setUser] = useState(() => getStoredUser());
   const [checking, setChecking] = useState(() => Boolean(localStorage.getItem("dash_token")));
