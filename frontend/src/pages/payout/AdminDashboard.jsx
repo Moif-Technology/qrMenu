@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   QrCode, LogOut, RefreshCw, Banknote, ChevronLeft, ChevronRight, X,
   KeyRound, Search, ShieldAlert, Store, ArrowUp, ArrowDown, ArrowUpDown,
-  FileDown, FileSpreadsheet
+  FileDown, FileSpreadsheet, CalendarClock
 } from "lucide-react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -18,13 +18,21 @@ function startOfDay(from) {
   return d;
 }
 
+// Backend dates arrive as "YYYY-MM-DD..." UTC strings - read the calendar day
+// literally instead of letting the local timezone shift it a day.
+function parseLocalDay(value) {
+  const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
 function toISODate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function ScheduleDateModal({ count, onConfirm, onClose }) {
-  const [date, setDate] = useState(() => startOfDay(new Date()));
+function ScheduleDateModal({ count, initialDate, onConfirm, onClose }) {
+  const [date, setDate] = useState(() => parseLocalDay(initialDate) || startOfDay(new Date()));
   const [saving, setSaving] = useState(false);
+  const rescheduling = Boolean(initialDate);
 
   async function confirm() {
     setSaving(true);
@@ -39,18 +47,21 @@ function ScheduleDateModal({ count, onConfirm, onClose }) {
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-950/40 backdrop-blur-sm px-4">
       <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-zinc-900">Schedule payout date</h3>
+          <h3 className="font-semibold text-zinc-900">
+            {rescheduling ? "Change payout date" : "Schedule payout date"}
+          </h3>
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
             <X className="w-5 h-5" />
           </button>
         </div>
         <p className="text-sm text-zinc-500">
-          Pick the date {count > 1 ? `these ${count} payments` : "this payment"} should go out.
+          {rescheduling ? "Pick the new date " : "Pick the date "}
+          {count > 1 ? `these ${count} payments` : "this payment"} should go out.
         </p>
         <DatePicker
           selected={date}
           onChange={setDate}
-          minDate={new Date()}
+          minDate={startOfDay(new Date())}
           inline
         />
         <div className="flex gap-2 justify-end pt-1">
@@ -489,11 +500,16 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
 
   const total = txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
   const activeIds = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED").map((t) => t.paymentId);
+  // Already-scheduled batch: prefill the modal with the date it sits on today,
+  // so "Mark scheduled" doubles as "move this batch to another payout date".
+  const batchScheduledDate =
+    txns.find((t) => t.payout?.status === "SCHEDULED" && t.payout?.scheduledDate)?.payout?.scheduledDate || null;
 
   function markBatch(status) {
     if (!activeIds.length) return;
     setActing(true);
     requestStatusChange(status, activeIds, {
+      currentDate: status === "SCHEDULED" ? batchScheduledDate : null,
       after: async () => { await fetchTxns(); setActing(false); }
     });
     if (status === "SCHEDULED") setActing(false); // the date modal takes over from here
@@ -542,7 +558,7 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
                 disabled={acting}
                 className="px-3.5 py-1.5 text-sm rounded-xl bg-violet-100 text-violet-700 font-semibold hover:bg-violet-200 active:scale-[0.98] disabled:opacity-50 transition"
               >
-                Mark scheduled
+                {batchScheduledDate ? "Change payout date" : "Mark scheduled"}
               </button>
               <button
                 onClick={transferBatch}
@@ -675,6 +691,7 @@ export default function AdminDashboard() {
   const [batchDetail, setBatchDetail] = useState(null);
   const [selectedBatches, setSelectedBatches] = useState(() => new Set());
   const [batchPayoutLoading, setBatchPayoutLoading] = useState(false);
+  const [batchRescheduleLoading, setBatchRescheduleLoading] = useState(false);
   const [scheduling, setScheduling] = useState(null);
   const [toast, setToast] = useState(null);
   const showToast = useCallback((message, variant = "info", title = null) => {
@@ -945,7 +962,7 @@ export default function AdminDashboard() {
   // instead of calling the API directly. Other statuses go straight through.
   function requestStatusChange(status, ids, opts = {}) {
     if (status === "SCHEDULED") {
-      setScheduling({ ids, after: opts.after });
+      setScheduling({ ids, currentDate: opts.currentDate || null, after: opts.after });
       return;
     }
     setBulkStatus(status, ids).then(() => opts.after?.());
@@ -1048,6 +1065,42 @@ export default function AdminDashboard() {
       showToast("Failed to load the transactions for these batches.", "error");
     } finally {
       setBatchPayoutLoading(false);
+    }
+  }
+
+  // Moving a batch to another payout date is the same bulk-status call as the
+  // first scheduling - it just has to resolve the batches back to payments
+  // first. Already-transferred rows are dropped; the backend rejects them anyway.
+  async function rescheduleSelectedBatches() {
+    if (!selectedPayableBatches.length) return;
+    setBatchRescheduleLoading(true);
+    try {
+      const lists = await Promise.all(
+        selectedPayableBatches.map((b) =>
+          api
+            .get("/transactions", { params: { batch: b.batchNo, pageSize: 500 } })
+            .then(({ data }) => data.transactions || [])
+        )
+      );
+      const ids = lists
+        .flat()
+        .filter((t) => !t.failed && (t.payout?.status || "PENDING") !== "TRANSFERRED")
+        .map((t) => t.paymentId);
+      if (!ids.length) {
+        showToast("Nothing left to reschedule in the selected batches.", "warning");
+        return;
+      }
+      // Only prefill when every selected batch already sits on one same date.
+      const dates = [...new Set(selectedPayableBatches.map((b) => b.scheduledDate || ""))];
+      setScheduling({
+        ids,
+        currentDate: dates.length === 1 ? dates[0] || null : null,
+        after: () => setSelectedBatches(new Set())
+      });
+    } catch {
+      showToast("Failed to load the transactions for these batches.", "error");
+    } finally {
+      setBatchRescheduleLoading(false);
     }
   }
 
@@ -2005,6 +2058,18 @@ export default function AdminDashboard() {
 
               {selectedPayableBatches.length > 0 && (
                 <button
+                  onClick={rescheduleSelectedBatches}
+                  disabled={batchRescheduleLoading}
+                  className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-xl border border-ink-700 text-white font-semibold hover:bg-ink-800 active:scale-[0.98] disabled:opacity-50 transition"
+                  title="Change the payout date of the selected batches"
+                >
+                  <CalendarClock className="w-4 h-4" />
+                  {batchRescheduleLoading ? "Loading..." : "Payout date"}
+                </button>
+              )}
+
+              {selectedPayableBatches.length > 0 && (
+                <button
                   onClick={payoutSelectedBatches}
                   disabled={batchPayoutLoading}
                   className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-xl bg-emerald-500 text-ink-950 font-semibold hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-50 transition"
@@ -2079,6 +2144,7 @@ export default function AdminDashboard() {
       {scheduling && (
         <ScheduleDateModal
           count={scheduling.ids.length}
+          initialDate={scheduling.currentDate}
           onClose={() => setScheduling(null)}
           onConfirm={async (dateStr) => {
             await setBulkStatus("SCHEDULED", scheduling.ids, dateStr);

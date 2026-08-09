@@ -71,6 +71,16 @@ async function resolveBatchNo(paymentIds) {
   return nextBatchNo();
 }
 
+// Both sides are UTC-midnight Dates (parseWallClock / the mssql Date type), so
+// comparing the date part of the ISO string is enough to spot a real reschedule.
+function sameDay(a, b) {
+  if (!a || !b) return false;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
+  return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
+}
+
 async function getPayment(paymentId) {
   const rows = await query(
     `SELECT PaymentID, ShopID, PaidAmount, PaidStatus,
@@ -83,7 +93,7 @@ async function getPayment(paymentId) {
 
 async function getPayoutRow(paymentId) {
   const rows = await query(
-    `SELECT PayoutID, Status FROM dbo.PayoutStatus WHERE PaymentID = @paymentId`,
+    `SELECT PayoutID, Status, ScheduledDate FROM dbo.PayoutStatus WHERE PaymentID = @paymentId`,
     { paymentId: { type: mssql.BigInt, value: paymentId } }
   );
   return rows?.[0] || null;
@@ -270,8 +280,10 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
         results.skipped.push({ paymentId, reason: "Already transferred - final, cannot change" });
         continue;
       }
-      if (existing?.Status === status) {
+      if (existing?.Status === status && !(status === "SCHEDULED" && !sameDay(existing.ScheduledDate, scheduledDate))) {
         // Already at this status - no-op, don't waste a fresh batch number on it.
+        // The one exception is a Scheduled row being moved to a different payout
+        // date: that is a real edit, and resolveBatchNo keeps its batch number.
         results.skipped.push({ paymentId, reason: `Already ${status}` });
         continue;
       }
