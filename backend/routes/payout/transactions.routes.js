@@ -375,6 +375,7 @@ router.get("/summary", requireAuth, async (req, res) => {
         ISNULL(SUM(CASE WHEN ${todayExpr} THEN ISNULL(p.TipAmount, 0) ELSE 0 END), 0) AS todayTipAmount,
         ISNULL(SUM(CASE WHEN ps.Status = 'TRANSFERRED' THEN ${netExpr} END), 0) AS totalTransferred,
         ISNULL(SUM(CASE WHEN ps.Status = 'SCHEDULED' THEN ${netExpr} END), 0) AS totalScheduledPayout,
+        MIN(CASE WHEN ps.Status = 'SCHEDULED' THEN ps.ScheduledDate END)    AS nextScheduledDate,
         ISNULL(SUM(CASE WHEN ps.Status = 'PROCESSING' THEN ${netExpr} END), 0) AS totalProcessingPayout,
         ISNULL(SUM(CASE WHEN ps.PayoutID IS NULL OR ps.Status NOT IN ('PROCESSING', 'SCHEDULED', 'TRANSFERRED')
                         THEN ${netExpr} END), 0)                            AS totalAwaitingPayout,

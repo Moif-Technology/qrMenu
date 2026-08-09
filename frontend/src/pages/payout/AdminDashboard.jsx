@@ -12,10 +12,9 @@ import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx"
 import Toast from "../../component/Toast.jsx";
 import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
 
-function nextTuesdayOnOrAfter(from) {
+function startOfDay(from) {
   const d = new Date(from);
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + ((2 - d.getDay() + 7) % 7));
   return d;
 }
 
@@ -24,7 +23,7 @@ function toISODate(d) {
 }
 
 function ScheduleDateModal({ count, onConfirm, onClose }) {
-  const [date, setDate] = useState(() => nextTuesdayOnOrAfter(new Date()));
+  const [date, setDate] = useState(() => startOfDay(new Date()));
   const [saving, setSaving] = useState(false);
 
   async function confirm() {
@@ -40,18 +39,17 @@ function ScheduleDateModal({ count, onConfirm, onClose }) {
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-950/40 backdrop-blur-sm px-4">
       <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-zinc-900">Schedule for Tuesday</h3>
+          <h3 className="font-semibold text-zinc-900">Schedule payout date</h3>
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
             <X className="w-5 h-5" />
           </button>
         </div>
         <p className="text-sm text-zinc-500">
-          Payouts run weekly on Tuesdays. Pick which Tuesday {count > 1 ? `these ${count} payments` : "this payment"} should go out.
+          Pick the date {count > 1 ? `these ${count} payments` : "this payment"} should go out.
         </p>
         <DatePicker
           selected={date}
           onChange={setDate}
-          filterDate={(d) => d.getDay() === 2}
           minDate={new Date()}
           inline
         />
@@ -111,7 +109,7 @@ const fmtTxnRange = (from, to) => {
 };
 
 // Transferred batches show the real transfer date; scheduled ones the planned
-// Tuesday; anything else has no payout date yet.
+// payout date; anything else has no payout date yet.
 const fmtPayoutDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
 const PAYOUT_BADGE = {
@@ -943,7 +941,7 @@ export default function AdminDashboard() {
     }
   }
 
-  // Scheduling always needs a Tuesday date first - route through the modal
+  // Scheduling always needs a payout date first - route through the modal
   // instead of calling the API directly. Other statuses go straight through.
   function requestStatusChange(status, ids, opts = {}) {
     if (status === "SCHEDULED") {

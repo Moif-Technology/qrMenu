@@ -37,21 +37,14 @@ const fmtDate = (d) => {
   });
 };
 
-// First payout run is Tue 4 Aug 2026; every payout after that lands on the
-// following Tuesday, weekly.
-const PAYOUT_ANCHOR = new Date(Date.UTC(2026, 7, 4));
-
-function getNextPayoutDate() {
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-  if (today <= PAYOUT_ANCHOR) return PAYOUT_ANCHOR;
-  const diffDays = Math.round((today - PAYOUT_ANCHOR) / 86400000);
-  const weeksPassed = Math.ceil(diffDays / 7);
-  return new Date(PAYOUT_ANCHOR.getTime() + weeksPassed * 7 * 86400000);
-}
-
-const fmtPayoutDate = (d) =>
-  d.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+// Next payout date comes from the earliest SCHEDULED payout the admin set
+// (summary.nextScheduledDate) - there is no fixed weekly day.
+const fmtPayoutDate = (d) => {
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime())
+    ? "-"
+    : dt.toLocaleDateString("en-AE", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+};
 
 const fmtExportPayoutDate = (row) => {
   const date = row.payout?.transferDate || row.payout?.scheduledDate;
@@ -79,7 +72,7 @@ const fmtTxnRange = (from, to) => {
   return s === e ? s : `${s} – ${e}`;
 };
 
-// Payout (value) date: real transfer date once paid, else the scheduled Tuesday.
+// Payout (value) date: real transfer date once paid, else the scheduled date.
 const fmtValueDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
 const PAYOUT_BADGE = {
@@ -444,7 +437,7 @@ export default function RestaurantDashboard() {
     ? Number(summary.totalAwaitingPayout)
     : Math.max(0, Number(summary?.totalPendingPayout || 0) - scheduledPayout - processingPayout);
 
-  const nextPayout = useMemo(() => getNextPayoutDate(), []);
+  const nextPayout = summary?.nextScheduledDate || null;
 
   return (
     <div className="min-h-dvh">
@@ -521,15 +514,16 @@ export default function RestaurantDashboard() {
               </p>
             </div>
           </div>
-          <div className="mt-4 flex items-center gap-2.5 rounded-xl bg-ink-900 px-3.5 py-3">
-            <CalendarClock className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-sm text-white font-medium">
-                Next payout: {fmtPayoutDate(nextPayout)}
-              </p>
-              <p className="text-[11px] text-zinc-500">Payouts run every Tuesday</p>
+          {nextPayout && (
+            <div className="mt-4 flex items-center gap-2.5 rounded-xl bg-ink-900 px-3.5 py-3">
+              <CalendarClock className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm text-white font-medium">
+                  Next payout: {fmtPayoutDate(nextPayout)}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
      
         </section>

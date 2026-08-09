@@ -228,8 +228,8 @@ const SETTABLE_STATUSES = new Set(["PENDING", "PROCESSING", "SCHEDULED"]);
  * Moves payments between the three pre-transfer stages. TRANSFERRED is
  * deliberately excluded here - that requires a transferRef/transferDate and
  * goes through /transfer, /bulk-transfer or /transfer-all instead.
- * scheduledDate (YYYY-MM-DD) is required when status is SCHEDULED and must
- * fall on a Tuesday - payouts only run weekly on Tuesdays.
+ * scheduledDate (YYYY-MM-DD) is required when status is SCHEDULED and can be
+ * any calendar day - the admin picks the payout date per batch.
  */
 router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
@@ -253,9 +253,6 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
       scheduledDate = parseWallClock(req.body?.scheduledDate);
       if (!scheduledDate) {
         return res.status(400).json({ ok: false, error: "scheduledDate (YYYY-MM-DD) is required for Scheduled" });
-      }
-      if (scheduledDate.getUTCDay() !== 2) {
-        return res.status(400).json({ ok: false, error: "scheduledDate must be a Tuesday" });
       }
     }
 
