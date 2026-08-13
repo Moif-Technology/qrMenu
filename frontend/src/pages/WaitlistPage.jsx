@@ -11,9 +11,10 @@ export default function WaitlistPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  
   // Load waitlist from API
   useEffect(() => {
-    const loadWaitlist = async () => {
+    const loadWaitlist = async () => { 
       try {
         setLoading(true);
         const result = await getWaitlistEntries();
