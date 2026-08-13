@@ -9,6 +9,7 @@ import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import api, { getStoredUser, clearSession } from "../../lib/payoutApi.js";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
+import PaymentReport from "./PaymentReport.jsx";
 import Toast from "../../component/Toast.jsx";
 import { exportPayoutsPdf, exportPayoutsExcel, fmtDateTime } from "../../lib/exportPayouts.js";
 
@@ -741,6 +742,11 @@ export default function AdminDashboard() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const load = useCallback(async () => {
+    // The Report tab fetches its own unpaginated range and shows its own
+    // range-scoped totals, so the list and all-time summary behind it are dead
+    // weight there. Batches still needs the summary (its stat block is the
+    // page-level one, and a transfer refreshes it via a direct load() call).
+    if (view === "report") return;
     setLoading(true);
     try {
       const params = { page, pageSize };
@@ -770,7 +776,7 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [page, filters, sort]);
+  }, [page, filters, sort, view]);
 
   useEffect(() => {
     load();
@@ -783,7 +789,7 @@ export default function AdminDashboard() {
       { header: "Order (KOT)", key: (r) => r.kotMasterId ?? "-" },
       { header: "Table", key: (r) => (r.tableId != null ? `T${r.tableId}` : "-") },
       { header: "Method", key: "methodName" },
-      { header: "Bill (AED)", key: (r) => fmt(r.billAmount), align: "right" },
+      { header: "Bill paid (AED)", key: (r) => fmt(r.paidBillAmount), align: "right" },
       { header: "Paid (AED)", key: (r) => fmt(r.paidAmount), align: "right" },
       { header: "Balance (AED)", key: (r) => fmt(r.balanceAmount), align: "right" },
       { header: "Restaurant payout (AED)", key: (r) => (r.failed ? "-" : fmt(r.restaurantPayoutAmount)), align: "right" },
@@ -1323,8 +1329,11 @@ export default function AdminDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Money position: the one dark anchor on the page */}
-        <section className="rounded-2xl bg-ink-950 shadow-sm overflow-hidden">
+        {/* Money position: the one dark anchor on the page. Hidden on the Report
+            tab, which renders its own range-scoped version - an all-time total
+            and a range total on the same screen never reconcile, and the admin
+            would reasonably expect them to. */}
+        <section className={`rounded-2xl bg-ink-950 shadow-sm overflow-hidden ${view === "report" ? "hidden" : ""}`}>
           {statGroups.length === 0 ? (
             <div className="px-5 py-4">
               <div className="h-4 w-24 rounded bg-ink-800 animate-pulse" />
@@ -1459,8 +1468,10 @@ export default function AdminDashboard() {
           </section>
         )}
 
-        {/* Filters */}
-        <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm p-4 grid grid-cols-2 sm:flex sm:flex-wrap sm:items-end gap-3">
+        {/* Filters - Transactions only. These drive the paginated list; on
+            Batches they controlled nothing, and beside the Report tab's own
+            range they would put a second inert From/To pair on the screen. */}
+        <section className={`rounded-2xl bg-white border border-zinc-200 shadow-sm p-4 grid grid-cols-2 sm:flex sm:flex-wrap sm:items-end gap-3 ${view !== "transactions" ? "hidden" : ""}`}>
           {isCompany && (
             <div>
               <label className="block text-xs text-zinc-400 mb-1">Restaurant</label>
@@ -1654,7 +1665,23 @@ export default function AdminDashboard() {
             >
               Batches {batches.length > 0 && <span className="num opacity-70">({batches.length})</span>}
             </button>
+            <button
+              onClick={() => setView("report")}
+              className={`px-4 py-2 text-sm font-semibold rounded-xl border transition ${
+                view === "report"
+                  ? "bg-ink-950 text-white border-ink-950"
+                  : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+              }`}
+            >
+              Report
+            </button>
           </div>
+        )}
+
+        {/* Settled-payment ledger. Unmounted on other tabs so it never fetches
+            its unpaginated range in the background. */}
+        {isCompany && view === "report" && (
+          <PaymentReport restaurants={restaurants} onRowClick={setDetailTxn} />
         )}
 
         {/* Batches view */}
@@ -2055,7 +2082,7 @@ export default function AdminDashboard() {
                   {isCompany && <SortTh label="Restaurant" k="restaurant" sort={sort} onSort={toggleSort} />}
                   <th className="px-4 py-2.5 font-medium">Order (KOT)</th>
                   <th className="px-4 py-2.5 font-medium">Method</th>
-                  <SortTh label="Bill" k="bill" sort={sort} onSort={toggleSort} align="right" />
+                  <SortTh label="Bill paid" k="bill" sort={sort} onSort={toggleSort} align="right" />
                   <SortTh label="Paid" k="paid" sort={sort} onSort={toggleSort} align="right" />
                   <th className="px-4 py-2.5 font-medium text-right">Balance</th>
                   <th className="px-4 py-2.5 font-medium text-right">Restaurant payout</th>
@@ -2109,7 +2136,10 @@ export default function AdminDashboard() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-zinc-600">{t.methodName}</td>
-                      <td className="num px-4 py-3 text-right text-zinc-600">{fmt(t.billAmount)}</td>
+                      {/* Per-leg share, not billAmount: that column is the whole
+                          bill copied onto every leg, so a split used to show the
+                          full bill once per payer. */}
+                      <td className="num px-4 py-3 text-right text-zinc-600">{fmt(t.paidBillAmount)}</td>
                       <td className="num px-4 py-3 text-right font-medium text-zinc-900">{fmt(t.paidAmount)}</td>
                       <td className="num px-4 py-3 text-right text-zinc-400">{fmt(t.balanceAmount)}</td>
                       <td className="num px-4 py-3 text-right text-zinc-600">

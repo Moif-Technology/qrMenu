@@ -10,11 +10,22 @@ const router = express.Router();
 
 const METHOD_NAMES = { 1: "Pay Full", 2: "Equal Split", 3: "Item Split", 4: "Custom Split" };
 
+// Thrown for caller-supplied input the query cannot honour. The route handlers
+// turn it into a 400 rather than letting it read as a server fault.
+class BadRequest extends Error {
+  constructor(message) {
+    super(message);
+    this.status = 400;
+  }
+}
+
 // Whitelisted sortable columns over the unioned result set (payments plus
 // failed attempts); anything else falls back to the row id.
 const SORT_COLUMNS = {
   id: "RowID",
-  bill: "BillAmount",
+  // Sorts the per-leg share, matching what the Bill paid column renders.
+  // BillAmount is the whole-bill snapshot repeated on every leg of a split.
+  bill: "PaidBillAmount",
   paid: "PaidAmount",
   date: "CreatedAt",
   restaurant: "RestaurantName"
@@ -138,7 +149,12 @@ async function queryTransactions(req, { paginate = true } = {}) {
       params.transferRef = { type: mssql.NVarChar(400), value: String(transferRef).trim() };
       includeAttempts = false;
     }
+    // parseWallClock returns null for anything it cannot read (an ISO string
+    // with milliseconds, a dd/mm/yyyy, a stray "Z"). Silently dropping the
+    // predicate would answer an all-time query under a date-range heading, so
+    // a malformed boundary is rejected instead.
     const fromDate = from ? parseWallClock(from) : null;
+    if (from && !fromDate) throw new BadRequest("Invalid 'from' date. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm.");
     if (fromDate) {
       conditions.push("p.CreatedAt >= @from");
       attemptConds.push("a.CreatedAt >= @from");
@@ -147,6 +163,7 @@ async function queryTransactions(req, { paginate = true } = {}) {
     // Date-only value means "inclusive end of that day"; an explicit
     // time (e.g. 2026-07-12T14:30) is respected as given.
     const toDate = to ? parseWallClock(to, { endOfDay: true }) : null;
+    if (to && !toDate) throw new BadRequest("Invalid 'to' date. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm.");
     if (toDate) {
       conditions.push("p.CreatedAt <= @to");
       attemptConds.push("a.CreatedAt <= @to");
@@ -179,7 +196,8 @@ async function queryTransactions(req, { paginate = true } = {}) {
           'P'                      AS Kind,
           p.ShopID, p.TransID, p.MethodID,
           CAST(NULL AS VARCHAR(30)) AS ModeName,
-          p.BillAmount, p.PaidAmount, p.PaidBillAmount, p.BalanceAmount, p.PaidStatus,
+          p.BillAmount, p.PaidAmount, ISNULL(p.PaidBillAmount, 0) AS PaidBillAmount,
+          p.BalanceAmount, p.PaidStatus,
           pss.Status AS TelrStatus,
           pss.Mode AS TelrMode,
           p.TableID, tm.TableNO AS TableNo, p.CreatedAt,
@@ -202,7 +220,17 @@ async function queryTransactions(req, { paginate = true } = {}) {
           -- tip). Tip belongs to the restaurant (kept in), only DeynoQR's own
           -- service fee and the flat platform fee come out.
           (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0)) AS RestaurantGrossAmount,
-          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.PlatformFeeAmount,0)) AS RestaurantPayoutAmount
+          (p.PaidAmount - ISNULL(p.ServiceFeeAmount,0) - ISNULL(p.PlatformFeeAmount,0)) AS RestaurantPayoutAmount,
+          p.TranRef, p.AuthCode,
+          -- Split position counted over EVERY leg of the order, not just the legs
+          -- that survived the date/status filters. A window function here would
+          -- see the filtered set only, so a split straddling the range boundary
+          -- would report "1 of 2" for what is really leg 3 of 5.
+          (SELECT COUNT(*) FROM dbo.Payment lc
+             WHERE lc.TransID = p.TransID AND lc.ShopID = p.ShopID) AS OrderLegCount,
+          (SELECT COUNT(*) FROM dbo.Payment li
+             WHERE li.TransID = p.TransID AND li.ShopID = p.ShopID
+               AND li.PaymentID <= p.PaymentID)                     AS OrderLegIndex
         FROM dbo.Payment p
         LEFT JOIN dbo.PayoutStatus    ps ON ps.PaymentID = p.PaymentID
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = p.ShopID
@@ -238,7 +266,14 @@ async function queryTransactions(req, { paginate = true } = {}) {
           CAST(0 AS MONEY) AS TipAmount,
           CAST(0 AS MONEY) AS PlatformFeeAmount,
           CAST(0 AS MONEY) AS RestaurantGrossAmount,
-          CAST(0 AS MONEY) AS RestaurantPayoutAmount
+          CAST(0 AS MONEY) AS RestaurantPayoutAmount,
+          -- PaymentAttempts never reached Telr authorisation, so it carries no
+          -- reference and belongs to no split group. Typed NULLs keep the UNION
+          -- column shape aligned with the payments branch above.
+          CAST(NULL AS NVARCHAR(100)) AS TranRef,
+          CAST(NULL AS NVARCHAR(50))  AS AuthCode,
+          CAST(0 AS INT) AS OrderLegCount,
+          CAST(0 AS INT) AS OrderLegIndex
         FROM dbo.PaymentAttempts a
         LEFT JOIN dbo.RestaurantMaster rm ON rm.RestaurantID = a.ShopID
         LEFT JOIN Moifcore.dbo.TableMaster tm2 ON tm2.TableID = a.TableID
@@ -253,8 +288,13 @@ async function queryTransactions(req, { paginate = true } = {}) {
     );
 
     const total = rows.length ? Number(rows[0].TotalRows) : 0;
+    // Telr's transaction reference and acquirer auth code identify a charge on
+    // the shared DeynoQR merchant account. Restaurant users have no UI for them
+    // and no reason to receive them, so they never leave the mapper for that role.
+    const exposeTelrRefs = req.user.role === "superadmin";
     const transactions = rows.map((r) => {
       const failed = r.Kind === "A";
+      const legCount = Number(r.OrderLegCount || 0);
       return {
         paymentId: Number(r.RowID),
         failed,
@@ -287,6 +327,13 @@ async function queryTransactions(req, { paginate = true } = {}) {
         posBillStatus: failed ? null : (r.PosBillStatus || null),
         failReason: failed ? r.PaidStatus : null,
         orderRef: r.OrderRef || null,
+        ...(exposeTelrRefs ? { tranRef: r.TranRef || null, authCode: r.AuthCode || null } : {}),
+        // A leg count above 1 means this order was paid by several people.
+        // Counted over the whole order, so it stays true when a sibling leg
+        // falls outside the requested date range.
+        splitLegCount: failed ? null : legCount,
+        splitLegIndex: failed ? null : Number(r.OrderLegIndex || 0),
+        isSplitLeg: failed ? false : legCount > 1,
         // TableID is TableMaster's internal PK from the QR token; TableNo is
         // the physical table number printed on receipts - show that instead,
         // falling back to the raw ID if the table row is gone.
@@ -315,7 +362,16 @@ async function queryTransactions(req, { paginate = true } = {}) {
       };
     });
 
-    return { page, pageSize, total, transactions };
+    // Echo the boundaries actually applied so a report header can print the
+    // range that produced the numbers rather than the range the user typed.
+    return {
+      page,
+      pageSize,
+      total,
+      transactions,
+      appliedFrom: fromDate ? fromDate.toISOString() : null,
+      appliedTo: toDate ? toDate.toISOString() : null
+    };
 }
 
 /**
@@ -327,9 +383,11 @@ async function queryTransactions(req, { paginate = true } = {}) {
  */
 router.get("/", requireAuth, async (req, res) => {
   try {
-    const { page, pageSize, total, transactions } = await queryTransactions(req, { paginate: true });
-    res.json({ ok: true, page, pageSize, total, transactions });
+    const { page, pageSize, total, transactions, appliedFrom, appliedTo } =
+      await queryTransactions(req, { paginate: true });
+    res.json({ ok: true, page, pageSize, total, transactions, appliedFrom, appliedTo });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
     console.error("[PAYOUT:TXN] List error:", err.message);
     res.status(500).json({ ok: false, error: "Failed to load transactions" });
   }
@@ -342,9 +400,23 @@ router.get("/", requireAuth, async (req, res) => {
  */
 router.get("/export", requireAuth, async (req, res) => {
   try {
-    const { total, transactions } = await queryTransactions(req, { paginate: false });
-    res.json({ ok: true, total, truncated: total > MAX_EXPORT_ROWS, transactions });
+    const { total, transactions, appliedFrom, appliedTo } =
+      await queryTransactions(req, { paginate: false });
+    // Rows are ordered newest-first, so a truncated result silently drops the
+    // OLDEST rows - the start of the requested range. Callers must treat
+    // truncated: true as "these totals are not the whole range".
+    res.json({
+      ok: true,
+      total,
+      returned: transactions.length,
+      cap: MAX_EXPORT_ROWS,
+      truncated: total > MAX_EXPORT_ROWS,
+      appliedFrom,
+      appliedTo,
+      transactions
+    });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
     console.error("[PAYOUT:TXN] Export error:", err.message);
     res.status(500).json({ ok: false, error: "Failed to load transactions for export" });
   }
