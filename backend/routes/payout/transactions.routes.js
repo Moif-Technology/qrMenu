@@ -58,7 +58,7 @@ const MAX_EXPORT_ROWS = 20000;
 
 async function queryTransactions(req, { paginate = true } = {}) {
     const shopId = resolveShopScope(req);
-    const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount, batch } = req.query;
+    const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount, batch, transferRef } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = paginate
       ? Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
@@ -127,6 +127,15 @@ async function queryTransactions(req, { paginate = true } = {}) {
     if (batch !== undefined && batch !== "" && Number.isFinite(Number(batch))) {
       conditions.push("ps.BatchNo = @batch");
       params.batch = { type: mssql.BigInt, value: Number(batch) };
+      includeAttempts = false;
+    }
+    // Narrows a batch to one settlement. A batch normally has exactly one
+    // transfer reference (resolveBatchNo mints a fresh batch for any partial
+    // selection), but if one were ever settled under two references, drilling
+    // in from a payout-history row must show that row's transactions only.
+    if (transferRef !== undefined && String(transferRef).trim() !== "") {
+      conditions.push("ps.TransferRef = @transferRef");
+      params.transferRef = { type: mssql.NVarChar(400), value: String(transferRef).trim() };
       includeAttempts = false;
     }
     const fromDate = from ? parseWallClock(from) : null;
@@ -312,7 +321,8 @@ async function queryTransactions(req, { paginate = true } = {}) {
 /**
  * GET /api/payout/transactions
  * Query params: shopId (company only), status (effective online status),
- * payoutStatus (PENDING|PROCESSING|SCHEDULED|TRANSFERRED), batch (numeric BatchNo), from, to (ISO dates),
+ * payoutStatus (PENDING|PROCESSING|SCHEDULED|TRANSFERRED), batch (numeric BatchNo),
+ * transferRef (narrows a batch to one settlement), from, to (ISO dates),
  * sort (id|bill|paid|date|restaurant), dir (asc|desc), page, pageSize.
  */
 router.get("/", requireAuth, async (req, res) => {

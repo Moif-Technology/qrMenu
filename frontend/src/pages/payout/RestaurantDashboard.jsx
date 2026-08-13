@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ChangePasswordModal from "../../component/payout/ChangePasswordModal.jsx";
-import { exportPayoutsExcel, exportPayoutsPdf, fmtDateTime } from "../../lib/exportPayouts.js";
+import { exportPayoutsExcel, exportPayoutsPdf, exportSettlementStatementPdf, fmtDateTime } from "../../lib/exportPayouts.js";
 import api, { clearSession, getStoredUser } from "../../lib/payoutApi.js";
 
 const CURRENCY = "AED";
@@ -157,12 +157,19 @@ function BatchDetailSheet({ batch, onClose }) {
 
   useEffect(() => {
     let alive = true;
-    api.get("/transactions", { params: { batch: batch.batchNo, pageSize: 500 } })
+    // Opened from a settlement (a paid card): scope the list to that settlement's
+    // own transactions, not every row that happens to share the batch number.
+    const params = { batch: batch.batchNo, pageSize: 500 };
+    if (batch.transferRef) {
+      params.payoutStatus = "TRANSFERRED";
+      params.transferRef = batch.transferRef;
+    }
+    api.get("/transactions", { params })
       .then(({ data }) => { if (alive) setTxns(data.transactions || []); })
       .catch(() => { if (alive) setTxns([]); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [batch.batchNo]);
+  }, [batch.batchNo, batch.transferRef]);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -177,10 +184,17 @@ function BatchDetailSheet({ batch, onClose }) {
           <div className="px-5 pt-3 pb-4 border-b border-zinc-100 shrink-0">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h3 className="font-semibold text-zinc-900">Payout batch</h3>
+                <h3 className="font-semibold text-zinc-900">
+                  {batch.transferRef ? "Settlement" : "Payout batch"}
+                </h3>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   {fmtTxnRange(batch.firstTxnAt, batch.lastTxnAt)} · <span className="num">{batch.txnCount}</span> transaction{batch.txnCount === 1 ? "" : "s"}
                 </p>
+                {batch.transferRef && (
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Ref <span className="num text-zinc-600">{batch.transferRef}</span>
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {batch.status === "MIXED"
@@ -201,7 +215,7 @@ function BatchDetailSheet({ batch, onClose }) {
                 <p className="text-sm text-emerald-400 font-medium mt-0.5">{fmtValueDay(batch)}</p>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div className="mt-3 grid grid-cols-2 gap-2 text-center">
               <div className="rounded-lg bg-zinc-50 py-2">
                 <p className="text-[10px] text-zinc-400">Gross</p>
                 <p className="num text-sm text-zinc-800 mt-0.5">{fmt(batch.gross)}</p>
@@ -209,10 +223,6 @@ function BatchDetailSheet({ batch, onClose }) {
               <div className="rounded-lg bg-zinc-50 py-2">
                 <p className="text-[10px] text-zinc-400">Platform fee</p>
                 <p className="num text-sm text-zinc-600 mt-0.5">− {fmt(batch.fees)}</p>
-              </div>
-              <div className="rounded-lg bg-zinc-50 py-2">
-                <p className="text-[10px] text-zinc-400">Tax</p>
-                <p className="num text-sm text-zinc-600 mt-0.5">− {fmt(batch.tax)}</p>
               </div>
             </div>
           </div>
@@ -280,6 +290,8 @@ export default function RestaurantDashboard() {
   const [batches, setBatches] = useState([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchDetail, setBatchDetail] = useState(null);
+  const [settlements, setSettlements] = useState([]);
+  const [settlementsLoading, setSettlementsLoading] = useState(false);
 
   const exportParams = useCallback(() => {
     const params = {};
@@ -377,9 +389,37 @@ export default function RestaurantDashboard() {
     }
   }, []);
 
+  // Settlement statements: one row per bank credit (batch + reference + date).
+  // If the backend has not been deployed yet, /my-history 404s - fall back to
+  // the transferred batches from /my-batches so the view still renders. The
+  // fallback rows carry no statement lines, so the card shows the summary only.
+  const loadSettlements = useCallback(async () => {
+    setSettlementsLoading(true);
+    try {
+      const { data } = await api.get("/payouts/my-history");
+      setSettlements(data.settlements || []);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        try {
+          const { data } = await api.get("/payouts/my-batches");
+          setSettlements((data.batches || []).filter((b) => b.status === "TRANSFERRED"));
+        } catch (fallbackErr) {
+          console.error("Load settlements fallback failed:", fallbackErr.message);
+          setSettlements([]);
+        }
+      } else {
+        console.error("Load settlements failed:", err.message);
+        setSettlements([]);
+      }
+    } finally {
+      setSettlementsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadBatches();
-  }, [loadBatches]);
+    loadSettlements();
+  }, [loadBatches, loadSettlements]);
 
   // Split payments (equal/custom/item) create one row per payer sharing the
   // same kotMasterId - without a marker these look like duplicate orders.
@@ -400,6 +440,29 @@ export default function RestaurantDashboard() {
     });
     return info;
   }, [transactions]);
+
+  // Scheduled must list only what has NOT been paid yet - /my-batches returns
+  // every batch including transferred ones, which would otherwise show the same
+  // batch under both Scheduled and Paid out. Filtered here rather than only on
+  // the server because an older backend ignores an unknown query param and
+  // would still return the transferred batches.
+  const upcomingBatches = useMemo(
+    () => batches.filter((b) => b.status !== "TRANSFERRED"),
+    [batches]
+  );
+
+  // Scheduled and Paid out answer batch-level questions ("when do I get paid",
+  // "what did I get paid"), so both render settlement cards instead of the
+  // per-transaction feed.
+  const isCardView = payoutFilter === "SCHEDULED" || payoutFilter === "TRANSFERRED";
+
+  function downloadStatement(s) {
+    exportSettlementStatementPdf({
+      restaurantName: user?.displayName || "Restaurant",
+      statement: s,
+      fileName: `settlement-${s.statementNo || `B-${s.batchNo}`}`
+    });
+  }
 
   function logout() {
     clearSession();
@@ -556,13 +619,13 @@ export default function RestaurantDashboard() {
               </p>
             </div>
 
-            {batches.length === 0 ? (
+            {upcomingBatches.length === 0 ? (
               <div className="px-5 py-12 text-center text-zinc-400 text-sm">
-                {batchesLoading ? "Loading..." : "No payout batches yet"}
+                {batchesLoading ? "Loading..." : "No upcoming payout batches"}
               </div>
             ) : (
               <div className="p-4 sm:p-5 space-y-4">
-                {batches.map((b) => (
+                {upcomingBatches.map((b) => (
                   <button
                     key={b.batchNo}
                     type="button"
@@ -610,10 +673,6 @@ export default function RestaurantDashboard() {
                         <span className="text-zinc-500">Platform fee</span>
                         <span className="num text-zinc-500">− {CURRENCY} {fmt(b.fees)}</span>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-zinc-500">Tax</span>
-                        <span className="num text-zinc-500">− {CURRENCY} {fmt(b.tax)}</span>
-                      </div>
                       <div className="flex items-center justify-between pt-2 mt-1 border-t border-zinc-100">
                         <span className="text-zinc-700 font-medium">You receive</span>
                         <span className="num text-zinc-900 font-semibold">{CURRENCY} {fmt(b.payoutAmount)}</span>
@@ -627,7 +686,133 @@ export default function RestaurantDashboard() {
           </section>
         )}
 
-        {payoutFilter !== "SCHEDULED" && (<>
+        {/* Paid out: one card per settlement statement - a settlement is one
+            bank credit (batch + transfer reference + transfer date), and the
+            breakdown mirrors the statement DeynoQR issues line for line. */}
+        {payoutFilter === "TRANSFERRED" && (
+          <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-zinc-100">
+              <h2 className="text-sm font-semibold text-zinc-800">Payout history</h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Every payout that has landed in your account. Tap a settlement to see its transactions.
+              </p>
+            </div>
+
+            {settlements.length === 0 ? (
+              <div className="px-5 py-12 text-center text-zinc-400 text-sm">
+                {settlementsLoading ? "Loading..." : "No payouts yet"}
+              </div>
+            ) : (
+              <div className="p-4 sm:p-5 space-y-4">
+                {settlements.map((s) => {
+                  // A fallback row from /my-batches (backend not yet deployed)
+                  // has no statement lines - show the summary only.
+                  const hasStatement = s.grossPayable != null;
+                  return (
+                    <div
+                      key={`${s.batchNo}-${s.transferRef || "x"}-${s.transferDate || "x"}`}
+                      onClick={() => setBatchDetail(s)}
+                      className="rounded-2xl border border-zinc-200 overflow-hidden hover:border-zinc-300 hover:shadow-sm transition cursor-pointer"
+                    >
+                      <div className="flex items-start justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-zinc-900">
+                            {s.statementNo || `Batch B-${s.batchNo}`}
+                          </p>
+                          <p className="text-xs text-zinc-400 mt-0.5">
+                            {fmtTxnRange(s.firstTxnAt, s.lastTxnAt)} · <span className="num">{s.txnCount}</span> transaction{s.txnCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                        <PayoutBadge status="TRANSFERRED" />
+                      </div>
+
+                      {/* The number that hit the bank. */}
+                      <div className="mx-4 sm:mx-5 rounded-xl bg-ink-950 px-4 py-3.5 flex items-end justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] text-zinc-400">Net amount transferred</p>
+                          <p className="num text-2xl sm:text-3xl font-semibold text-white mt-0.5 tracking-tight">
+                            {CURRENCY} {fmt(hasStatement ? s.netTransferred : s.payoutAmount)}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-[11px] text-zinc-500">Payout date</p>
+                          <p className="text-sm text-emerald-400 font-medium mt-0.5">{fmtDay(s.transferDate)}</p>
+                        </div>
+                      </div>
+
+                      {s.transferRef && (
+                        <div className="px-4 sm:px-5 pt-3 flex items-center justify-between text-sm">
+                          <span className="text-zinc-500">Transfer reference</span>
+                          <span className="num text-zinc-800">{s.transferRef}</span>
+                        </div>
+                      )}
+
+                      {hasStatement ? (
+                        <div className="px-4 sm:px-5 py-4 space-y-2 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">Total bill amount</span>
+                            <span className="num text-zinc-800">{CURRENCY} {fmt(s.totalBillAmount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">Tip amount</span>
+                            <span className="num text-zinc-800">{CURRENCY} {fmt(s.tipAmount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">Service fee</span>
+                            <span className="num text-zinc-500">− {CURRENCY} {fmt(s.serviceFee)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">VAT on service fee</span>
+                            <span className="num text-zinc-500">− {CURRENCY} {fmt(s.serviceFeeVat)}</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-2 border-t border-zinc-100">
+                            <span className="text-zinc-700 font-medium">Gross payable</span>
+                            <span className="num text-zinc-900 font-medium">{CURRENCY} {fmt(s.grossPayable)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">Transfer fee</span>
+                            <span className="num text-zinc-500">− {CURRENCY} {fmt(s.transferFee)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">VAT on transfer fee</span>
+                            <span className="num text-zinc-500">− {CURRENCY} {fmt(s.transferFeeVat)}</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-2 mt-1 border-t border-zinc-100">
+                            <span className="text-zinc-800 font-semibold">Net amount transferred</span>
+                            <span className="num text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-4 sm:px-5 py-4 text-xs text-zinc-400">
+                          Statement breakdown unavailable for this payout.
+                        </div>
+                      )}
+
+                      <div className="px-4 sm:px-5 pb-4 flex items-center justify-between gap-3">
+                        <span className="text-[11px] text-zinc-400">
+                          Tap to view all {s.txnCount} transaction{s.txnCount === 1 ? "" : "s"} →
+                        </span>
+                        {hasStatement && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); downloadStatement(s); }}
+                            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 border border-zinc-200 hover:bg-zinc-50 transition"
+                            title="Download the settlement statement as PDF"
+                          >
+                            <ReceiptText className="w-3.5 h-3.5" />
+                            Statement
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {!isCardView && (<>
         {/* Date and time range */}
         <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm p-4">
           <div className="flex items-center justify-between gap-2">

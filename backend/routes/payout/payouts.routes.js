@@ -29,6 +29,14 @@ const router = express.Router();
 const TRANSFER_FEE_PER_TXN = 0.5;
 const TRANSFER_FEE_TAX_RATE = 0.05; // 5% UAE VAT
 
+// Bank charge for pushing ONE outward batch transfer, plus VAT on it. Unlike
+// the per-transaction figure above this one IS deducted from the restaurant's
+// net - it is the "Transfer Fee" / "VAT on Transfer Fee" pair on the settlement
+// statement DeynoQR sends out, and the statement's NET AMOUNT TRANSFERRED is
+// gross payable minus these two. Flat per batch, not per transaction.
+const BATCH_TRANSFER_FEE = 5;
+const VAT_RATE = 0.05; // 5% UAE VAT
+
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 async function nextBatchNo() {
@@ -79,6 +87,21 @@ function sameDay(a, b) {
   const db = new Date(b);
   if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
   return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
+}
+
+/**
+ * TransferDate is a wall-clock calendar day, exactly like ScheduledDate, so it
+ * has to be parsed the same way - new Date() would read the value as Node-local
+ * time and the driver would then shift it to UTC, moving the stored day. This
+ * column is the grouping key of the payout history report: a one-day skew would
+ * split a single settlement into two rows. Accepts "YYYY-MM-DD" or a full ISO
+ * string, and falls back to today's wall-clock day.
+ */
+function parseTransferDate(value) {
+  const today = new Date();
+  const fallback = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (!value) return fallback;
+  return parseWallClock(String(value).slice(0, 10)) || fallback;
 }
 
 async function getPayment(paymentId) {
@@ -144,7 +167,7 @@ router.post("/:paymentId/transfer", requireAuth, requireSuperAdmin, async (req, 
     if (!transferRef) {
       return res.status(400).json({ ok: false, error: "transferRef (cheque/transfer number) is required" });
     }
-    const transferDate = req.body?.transferDate ? new Date(req.body.transferDate) : new Date();
+    const transferDate = parseTransferDate(req.body?.transferDate);
 
     const payment = await getPayment(paymentId);
     if (!payment) return res.status(404).json({ ok: false, error: "Payment not found" });
@@ -192,7 +215,7 @@ router.post("/bulk-transfer", requireAuth, requireSuperAdmin, async (req, res) =
     if (!transferRef) {
       return res.status(400).json({ ok: false, error: "transferRef (cheque/transfer number) is required" });
     }
-    const transferDate = req.body?.transferDate ? new Date(req.body.transferDate) : new Date();
+    const transferDate = parseTransferDate(req.body?.transferDate);
     const batchNo = await resolveBatchNo(paymentIds);
 
     const results = { transferred: [], skipped: [] };
@@ -598,7 +621,7 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
     const execParams = {
       ...params,
       transferRef: { type: mssql.NVarChar(200), value: transferRef },
-      transferDate: { type: mssql.Date, value: req.body?.transferDate ? new Date(req.body.transferDate) : new Date() },
+      transferDate: { type: mssql.Date, value: parseTransferDate(req.body?.transferDate) },
       transferredBy: { type: mssql.NVarChar(100), value: req.user.username },
       notes: { type: mssql.NVarChar(500), value: req.body?.notes || null },
       batchNo: { type: mssql.BigInt, value: batchNo }
@@ -633,6 +656,219 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
   } catch (err) {
     console.error("[PAYOUT:PAYOUT] Transfer-all error:", err.message);
     res.status(500).json({ ok: false, error: "Transfer-all failed" });
+  }
+});
+
+/* ------------------------------------------------------------------------- *
+ * Payout history - the settlement statement, reproduced from the ledger.
+ *
+ * Grouped by (BatchNo, TransferRef, TransferDate, ShopID), which is what one
+ * bank credit actually is: a set of rows paid out together under one reference
+ * on one day. Deliberately filtered on the ROW status, not the batch's derived
+ * status - a batch can be part-settled (bulk-transfer skips payments with no
+ * paid amount), and filtering by batch status would hide money that really left
+ * the bank. The paid slice belongs in history, the unpaid slice stays pending.
+ *
+ * Statement line mapping (verified against the issued statement for batch
+ * 4082026 / BATCH08042026, 59 transactions, every line matching to the fils):
+ *
+ *   Total Bill Amount   = SUM(PaidBillAmount)      -- NEVER SUM(BillAmount):
+ *                         that column is a whole-bill snapshot copied onto each
+ *                         leg of a split payment, so summing it multiplies the
+ *                         bill by the number of legs (KOT 18611: 8 legs,
+ *                         5,938.00 instead of 742.25).
+ *   Tip Amount          = SUM(TipAmount)
+ *   Service Fee         = SUM(PlatformFeeAmount) ex-VAT  (= txnCount x 0.50)
+ *   VAT on Service Fee  = SUM(PlatformFeeAmount) - Service Fee
+ *   Gross Payable       = SUM(PaidAmount - ServiceFeeAmount - PlatformFeeAmount)
+ *   Transfer Fee        = BATCH_TRANSFER_FEE, flat per settlement
+ *   VAT on Transfer Fee = Transfer Fee x 5%
+ *   NET TRANSFERRED     = Gross Payable - Transfer Fee - VAT on Transfer Fee
+ * ------------------------------------------------------------------------- */
+
+const HISTORY_SELECT = `
+  SELECT
+    ps.BatchNo, ps.TransferRef, ps.TransferDate, ps.ShopID,
+    COUNT(*)                                                          AS txnCount,
+    ISNULL(SUM(ISNULL(p.PaidBillAmount, 0)), 0)                       AS totalBillAmount,
+    ISNULL(SUM(ISNULL(p.TipAmount, 0)), 0)                            AS tipAmount,
+    ISNULL(SUM(ISNULL(p.PlatformFeeAmount, 0)), 0)                    AS platformFeeTotal,
+    ISNULL(SUM(p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0)
+                            - ISNULL(p.PlatformFeeAmount, 0)), 0)     AS grossPayable,
+    ISNULL(SUM(p.PaidAmount), 0)                                      AS telrTotal,
+    ISNULL(SUM(ISNULL(p.ServiceFeeAmount, 0)), 0)                     AS telrServiceFee,
+    ISNULL(SUM(ps.Amount), 0)                                         AS ledgerAmount,
+    MIN(p.CreatedAt)                                                  AS firstTxnAt,
+    MAX(p.CreatedAt)                                                  AS lastTxnAt,
+    MAX(ps.TransferredBy)                                             AS transferredBy,
+    MAX(ps.UpdatedAt)                                                 AS settledAt
+  FROM dbo.PayoutStatus ps
+  INNER JOIN dbo.Payment p ON p.PaymentID = ps.PaymentID
+`;
+
+// TransferRef / TransferDate are nullable columns, and rows have been written
+// by hand in the past. A NULL-keyed group would be a "paid" settlement with no
+// bank identity, and a date filter would silently drop it - so exclude them
+// here and report how many were excluded rather than losing them quietly.
+const HISTORY_BASE_WHERE =
+  `ps.Status = 'TRANSFERRED' AND ps.TransferRef IS NOT NULL AND ps.TransferDate IS NOT NULL`;
+
+const HISTORY_GROUP_ORDER = `
+  GROUP BY ps.BatchNo, ps.TransferRef, ps.TransferDate, ps.ShopID
+  ORDER BY ps.TransferDate DESC, ps.BatchNo DESC
+`;
+
+/** Adds the optional transfer-date range shared by both history endpoints. */
+function historyDateFilters(reqQuery, params, conditions) {
+  const from = reqQuery?.from ? parseWallClock(String(reqQuery.from).slice(0, 10)) : null;
+  if (from) {
+    conditions.push("ps.TransferDate >= @from");
+    params.from = { type: mssql.Date, value: from };
+  }
+  const to = reqQuery?.to ? parseWallClock(String(reqQuery.to).slice(0, 10)) : null;
+  if (to) {
+    conditions.push("ps.TransferDate <= @to");
+    params.to = { type: mssql.Date, value: to };
+  }
+}
+
+/** "2026-08-04" -> "BATCH08042026", the reference already used on issued statements. */
+function statementNo(transferDate) {
+  if (!transferDate) return null;
+  const d = new Date(transferDate);
+  if (Number.isNaN(d.getTime())) return null;
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `BATCH${mm}${dd}${d.getUTCFullYear()}`;
+}
+
+/** One DB row -> one settlement statement. */
+function toStatement(r) {
+  const txnCount = Number(r.txnCount);
+  // PlatformFeeAmount is stored VAT-inclusive; the statement shows the charge
+  // and its VAT on separate lines, so split it back out rather than recomputing
+  // from a hardcoded per-transaction rate that may change later.
+  const platformFeeTotal = r2(r.platformFeeTotal);
+  const serviceFee = r2(platformFeeTotal / (1 + VAT_RATE));
+  const serviceFeeVat = r2(platformFeeTotal - serviceFee);
+
+  const grossPayable = r2(r.grossPayable);
+  const transferFee = BATCH_TRANSFER_FEE;
+  const transferFeeVat = r2(transferFee * VAT_RATE);
+  const netTransferred = r2(grossPayable - transferFee - transferFeeVat);
+
+  const ledgerAmount = r2(r.ledgerAmount);
+
+  return {
+    batchNo: Number(r.BatchNo),
+    statementNo: statementNo(r.TransferDate),
+    transferRef: r.TransferRef,
+    transferDate: r.TransferDate,
+    shopId: Number(r.ShopID),
+    txnCount,
+    // Statement lines, in the order they are printed.
+    totalBillAmount: r2(r.totalBillAmount),
+    tipAmount: r2(r.tipAmount),
+    serviceFee,
+    serviceFeeVat,
+    grossPayable,
+    transferFee,
+    transferFeeVat,
+    netTransferred,
+    firstTxnAt: r.firstTxnAt,
+    lastTxnAt: r.lastTxnAt,
+    // Aliases matching the /my-batches shape so the existing settlement cards
+    // and BatchDetailSheet render a history row without any adapter. Renaming
+    // these would not crash - the formatter turns undefined into "0.00" - it
+    // would silently show AED 0.00 as somebody's payout.
+    status: "TRANSFERRED",
+    gross: r2(Number(r.totalBillAmount) + Number(r.tipAmount)),
+    fees: platformFeeTotal,
+    payoutAmount: netTransferred,
+    // Kept 0 for backwards compatibility with an older frontend that still
+    // reads it; the Tax row itself is gone from the UI.
+    tax: 0,
+    ledgerAmount,
+    drift: r2(ledgerAmount - grossPayable)
+  };
+}
+
+/**
+ * GET /api/payout/payouts/history?from&to&shopId
+ * Super-admin settlement history across every restaurant.
+ */
+router.get("/history", requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const params = {};
+    const conditions = [HISTORY_BASE_WHERE];
+    const shopId = Number(req.query.shopId);
+    if (Number.isFinite(shopId) && shopId > 0) {
+      conditions.push("ps.ShopID = @shopId");
+      params.shopId = { type: mssql.BigInt, value: shopId };
+    }
+    historyDateFilters(req.query, params, conditions);
+
+    const rows = await query(
+      `${HISTORY_SELECT} WHERE ${conditions.join(" AND ")} ${HISTORY_GROUP_ORDER}`,
+      params
+    );
+    const settlements = rows.map((r) => ({
+      ...toStatement(r),
+      telrTotal: r2(r.telrTotal),
+      telrServiceFee: r2(r.telrServiceFee),
+      transferredBy: r.transferredBy || null,
+      settledAt: r.settledAt
+    }));
+
+    // Transferred rows that carry no reference or no date cannot be grouped
+    // into a settlement - surface the count instead of dropping them silently.
+    const excluded = await query(
+      `SELECT COUNT(*) AS cnt FROM dbo.PayoutStatus ps
+       WHERE ps.Status = 'TRANSFERRED'
+         AND (ps.TransferRef IS NULL OR ps.TransferDate IS NULL)`
+    );
+
+    res.json({
+      ok: true,
+      settlements,
+      unidentifiedCount: Number(excluded?.[0]?.cnt || 0)
+    });
+  } catch (err) {
+    console.error("[PAYOUT:PAYOUT] History error:", err.message);
+    res.status(500).json({ ok: false, error: "Failed to load payout history" });
+  }
+});
+
+/**
+ * GET /api/payout/payouts/my-history?from&to
+ * The restaurant's own settlement statements. Hard-scoped to the caller's shop
+ * exactly like /my-batches: a restaurant user's ?shopId= is ignored. DeynoQR's
+ * own Telr service-fee cut is never exposed here.
+ */
+router.get("/my-history", requireAuth, async (req, res) => {
+  try {
+    const shopId = req.user.role === "restaurant" ? req.user.shopId : Number(req.query.shopId);
+    if (!Number.isFinite(Number(shopId))) {
+      return res.status(400).json({ ok: false, error: "shopId required" });
+    }
+    const params = { shopId: { type: mssql.BigInt, value: Number(shopId) } };
+    const conditions = [HISTORY_BASE_WHERE, "ps.ShopID = @shopId"];
+    historyDateFilters(req.query, params, conditions);
+
+    const rows = await query(
+      `${HISTORY_SELECT} WHERE ${conditions.join(" AND ")} ${HISTORY_GROUP_ORDER}`,
+      params
+    );
+    const settlements = rows.map((r) => {
+      // Drop the admin-only fields before they reach a restaurant.
+      const { ledgerAmount, drift, shopId: _shopId, ...rest } = toStatement(r);
+      return rest;
+    });
+
+    res.json({ ok: true, settlements });
+  } catch (err) {
+    console.error("[PAYOUT:PAYOUT] My-history error:", err.message);
+    res.status(500).json({ ok: false, error: "Failed to load payout history" });
   }
 });
 

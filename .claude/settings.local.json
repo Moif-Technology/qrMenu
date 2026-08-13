@@ -13,7 +13,12 @@
       "Bash(npm install *)",
       "Bash(node -e \"console.log\\('jwt:', require\\('jsonwebtoken/package.json'\\).version\\)\")",
       "Bash(npx tsc *)",
-      "Bash(npx esbuild *)"
+      "Bash(npx esbuild *)",
+      "PowerShell(git -C \"d:\\\\HMS UPDATED\\\\qrMenu\" status --short)",
+      "PowerShell(\\(Get-Command sqlcmd -ErrorAction SilentlyContinue\\).Source; \\(Get-Command node\\).Source; Test-Path \"d:\\\\HMS UPDATED\\\\qrMenu\\\\backend\\\\node_modules\\\\mssql\")",
+      "PowerShell(sqlcmd -S moifopaia.selfip.com,1433 -U sa -P gtarc -Q \"SET NOCOUNT ON; SELECT name FROM sys.databases ORDER BY name\" -h -1 -W)",
+      "Skill(autoplan)",
+      "Skill(autoplan:*)"
     ]
   }
 }

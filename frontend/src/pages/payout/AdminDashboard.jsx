@@ -481,18 +481,25 @@ function TxnDetailModal({ txn, onClose }) {
   );
 }
 
-function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer }) {
+function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusChange, onTransfer }) {
   const [loading, setLoading] = useState(true);
   const [txns, setTxns] = useState([]);
   const [acting, setActing] = useState(false);
 
   const fetchTxns = useCallback(() => {
     setLoading(true);
-    return api.get("/transactions", { params: { batch: batchNo, pageSize: 500 } })
+    // Opened from a settlement row: scope to that settlement's transactions
+    // rather than everything sharing the batch number.
+    const params = { batch: batchNo, pageSize: 500 };
+    if (transferRef) {
+      params.payoutStatus = "TRANSFERRED";
+      params.transferRef = transferRef;
+    }
+    return api.get("/transactions", { params })
       .then(({ data }) => setTxns(data.transactions || []))
       .catch(() => setTxns([]))
       .finally(() => setLoading(false));
-  }, [batchNo]);
+  }, [batchNo, transferRef]);
 
   useEffect(() => {
     fetchTxns();
@@ -538,6 +545,9 @@ function BatchDetailSheet({ batchNo, onClose, requestStatusChange, onTransfer })
               <p className="text-xs text-zinc-500 mt-0.5">
                 {loading ? "Loading..." : `${txns.length} transaction${txns.length === 1 ? "" : "s"} · ${CURRENCY} ${fmt(total)}`}
               </p>
+              {transferRef && (
+                <p className="text-xs text-zinc-400 mt-0.5">Ref <span className="num text-zinc-600">{transferRef}</span></p>
+              )}
             </div>
             <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 transition">
               <X className="w-5 h-5" />
@@ -688,6 +698,13 @@ export default function AdminDashboard() {
   const [statusSaving, setStatusSaving] = useState(false);
   const [view, setView] = useState("transactions");
   const [batches, setBatches] = useState([]);
+  // "open" = still payable, "all" = the work queue as it was, "paid" = the
+  // settlement history report. A mode on the existing tab rather than a third
+  // tab: the Batches table already carries every money column.
+  const [batchMode, setBatchMode] = useState("open");
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [unidentifiedCount, setUnidentifiedCount] = useState(0);
   const [batchDetail, setBatchDetail] = useState(null);
   const [selectedBatches, setSelectedBatches] = useState(() => new Set());
   const [batchPayoutLoading, setBatchPayoutLoading] = useState(false);
@@ -897,9 +914,38 @@ export default function AdminDashboard() {
     }
   }, [isCompany]);
 
+  // Settlement history: one row per bank credit (batch + reference + date).
+  // Falls back to the transferred batches from /payouts/batches when the
+  // backend has not been deployed yet, so the view is never blank or stale.
+  const loadHistory = useCallback(async () => {
+    if (!isCompany) return;
+    setHistoryLoading(true);
+    try {
+      const { data } = await api.get("/payouts/history");
+      setHistory(data.settlements || []);
+      setUnidentifiedCount(Number(data.unidentifiedCount || 0));
+    } catch (err) {
+      if (err.response?.status === 404) {
+        try {
+          const { data } = await api.get("/payouts/batches");
+          setHistory((data.batches || []).filter((b) => b.status === "TRANSFERRED"));
+        } catch (fallbackErr) {
+          console.error("Load history fallback failed:", fallbackErr.message);
+          setHistory([]);
+        }
+      } else {
+        console.error("Load history failed:", err.message);
+        setHistory([]);
+      }
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [isCompany]);
+
   useEffect(() => {
     loadBatches();
-  }, [loadBatches]);
+    loadHistory();
+  }, [loadBatches, loadHistory]);
 
   async function saveServiceFee(e) {
     e.preventDefault();
@@ -1011,6 +1057,48 @@ export default function AdminDashboard() {
   // A fully TRANSFERRED batch is settled and final, so it can be inspected but
   // never re-paid; only the rest can be picked for a payout run.
   const payableBatches = batches.filter((b) => b.status !== "TRANSFERRED");
+  // "open" hides settled batches so the work queue only shows what still needs
+  // action; "all" is the original unfiltered list.
+  const visibleBatches = batchMode === "open" ? payableBatches : batches;
+
+  const historyTotals = history.reduce(
+    (acc, s) => ({
+      txnCount: acc.txnCount + Number(s.txnCount || 0),
+      grossPayable: acc.grossPayable + Number(s.grossPayable ?? s.totalAmount ?? 0),
+      netTransferred: acc.netTransferred + Number(s.netTransferred ?? s.totalAmount ?? 0)
+    }),
+    { txnCount: 0, grossPayable: 0, netTransferred: 0 }
+  );
+
+  const HISTORY_EXPORT_COLUMNS = [
+    { header: "Payout date", key: (s) => fmtDay(s.transferDate) },
+    { header: "Statement", key: (s) => s.statementNo || `B-${s.batchNo}` },
+    { header: "Reference", key: (s) => s.transferRef || "-" },
+    { header: "Transactions", key: (s) => String(s.txnCount ?? "-"), align: "right" },
+    { header: "Total bill", key: (s) => fmt(s.totalBillAmount), align: "right" },
+    { header: "Tip", key: (s) => fmt(s.tipAmount), align: "right" },
+    { header: "Service fee", key: (s) => fmt(s.serviceFee), align: "right" },
+    { header: "VAT on service fee", key: (s) => fmt(s.serviceFeeVat), align: "right" },
+    { header: "Gross payable", key: (s) => fmt(s.grossPayable), align: "right" },
+    { header: "Transfer fee", key: (s) => fmt(s.transferFee), align: "right" },
+    { header: "VAT on transfer fee", key: (s) => fmt(s.transferFeeVat), align: "right" },
+    { header: "Net transferred", key: (s) => fmt(s.netTransferred), align: "right" },
+    { header: "Transferred by", key: (s) => s.transferredBy || "-" }
+  ];
+
+  function exportHistory(kind) {
+    const payload = {
+      title: "DeynoQR - Payout history",
+      columns: HISTORY_EXPORT_COLUMNS,
+      rows: history,
+      fileName: `payout-history-${toISODate(new Date())}`
+    };
+    if (kind === "pdf") {
+      exportPayoutsPdf({ ...payload, footerNote: "Net transferred = gross payable minus the bank transfer fee and its VAT." });
+    } else {
+      exportPayoutsExcel(payload);
+    }
+  }
   const selectedBatchRows = batches.filter((b) => selectedBatches.has(b.batchNo));
   const allBatchesSelected =
     payableBatches.length > 0 && payableBatches.every((b) => selectedBatches.has(b.batchNo));
@@ -1565,15 +1653,184 @@ export default function AdminDashboard() {
         {isCompany && view === "batches" && (
           <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
             <div className="px-5 py-3.5 border-b border-zinc-100">
-              <h2 className="text-sm font-semibold text-zinc-800">
-                Batches <span className="num text-zinc-400 font-normal">({batches.length})</span>
-              </h2>
-              <p className="text-xs text-zinc-400 mt-0.5">
-                Payments that were moved or transferred together share a batch number. Click one to see its transactions.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-zinc-800">
+                    {batchMode === "paid" ? "Payout history" : "Batches"}{" "}
+                    <span className="num text-zinc-400 font-normal">
+                      ({batchMode === "paid" ? history.length : visibleBatches.length})
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {batchMode === "paid"
+                      ? "One row per settlement: the payments paid out together under one transfer reference. Click one to see its transactions."
+                      : "Payments that were moved or transferred together share a batch number. Click one to see its transactions."}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { key: "open", label: "Open" },
+                    { key: "all", label: "All" },
+                    { key: "paid", label: "Paid" }
+                  ].map((m) => (
+                    <button
+                      key={m.key}
+                      onClick={() => {
+                        setBatchMode(m.key);
+                        // Settled rows are final and must never be actionable -
+                        // drop any selection carried in from the work queue.
+                        if (m.key === "paid") setSelectedBatches(new Set());
+                      }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                        batchMode === m.key
+                          ? "bg-ink-950 text-white border-ink-950"
+                          : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                  {batchMode === "paid" && history.length > 0 && (
+                    <>
+                      <button
+                        onClick={() => exportHistory("pdf")}
+                        className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 border border-zinc-200 hover:bg-zinc-50 transition"
+                        title="Export payout history to PDF"
+                      >
+                        <FileDown className="w-3.5 h-3.5" /> PDF
+                      </button>
+                      <button
+                        onClick={() => exportHistory("excel")}
+                        className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 border border-zinc-200 hover:bg-zinc-50 transition"
+                        title="Export payout history to Excel"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {batchMode === "paid" && unidentifiedCount > 0 && (
+                <p className="mt-2 text-xs text-amber-600">
+                  {unidentifiedCount} transferred payment{unidentifiedCount === 1 ? " has" : "s have"} no transfer
+                  reference or date and cannot be grouped into a settlement.
+                </p>
+              )}
             </div>
-            {batches.length === 0 ? (
-              <div className="px-5 py-12 text-center text-zinc-400 text-sm">No batches yet</div>
+
+            {batchMode === "paid" ? (
+              history.length === 0 ? (
+                <div className="px-5 py-12 text-center text-zinc-400 text-sm">
+                  {historyLoading ? "Loading..." : "No payouts yet"}
+                </div>
+              ) : (
+                <>
+                  <div className="overflow-x-auto hidden sm:block">
+                    <table className="w-full min-w-[1180px] text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-zinc-400 border-b border-zinc-100">
+                          <th className="pl-5 pr-3 py-2.5 font-medium whitespace-nowrap">Payout date</th>
+                          <th className="px-3 py-2.5 font-medium whitespace-nowrap">Statement</th>
+                          <th className="px-3 py-2.5 font-medium whitespace-nowrap">Reference</th>
+                          <th className="px-3 py-2.5 font-semibold text-zinc-600 text-right whitespace-nowrap">Txns</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Total bill</th>
+                          <th className="px-3 py-2.5 font-medium text-right">Tip</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap" title="DeynoQR commission, VAT shown separately">Service fee</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">VAT on it</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Gross payable</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap" title="Flat bank charge per settlement, plus VAT">Transfer fee</th>
+                          <th className="px-3 py-2.5 font-semibold text-zinc-600 text-right whitespace-nowrap">Net transferred</th>
+                          <th className="px-3 py-2.5 font-medium whitespace-nowrap">By</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {history.map((s) => (
+                          <tr
+                            key={`${s.batchNo}-${s.transferRef || "x"}-${s.transferDate || "x"}`}
+                            onClick={() => setBatchDetail({ batchNo: s.batchNo, transferRef: s.transferRef })}
+                            className="border-b border-zinc-50 last:border-0 hover:bg-zinc-50 cursor-pointer transition"
+                            title="View this settlement's transactions"
+                          >
+                            <td className="pl-5 pr-3 py-3 text-zinc-600 text-xs whitespace-nowrap">{fmtDay(s.transferDate)}</td>
+                            <td className="px-3 py-3 font-medium text-sky-700 whitespace-nowrap">
+                              {s.statementNo || `B-${s.batchNo}`}
+                              {/* The ledger snapshot and the live fee maths disagree
+                                  on some legacy rows - show it rather than pick one. */}
+                              {Math.abs(Number(s.drift || 0)) > 0.01 && (
+                                <span
+                                  className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+                                  title={`Ledger records ${CURRENCY} ${fmt(s.ledgerAmount)}, fee rules give ${CURRENCY} ${fmt(s.grossPayable)}`}
+                                >
+                                  drift {fmt(s.drift)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="num px-3 py-3 text-zinc-600 text-xs whitespace-nowrap">{s.transferRef || "-"}</td>
+                            <td className="num px-3 py-3 text-right text-zinc-900 font-bold text-[15px]">{s.txnCount}</td>
+                            <td className="num px-3 py-3 text-right text-zinc-700">{fmt(s.totalBillAmount)}</td>
+                            <td className="num px-3 py-3 text-right text-zinc-500">{fmt(s.tipAmount)}</td>
+                            <td className="num px-3 py-3 text-right text-rose-600">-{fmt(s.serviceFee)}</td>
+                            <td className="num px-3 py-3 text-right text-rose-600">-{fmt(s.serviceFeeVat)}</td>
+                            <td className="num px-3 py-3 text-right text-zinc-700">{fmt(s.grossPayable)}</td>
+                            <td className="num px-3 py-3 text-right text-rose-600">-{fmt(Number(s.transferFee || 0) + Number(s.transferFeeVat || 0))}</td>
+                            <td className="num px-3 py-3 text-right text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</td>
+                            <td className="px-3 py-3 text-zinc-500 text-xs whitespace-nowrap">{s.transferredBy || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-zinc-200 bg-zinc-50/60 text-sm">
+                          <td className="pl-5 pr-3 py-3 font-semibold text-zinc-700" colSpan={3}>
+                            {history.length} settlement{history.length === 1 ? "" : "s"}
+                          </td>
+                          <td className="num px-3 py-3 text-right font-bold text-zinc-900">{historyTotals.txnCount}</td>
+                          <td colSpan={4} />
+                          <td className="num px-3 py-3 text-right text-zinc-700">{fmt(historyTotals.grossPayable)}</td>
+                          <td />
+                          <td className="num px-3 py-3 text-right font-semibold text-zinc-900">
+                            {CURRENCY} {fmt(historyTotals.netTransferred)}
+                          </td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Mobile cards */}
+                  <div className="sm:hidden divide-y divide-zinc-100">
+                    {history.map((s) => (
+                      <div
+                        key={`${s.batchNo}-${s.transferRef || "x"}-${s.transferDate || "x"}`}
+                        onClick={() => setBatchDetail({ batchNo: s.batchNo, transferRef: s.transferRef })}
+                        className="p-4 space-y-2.5 cursor-pointer hover:bg-zinc-50 transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sky-700">{s.statementNo || `B-${s.batchNo}`}</span>
+                          <PayoutBadge status="TRANSFERRED" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                          <span className="text-zinc-400">Payout date</span>
+                          <span className="text-right text-zinc-600">{fmtDay(s.transferDate)}</span>
+                          <span className="text-zinc-400">Reference</span>
+                          <span className="num text-right text-zinc-600">{s.transferRef || "-"}</span>
+                          <span className="text-zinc-500 font-semibold">Transactions</span>
+                          <span className="num text-right text-zinc-900 font-bold text-[15px]">{s.txnCount}</span>
+                          <span className="text-zinc-400">Gross payable</span>
+                          <span className="num text-right text-zinc-700">{fmt(s.grossPayable)}</span>
+                          <span className="text-zinc-400">Transfer fee + VAT</span>
+                          <span className="num text-right text-rose-600">-{fmt(Number(s.transferFee || 0) + Number(s.transferFeeVat || 0))}</span>
+                          <span className="text-zinc-500 font-semibold">Net transferred</span>
+                          <span className="num text-right text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )
+            ) : visibleBatches.length === 0 ? (
+              <div className="px-5 py-12 text-center text-zinc-400 text-sm">
+                {batchMode === "open" ? "No open batches" : "No batches yet"}
+              </div>
             ) : (
               <>
                 <div className="overflow-x-auto hidden sm:block">
@@ -1605,7 +1862,7 @@ export default function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {batches.map((b) => (
+                      {visibleBatches.map((b) => (
                         <tr
                           key={b.batchNo}
                           onClick={() => setBatchDetail(b.batchNo)}
@@ -1651,7 +1908,7 @@ export default function AdminDashboard() {
 
                 {/* Mobile cards */}
                 <div className="sm:hidden divide-y divide-zinc-100">
-                  {batches.map((b) => (
+                  {visibleBatches.map((b) => (
                     <div
                       key={b.batchNo}
                       onClick={() => setBatchDetail(b.batchNo)}
@@ -2034,7 +2291,7 @@ export default function AdminDashboard() {
 
       {/* Batch selection bar - floats over the page bottom so the payout action
           stays reachable on a phone without scrolling back up. */}
-      {view === "batches" && selectedBatches.size > 0 && (
+      {view === "batches" && batchMode !== "paid" && selectedBatches.size > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 pointer-events-none">
           <div className="pointer-events-auto mx-auto max-w-3xl rounded-2xl bg-ink-950 text-white shadow-2xl px-4 py-3">
             <div className="flex items-center gap-3">
@@ -2134,7 +2391,8 @@ export default function AdminDashboard() {
 
       {batchDetail != null && (
         <BatchDetailSheet
-          batchNo={batchDetail}
+          batchNo={typeof batchDetail === "object" ? batchDetail.batchNo : batchDetail}
+          transferRef={typeof batchDetail === "object" ? batchDetail.transferRef : null}
           onClose={() => setBatchDetail(null)}
           requestStatusChange={requestStatusChange}
           onTransfer={setTransferTxns}

@@ -93,4 +93,103 @@ export function exportPayoutsExcel({ title, fromDate, toDate, columns, rows, fil
   XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
 }
 
+// Date-only, UTC-literal (same reasoning as fmtDateTime above).
+const fmtStatementDay = (d) => {
+  if (!d) return "-";
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime())
+    ? "-"
+    : dt.toLocaleDateString("en-AE", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" });
+};
+
+const fmtStatementRange = (from, to) => {
+  const a = fmtStatementDay(from);
+  const b = fmtStatementDay(to);
+  if (a === "-") return b;
+  return a === b ? a : `${a} - ${b}`;
+};
+
+/**
+ * One settlement statement, matching the document DeynoQR already issues:
+ *
+ *   OPAIA QR PAYMENT SETTLEMENT STATEMENT
+ *   Batch Number: BATCH08042026
+ *   Description            | Value
+ *   Dates                  | 22 July 2026 - 23 July 2026
+ *   Total Transactions     | 59
+ *   ...
+ *   NET AMOUNT TRANSFERRED | AED 11,215.09
+ *
+ * `s` is one row from /payouts/my-history or /payouts/history.
+ */
+export function exportSettlementStatementPdf({ restaurantName, statement: s, fileName }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const left = 56;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(20);
+  doc.setTextColor(21, 94, 117); // the statement's dark teal
+  doc.text(`${String(restaurantName || "Restaurant").toUpperCase()} QR PAYMENT SETTLEMENT STATEMENT`,
+    left, 70, { maxWidth: 483 });
+
+  doc.setFontSize(11);
+  doc.setTextColor(30);
+  doc.setFont("helvetica", "bold");
+  doc.text("Batch Number: ", left, 116);
+  const labelWidth = doc.getTextWidth("Batch Number: ");
+  doc.setFont("helvetica", "normal");
+  doc.text(String(s.statementNo || `BATCH-${s.batchNo}`), left + labelWidth, 116);
+
+  if (s.transferRef) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Transfer Reference: ", left, 134);
+    const refWidth = doc.getTextWidth("Transfer Reference: ");
+    doc.setFont("helvetica", "normal");
+    doc.text(String(s.transferRef), left + refWidth, 134);
+  }
+
+  const rows = [
+    ["Dates", fmtStatementRange(s.firstTxnAt, s.lastTxnAt)],
+    ["Total Transactions", String(s.txnCount ?? "-")],
+    ["Total Bill Amount", fmtMoney(s.totalBillAmount)],
+    ["Tip Amount", fmtMoney(s.tipAmount)],
+    ["Service Fee", fmtMoney(s.serviceFee)],
+    ["VAT on Service Fee", fmtMoney(s.serviceFeeVat)],
+    ["Gross Payable", fmtMoney(s.grossPayable)],
+    ["Transfer Fee", fmtMoney(s.transferFee)],
+    ["VAT on Transfer Fee", fmtMoney(s.transferFeeVat)],
+    ["NET AMOUNT TRANSFERRED", `${CURRENCY} ${fmtMoney(s.netTransferred)}`]
+  ];
+
+  autoTable(doc, {
+    startY: s.transferRef ? 154 : 136,
+    head: [["Description", "Value"]],
+    body: rows,
+    theme: "grid",
+    styles: { fontSize: 11, cellPadding: 7, lineColor: [30, 30, 30], lineWidth: 0.7, textColor: 30 },
+    headStyles: { fillColor: [255, 255, 255], textColor: 30, fontStyle: "normal" },
+    columnStyles: { 0: { cellWidth: 250 }, 1: { cellWidth: 233 } },
+    margin: { left, right: left },
+    // The closing line is the number that matters - print it bold and bigger,
+    // exactly like the issued statement does.
+    didParseCell: (data) => {
+      if (data.row.index === rows.length - 1 && data.section === "body") {
+        data.cell.styles.fontStyle = "bold";
+        if (data.column.index === 1) data.cell.styles.fontSize = 15;
+      }
+    }
+  });
+
+  const finalY = doc.lastAutoTable?.finalY || 400;
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  if (s.transferDate) {
+    doc.text(`Payout date: ${fmtStatementDay(s.transferDate)}`, left, finalY + 22);
+  }
+  doc.text(`Generated: ${fmtLocalNow(new Date())}`, left, finalY + (s.transferDate ? 36 : 22));
+
+  const name = fileName || `settlement-${s.statementNo || s.batchNo}`;
+  doc.save(name.endsWith(".pdf") ? name : `${name}.pdf`);
+}
+
 export { CURRENCY };
