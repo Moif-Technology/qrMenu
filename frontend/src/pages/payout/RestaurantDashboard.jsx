@@ -75,6 +75,14 @@ const fmtTxnRange = (from, to) => {
 // Payout (value) date: real transfer date once paid, else the scheduled date.
 const fmtValueDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
+// A scheduled batch is numbered by its payout date as DDMMYYYY, stored in a
+// bigint - so a single-digit day loses its leading zero (4 Aug 2026 -> 4082026).
+// Pad it back so it reads as a date. Legacy sequence numbers are left alone.
+const fmtBatchNo = (n) => {
+  const s = String(n ?? "");
+  return /^\d{7,8}$/.test(s) ? s.padStart(8, "0") : s;
+};
+
 const PAYOUT_BADGE = {
   TRANSFERRED: { label: "Paid to you", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   SCHEDULED: { label: "Scheduled", cls: "bg-violet-50 text-violet-700 border-violet-200" },
@@ -717,7 +725,7 @@ export default function RestaurantDashboard() {
                       <div className="flex items-start justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-zinc-900">
-                            {s.statementNo || `Batch B-${s.batchNo}`}
+                            {s.statementNo || `BATCH${fmtBatchNo(s.batchNo)}`}
                           </p>
                           <p className="text-xs text-zinc-400 mt-0.5">
                             {fmtTxnRange(s.firstTxnAt, s.lastTxnAt)} · <span className="num">{s.txnCount}</span> transaction{s.txnCount === 1 ? "" : "s"}
@@ -987,7 +995,7 @@ export default function RestaurantDashboard() {
                     )}
                     {!t.failed && t.payout?.batchNo != null && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-sky-50 text-sky-700 border-sky-200">
-                        Batch B-{t.payout.batchNo}
+                        Batch {fmtBatchNo(t.payout.batchNo)}
                       </span>
                     )}
                     {t.payout?.transferRef && (

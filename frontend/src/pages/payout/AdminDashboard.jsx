@@ -123,6 +123,14 @@ const fmtTxnRange = (from, to) => {
 // payout date; anything else has no payout date yet.
 const fmtPayoutDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
+// A scheduled batch is numbered by its payout date as DDMMYYYY, stored in a
+// bigint - so a single-digit day loses its leading zero (4 Aug 2026 -> 4082026).
+// Pad it back so it reads as a date. Legacy sequence numbers are left alone.
+const fmtBatchNo = (n) => {
+  const s = String(n ?? "");
+  return /^\d{7,8}$/.test(s) ? s.padStart(8, "0") : s;
+};
+
 const PAYOUT_BADGE = {
   TRANSFERRED: { label: "Transferred", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   SCHEDULED: { label: "Scheduled", cls: "bg-violet-50 text-violet-700 border-violet-200" },
@@ -541,7 +549,7 @@ function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusC
           </div>
           <div className="px-5 pt-3 pb-3.5 border-b border-zinc-100 flex items-start justify-between shrink-0">
             <div>
-              <h3 className="font-semibold text-zinc-900">Batch B-{batchNo}</h3>
+              <h3 className="font-semibold text-zinc-900">Batch {fmtBatchNo(batchNo)}</h3>
               <p className="text-xs text-zinc-500 mt-0.5">
                 {loading ? "Loading..." : `${txns.length} transaction${txns.length === 1 ? "" : "s"} · ${CURRENCY} ${fmt(total)}`}
               </p>
@@ -1072,7 +1080,7 @@ export default function AdminDashboard() {
 
   const HISTORY_EXPORT_COLUMNS = [
     { header: "Payout date", key: (s) => fmtDay(s.transferDate) },
-    { header: "Statement", key: (s) => s.statementNo || `B-${s.batchNo}` },
+    { header: "Statement", key: (s) => s.statementNo || `BATCH${fmtBatchNo(s.batchNo)}` },
     { header: "Reference", key: (s) => s.transferRef || "-" },
     { header: "Transactions", key: (s) => String(s.txnCount ?? "-"), align: "right" },
     { header: "Total bill", key: (s) => fmt(s.totalBillAmount), align: "right" },
@@ -1753,7 +1761,7 @@ export default function AdminDashboard() {
                           >
                             <td className="pl-5 pr-3 py-3 text-zinc-600 text-xs whitespace-nowrap">{fmtDay(s.transferDate)}</td>
                             <td className="px-3 py-3 font-medium text-sky-700 whitespace-nowrap">
-                              {s.statementNo || `B-${s.batchNo}`}
+                              {s.statementNo || `BATCH${fmtBatchNo(s.batchNo)}`}
                               {/* The ledger snapshot and the live fee maths disagree
                                   on some legacy rows - show it rather than pick one. */}
                               {Math.abs(Number(s.drift || 0)) > 0.01 && (
@@ -1805,7 +1813,7 @@ export default function AdminDashboard() {
                         className="p-4 space-y-2.5 cursor-pointer hover:bg-zinc-50 transition"
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-sky-700">{s.statementNo || `B-${s.batchNo}`}</span>
+                          <span className="font-medium text-sky-700">{s.statementNo || `BATCH${fmtBatchNo(s.batchNo)}`}</span>
                           <PayoutBadge status="TRANSFERRED" />
                         </div>
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
@@ -1875,12 +1883,12 @@ export default function AdminDashboard() {
                               checked={selectedBatches.has(b.batchNo)}
                               onChange={() => toggleBatch(b.batchNo)}
                               disabled={b.status === "TRANSFERRED"}
-                              aria-label={`Select batch B-${b.batchNo}`}
+                              aria-label={`Select batch ${fmtBatchNo(b.batchNo)}`}
                               title={b.status === "TRANSFERRED" ? "Already transferred" : "Select this batch"}
                               className="w-4 h-4 rounded border-zinc-300 accent-sky-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                             />
                           </td>
-                          <td className="px-5 py-3 font-medium text-sky-700">B-{b.batchNo}</td>
+                          <td className="px-5 py-3 font-medium text-sky-700">{fmtBatchNo(b.batchNo)}</td>
                           <td className="px-5 py-3 text-zinc-500 text-xs whitespace-nowrap">{fmtTxnRange(b.firstTxnAt, b.lastTxnAt)}</td>
                           <td className="num px-5 py-3 text-right text-zinc-900 font-bold text-[15px]">{b.txnCount}</td>
                           <td className="num px-5 py-3 text-right text-zinc-700">{CURRENCY} {fmt(b.totalTxnAmount)}</td>
@@ -1922,10 +1930,10 @@ export default function AdminDashboard() {
                             onChange={() => toggleBatch(b.batchNo)}
                             onClick={(e) => e.stopPropagation()}
                             disabled={b.status === "TRANSFERRED"}
-                            aria-label={`Select batch B-${b.batchNo}`}
+                            aria-label={`Select batch ${fmtBatchNo(b.batchNo)}`}
                             className="w-4 h-4 rounded border-zinc-300 accent-sky-600 disabled:opacity-40"
                           />
-                          <span className="font-medium text-sky-700">B-{b.batchNo}</span>
+                          <span className="font-medium text-sky-700">{fmtBatchNo(b.batchNo)}</span>
                         </span>
                         {b.status === "MIXED" ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border bg-zinc-100 text-zinc-600 border-zinc-200">

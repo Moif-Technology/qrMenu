@@ -44,6 +44,31 @@ async function nextBatchNo() {
   return Number(rows[0].n);
 }
 
+/**
+ * A scheduled payout's batch number IS its payout date, written DDMMYYYY, so
+ * the batch number, the statement number (BATCH10082026) and the bank transfer
+ * all read the same thing. Stored in a bigint column, so a single-digit day
+ * loses its leading zero - 4 Aug 2026 is stored as 4082026, which is exactly
+ * how the two settled production batches were already numbered by hand.
+ * Pad back to 8 digits for display (see isDateBatchNo / formatting helpers).
+ *
+ * Consequence, and intended: two scheduling actions on the same date land in
+ * the same batch and become one payout. One payout date, one bank transfer.
+ */
+function dateBatchNo(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return Number(`${dd}${mm}${d.getUTCFullYear()}`);
+}
+
+/** True for a DDMMYYYY-shaped batch number, false for a legacy sequence one. */
+function isDateBatchNo(n) {
+  const v = Number(n);
+  return Number.isFinite(v) && v >= 1011000 && v <= 31129999;
+}
+
 /** Builds "@p0, @p1, ..." and fills params[prefix+i] for a dynamic IN-list. */
 function idsInParams(ids, params, prefix = "id") {
   return ids
@@ -116,7 +141,7 @@ async function getPayment(paymentId) {
 
 async function getPayoutRow(paymentId) {
   const rows = await query(
-    `SELECT PayoutID, Status, ScheduledDate FROM dbo.PayoutStatus WHERE PaymentID = @paymentId`,
+    `SELECT PayoutID, Status, ScheduledDate, BatchNo FROM dbo.PayoutStatus WHERE PaymentID = @paymentId`,
     { paymentId: { type: mssql.BigInt, value: paymentId } }
   );
   return rows?.[0] || null;
@@ -289,7 +314,12 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
       }
     }
 
-    const batchNo = status === "PENDING" ? null : await resolveBatchNo(paymentIds);
+    // Scheduled payouts are numbered by their payout date, not by the sequence:
+    // picking 10 Aug 2026 puts every selected payment into batch 10082026.
+    const batchNo =
+      status === "PENDING" ? null
+        : status === "SCHEDULED" ? dateBatchNo(scheduledDate)
+          : await resolveBatchNo(paymentIds);
 
     const results = { updated: [], skipped: [] };
     for (const paymentId of paymentIds) {
@@ -303,10 +333,15 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
         results.skipped.push({ paymentId, reason: "Already transferred - final, cannot change" });
         continue;
       }
-      if (existing?.Status === status && !(status === "SCHEDULED" && !sameDay(existing.ScheduledDate, scheduledDate))) {
+      // A Scheduled row still needs rewriting when the payout date moved, or
+      // when it is sitting on the right date under an old sequence batch number
+      // - re-applying the same date renumbers it to DDMMYYYY.
+      const scheduleNeedsRewrite =
+        status === "SCHEDULED" &&
+        (!sameDay(existing?.ScheduledDate, scheduledDate) || Number(existing?.BatchNo) !== batchNo);
+
+      if (existing?.Status === status && !scheduleNeedsRewrite) {
         // Already at this status - no-op, don't waste a fresh batch number on it.
-        // The one exception is a Scheduled row being moved to a different payout
-        // date: that is a real edit, and resolveBatchNo keeps its batch number.
         results.skipped.push({ paymentId, reason: `Already ${status}` });
         continue;
       }
@@ -732,14 +767,20 @@ function historyDateFilters(reqQuery, params, conditions) {
   }
 }
 
-/** "2026-08-04" -> "BATCH08042026", the reference already used on issued statements. */
-function statementNo(transferDate) {
+/**
+ * "BATCH" + DDMMYYYY, matching the statements already issued (BATCH12082026 is
+ * the 12 Aug 2026 payout). Taken from the batch number itself once that is
+ * date-derived, so the statement number and the batch number can never drift
+ * apart; older sequence-numbered batches fall back to their transfer date.
+ */
+function statementNo(batchNo, transferDate) {
+  if (isDateBatchNo(batchNo)) return `BATCH${String(Number(batchNo)).padStart(8, "0")}`;
   if (!transferDate) return null;
   const d = new Date(transferDate);
   if (Number.isNaN(d.getTime())) return null;
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `BATCH${mm}${dd}${d.getUTCFullYear()}`;
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `BATCH${dd}${mm}${d.getUTCFullYear()}`;
 }
 
 /** One DB row -> one settlement statement. */
@@ -761,7 +802,7 @@ function toStatement(r) {
 
   return {
     batchNo: Number(r.BatchNo),
-    statementNo: statementNo(r.TransferDate),
+    statementNo: statementNo(r.BatchNo, r.TransferDate),
     transferRef: r.TransferRef,
     transferDate: r.TransferDate,
     shopId: Number(r.ShopID),

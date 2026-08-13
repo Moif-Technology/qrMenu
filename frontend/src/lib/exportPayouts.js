@@ -5,6 +5,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import { LETTERHEAD_BANNER, LETTERHEAD_CONTACT, LETTERHEAD_PAGE, LETTERHEAD_WATERMARK } from "./letterheadAssets.js";
 
 const CURRENCY = "AED";
 
@@ -123,29 +124,62 @@ const fmtStatementRange = (from, to) => {
  * `s` is one row from /payouts/my-history or /payouts/history.
  */
 export function exportSettlementStatementPdf({ restaurantName, statement: s, fileName }) {
-  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  // compress: true matters here - the watermark is a 775x685 PNG, and without
+  // stream compression jsPDF embeds it raw and the statement balloons to ~1.6MB.
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "pt",
+    format: LETTERHEAD_PAGE.format,
+    compress: true
+  });
   const left = 56;
+
+  // Letterhead first so everything else prints on top of it. Watermark before
+  // the logo: it is the big pale mark the table sits over, exactly as placed in
+  // the statement PDF this stationery came from.
+  doc.addImage(
+    LETTERHEAD_WATERMARK.dataUri, LETTERHEAD_WATERMARK.format,
+    LETTERHEAD_WATERMARK.x, LETTERHEAD_WATERMARK.y,
+    LETTERHEAD_WATERMARK.width, LETTERHEAD_WATERMARK.height,
+    "letterhead-watermark", "FAST"
+  );
+  doc.addImage(
+    LETTERHEAD_BANNER.dataUri, LETTERHEAD_BANNER.format,
+    LETTERHEAD_BANNER.x, LETTERHEAD_BANNER.y,
+    LETTERHEAD_BANNER.width, LETTERHEAD_BANNER.height,
+    "letterhead-banner", "FAST"
+  );
+
+  // Contact block, right-aligned against the page margin so it balances the
+  // logo across the top of the sheet.
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(LETTERHEAD_CONTACT.fontSize);
+  doc.setTextColor(60);
+  LETTERHEAD_CONTACT.lines.forEach((line, i) => {
+    doc.text(line, LETTERHEAD_CONTACT.right,
+      LETTERHEAD_CONTACT.firstLineY + i * LETTERHEAD_CONTACT.lineHeight, { align: "right" });
+  });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(20);
   doc.setTextColor(21, 94, 117); // the statement's dark teal
   doc.text(`${String(restaurantName || "Restaurant").toUpperCase()} QR PAYMENT SETTLEMENT STATEMENT`,
-    left, 70, { maxWidth: 483 });
+    left, 108, { maxWidth: 483 });
 
   doc.setFontSize(11);
   doc.setTextColor(30);
   doc.setFont("helvetica", "bold");
-  doc.text("Batch Number: ", left, 116);
+  doc.text("Batch Number: ", left, 152);
   const labelWidth = doc.getTextWidth("Batch Number: ");
   doc.setFont("helvetica", "normal");
-  doc.text(String(s.statementNo || `BATCH-${s.batchNo}`), left + labelWidth, 116);
+  doc.text(String(s.statementNo || `BATCH-${s.batchNo}`), left + labelWidth, 152);
 
   if (s.transferRef) {
     doc.setFont("helvetica", "bold");
-    doc.text("Transfer Reference: ", left, 134);
+    doc.text("Transfer Reference: ", left, 170);
     const refWidth = doc.getTextWidth("Transfer Reference: ");
     doc.setFont("helvetica", "normal");
-    doc.text(String(s.transferRef), left + refWidth, 134);
+    doc.text(String(s.transferRef), left + refWidth, 170);
   }
 
   const rows = [
@@ -162,13 +196,18 @@ export function exportSettlementStatementPdf({ restaurantName, statement: s, fil
   ];
 
   autoTable(doc, {
-    startY: s.transferRef ? 154 : 136,
+    startY: s.transferRef ? 190 : 172,
     head: [["Description", "Value"]],
     body: rows,
     theme: "grid",
-    styles: { fontSize: 11, cellPadding: 7, lineColor: [30, 30, 30], lineWidth: 0.7, textColor: 30 },
-    headStyles: { fillColor: [255, 255, 255], textColor: 30, fontStyle: "normal" },
-    columnStyles: { 0: { cellWidth: 250 }, 1: { cellWidth: 233 } },
+    // fillColor false, not white: the cells have to stay transparent so the
+    // letterhead watermark shows through the table the way it does on the
+    // stationery. A white fill would paint it out.
+    styles: { fontSize: 11, cellPadding: 7, lineColor: [30, 30, 30], lineWidth: 0.7, textColor: 30, fillColor: false },
+    headStyles: { fillColor: false, textColor: 30, fontStyle: "normal" },
+    // Sums to exactly the printable width (612pt page less the two 56pt
+    // margins) so autoTable does not report leftover width.
+    columnStyles: { 0: { cellWidth: 280 }, 1: { cellWidth: 220 } },
     margin: { left, right: left },
     // The closing line is the number that matters - print it bold and bigger,
     // exactly like the issued statement does.
