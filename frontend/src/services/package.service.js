@@ -8,9 +8,27 @@ import { API } from "../lib/api";
  * @param {number} qrSubgroupId - QR Subgroup ID
  * @returns {Promise<Array>} Array of package headers
  */
-export async function getPackageHeaders(qrSubgroupId) {
+/**
+ * Show or hide a whole package on the QR menu.
+ * Nothing is deleted -- description, price and image survive, so a hidden
+ * package can be brought back unchanged.
+ */
+export async function setPackageVisibility(packageProductId, isVisible) {
+  const { data } = await API.post(`/packages/${packageProductId}/visibility`, { isVisible });
+  return data;
+}
+
+/**
+ * @param {number} qrSubgroupId
+ * @param {{includeInactive?: boolean}} opts - admin passes includeInactive so
+ *   hidden packages stay visible (and restorable) in the console. The diner app
+ *   must never pass it.
+ */
+export async function getPackageHeaders(qrSubgroupId, { includeInactive = false } = {}) {
   try {
-    const { data } = await API.get(`/packages/headers/${qrSubgroupId}`);
+    const { data } = await API.get(`/packages/headers/${qrSubgroupId}`, {
+      params: includeInactive ? { includeInactive: true } : undefined,
+    });
     return data.data || [];
   } catch (error) {
     console.error("[PACKAGE-SERVICE] Error fetching package headers:", error);

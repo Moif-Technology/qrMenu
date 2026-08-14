@@ -6,8 +6,7 @@ import axios from "axios";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_PAYOUT_API_URL
-    // || `${import.meta.env.VITE_API_BASE_URL || "https://api.deynoqr.com/api"}/payout`
-    || `${import.meta.env.VITE_API_BASE_URL || "http://10.63.215.222:5001/api"}/payout`
+    || `${import.meta.env.VITE_API_BASE_URL || "https://api.deynoqr.com/api"}/payout`
 });
 
 api.interceptors.request.use((config) => {

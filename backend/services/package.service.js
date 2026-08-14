@@ -17,10 +17,15 @@ const q = (n) => `[${n}]`;
  * Get all package headers in a subgroup
  * Returns only products marked as IsPackageHeader = 1
  */
-export async function getPackageHeaders(qrSubgroupId) {
+export async function getPackageHeaders(qrSubgroupId, { includeInactive = false } = {}) {
   const pool = await connectToDb();
   const request = pool.request();
-  
+
+  // Admins need to see hidden packages or they can never turn one back on --
+  // this query drives the admin list as well as the diner listing. Diners keep
+  // the default (live only).
+  const activeFilter = includeInactive ? "" : `AND qpm.${q("IsActive")} = 1`;
+
   const sql = `
     SELECT
       qpm.${q("ID")},
@@ -32,6 +37,7 @@ export async function getPackageHeaders(qrSubgroupId) {
       qpm.${q("ShortDescription")},
       qpm.${q("Specification")},
       qpm.${q("IsPackageHeader")},
+      qpm.${q("IsActive")},
       qpm.${q("SortOrder")},
       -- Get package price from QrProductChild
       (
@@ -53,7 +59,7 @@ export async function getPackageHeaders(qrSubgroupId) {
     FROM ${T_QR_PRODUCT_MASTER} qpm
     WHERE qpm.${q("QrSubgroupID")} = @qrSubgroupId
       AND qpm.${q("IsPackageHeader")} = 1
-      AND qpm.${q("IsActive")} = 1
+      ${activeFilter}
     ORDER BY qpm.${q("SortOrder")} ASC, qpm.${q("Description")} ASC
   `;
   
@@ -128,10 +134,14 @@ export async function getPackageContents(packageProductId) {
 /**
  * Get package header details by ProductID
  */
-export async function getPackageDetails(packageProductId) {
+export async function getPackageDetails(packageProductId, { includeInactive = false } = {}) {
   const pool = await connectToDb();
   const request = pool.request();
-  
+
+  // Without this the admin's own package editor 404s on a package they just
+  // hid, because the controller turns a null result into "Package not found".
+  const activeFilter = includeInactive ? "" : `AND qpm.${q("IsActive")} = 1`;
+
   const sql = `
     SELECT
       qpm.${q("ID")},
@@ -143,6 +153,7 @@ export async function getPackageDetails(packageProductId) {
       qpm.${q("ShortDescription")},
       qpm.${q("Specification")},
       qpm.${q("IsPackageHeader")},
+      qpm.${q("IsActive")},
       -- Get package price
       (
         SELECT TOP 1 (qpc.${q("UnitPrice")} + qpc.${q("Tax1Amount")})
@@ -169,7 +180,7 @@ export async function getPackageDetails(packageProductId) {
     FROM ${T_QR_PRODUCT_MASTER} qpm
     WHERE qpm.${q("ProductID")} = @packageProductId
       AND qpm.${q("IsPackageHeader")} = 1
-      AND qpm.${q("IsActive")} = 1
+      ${activeFilter}
   `;
   
   request.input("packageProductId", mssql.BigInt, packageProductId);
@@ -226,6 +237,59 @@ export async function uploadPackageImage(packageProductId, imageBase64) {
 /**
  * Set a product as a package header
  */
+/**
+ * Show or hide a whole package on the QR menu.
+ *
+ * Flips QrProductMaster.IsActive on the package HEADER only. Member items are
+ * left alone on purpose: they keep their own rows and can still sell standalone.
+ * Nothing is deleted, so the description, Arabic text, price and image all
+ * survive and the package can be brought back unchanged.
+ *
+ * IsActive=0 removes it from every diner read path already:
+ *   getPackageHeaders  (package listing)
+ *   getPackageDetails  (package page)
+ *   getQrMenuItems     (main menu grid)
+ *
+ * Guarded on IsPackageHeader so this endpoint cannot be used to hide an
+ * ordinary product by passing its id.
+ */
+export async function setPackageVisibility(packageProductId, isVisible) {
+  const pool = await connectToDb();
+
+  const verify = await pool
+    .request()
+    .input("packageProductId", mssql.BigInt, packageProductId)
+    .query(`
+      SELECT ${q("IsPackageHeader")}
+      FROM ${T_QR_PRODUCT_MASTER}
+      WHERE ${q("ProductID")} = @packageProductId
+    `);
+
+  if (verify.recordset.length === 0) {
+    const err = new Error("Package not found");
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!verify.recordset[0].IsPackageHeader) {
+    const err = new Error("That product is not a package");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await pool
+    .request()
+    .input("packageProductId", mssql.BigInt, packageProductId)
+    .input("isVisible", mssql.Bit, isVisible ? 1 : 0)
+    .query(`
+      UPDATE ${T_QR_PRODUCT_MASTER}
+      SET ${q("IsActive")} = @isVisible,
+          ${q("ModOn")} = GETDATE()
+      WHERE ${q("ProductID")} = @packageProductId
+    `);
+
+  return { success: true, packageProductId, isVisible: !!isVisible };
+}
+
 export async function markAsPackageHeader(productId, isPackageHeader = true) {
   const pool = await connectToDb();
   const request = pool.request();

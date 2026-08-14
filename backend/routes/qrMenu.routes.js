@@ -21,6 +21,7 @@ import {
   getQrCategories,
   getQrMenuItemsController,
 } from "../controllers/qrMenu.controller.js";
+import { adminOnlyForWrites } from "../middleware/adminAuth.middleware.js";
 
 const router = Router();
 
@@ -29,6 +30,10 @@ router.use((req, res, next) => {
   console.log(`[ROUTE][QR-MENU] ${req.method} ${req.path} - Route handler called`);
   next();
 });
+
+// Every write below this line requires an admin JWT. GET stays public because
+// /categories and /menu-items serve the diner app. Must stay above the routes.
+router.use(adminOnlyForWrites);
 
 // Products from ProductMaster
 router.get("/products/all", getAllProducts);

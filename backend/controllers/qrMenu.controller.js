@@ -21,13 +21,18 @@ import {
   getQrMenuCategories,
   getQrMenuItems,
 } from "../services/qrMenu.service.js";
+import { registerMenuCache, invalidateMenuCaches } from "../utils/menuCacheRegistry.js";
 
 // Cache configuration: 3 minutes TTL for QR menu items (shorter than regular menu since QR menu may change more frequently)
-const qrMenuCache = new NodeCache({ 
+const qrMenuCache = new NodeCache({
   stdTTL: 180, // 3 minutes
   checkperiod: 60, // Check for expired keys every minute
   useClones: false // Better performance for large objects
 });
+
+// Package writes change what this cache serves (a package header is a
+// QrProductMaster row), so it has to be reachable from the shared invalidator.
+registerMenuCache("qrMenuCache", qrMenuCache);
 
 /**
  * GET /api/qr-menu/products/all
@@ -395,7 +400,10 @@ export async function getQrMenuItemsController(req, res, next) {
 }
 
 // Export cache instance for manual cache clearing (e.g., when QR menu is updated)
+// Kept as the name every handler in this file already calls, but it now clears
+// the package cache too. Hiding a package through the qr-menu product endpoint
+// used to leave package:headers:* serving it for up to 300s, so the admin saw
+// no change and toggled again.
 export function clearQrMenuCache() {
-  qrMenuCache.flushAll();
-  console.log("[QR-MENU][CACHE] Cache cleared");
+  invalidateMenuCaches("qr-menu write");
 }

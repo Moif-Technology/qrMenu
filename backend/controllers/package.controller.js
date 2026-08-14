@@ -12,14 +12,20 @@ import {
   updatePackageItemOrder,
   updatePackageItemGroupLabel,
   uploadPackageImage,
+  setPackageVisibility,
 } from "../services/package.service.js";
+import { registerMenuCache, invalidateMenuCaches } from "../utils/menuCacheRegistry.js";
 
 // Cache for package data (5 minutes)
-const packageCache = new NodeCache({ 
+const packageCache = new NodeCache({
   stdTTL: 300,
   checkperiod: 60,
   useClones: false
 });
+
+// Menu writes elsewhere (qr-menu product updates) also change what this cache
+// serves, so it has to be reachable from the shared invalidator.
+registerMenuCache("packageCache", packageCache);
 
 /**
  * GET /api/packages/headers/:qrSubgroupId
@@ -28,15 +34,20 @@ const packageCache = new NodeCache({
 export async function getPackageHeadersController(req, res, next) {
   try {
     const { qrSubgroupId } = req.params;
-    
-    console.log("[PACKAGE][HEADERS] Getting package headers for subgroup:", qrSubgroupId);
-    
-    const cacheKey = `package:headers:${qrSubgroupId}`;
+    // Admin console asks for hidden packages too; the diner app never does.
+    const includeInactive = req.query.includeInactive === "true" || req.query.includeInactive === "1";
+
+    console.log("[PACKAGE][HEADERS] Getting package headers for subgroup:", qrSubgroupId, { includeInactive });
+
+    // The flag MUST be part of the key. Both audiences hit this handler, so a
+    // shared key would let one admin request poison the diner listing with
+    // hidden packages for the whole 300s TTL.
+    const cacheKey = `package:headers:${qrSubgroupId}:${includeInactive ? "all" : "live"}`;
     let data = packageCache.get(cacheKey);
-    
+
     if (!data) {
       console.log("[PACKAGE][HEADERS] Cache miss, fetching from DB");
-      data = await getPackageHeaders(parseInt(qrSubgroupId));
+      data = await getPackageHeaders(parseInt(qrSubgroupId), { includeInactive });
       packageCache.set(cacheKey, data);
     } else {
       console.log("[PACKAGE][HEADERS] Cache hit");
@@ -92,15 +103,18 @@ export async function getPackageContentsController(req, res, next) {
 export async function getPackageDetailsController(req, res, next) {
   try {
     const { packageProductId } = req.params;
-    
-    console.log("[PACKAGE][DETAILS] Getting details for package:", packageProductId);
-    
-    const cacheKey = `package:details:${packageProductId}`;
+    const includeInactive = req.query.includeInactive === "true" || req.query.includeInactive === "1";
+
+    console.log("[PACKAGE][DETAILS] Getting details for package:", packageProductId, { includeInactive });
+
+    // Same keying rule as headers -- a hidden package must not leak into the
+    // diner-facing variant of this response.
+    const cacheKey = `package:details:${packageProductId}:${includeInactive ? "all" : "live"}`;
     let data = packageCache.get(cacheKey);
-    
+
     if (!data) {
       console.log("[PACKAGE][DETAILS] Cache miss, fetching from DB");
-      data = await getPackageDetails(parseInt(packageProductId));
+      data = await getPackageDetails(parseInt(packageProductId), { includeInactive });
       packageCache.set(cacheKey, data);
     } else {
       console.log("[PACKAGE][DETAILS] Cache hit");
@@ -139,8 +153,9 @@ export async function markAsPackageHeaderController(req, res, next) {
     
     const result = await markAsPackageHeader(parseInt(productId), isPackageHeader);
     
-    // Clear cache
-    packageCache.flushAll();
+    // Clear every menu cache, not just this one -- the qr-menu grid serves the
+    // same rows and would otherwise stay stale.
+    invalidateMenuCaches("package write");
     
     res.json({
       success: true,
@@ -175,8 +190,9 @@ export async function addProductToPackageController(req, res, next) {
       groupLabel || null
     );
     
-    // Clear cache
-    packageCache.flushAll();
+    // Clear every menu cache, not just this one -- the qr-menu grid serves the
+    // same rows and would otherwise stay stale.
+    invalidateMenuCaches("package write");
     
     res.json({
       success: true,
@@ -201,8 +217,9 @@ export async function removeProductFromPackageController(req, res, next) {
 
     const result = await removeProductFromPackage(parseInt(productId), parseInt(packageProductId));
     
-    // Clear cache
-    packageCache.flushAll();
+    // Clear every menu cache, not just this one -- the qr-menu grid serves the
+    // same rows and would otherwise stay stale.
+    invalidateMenuCaches("package write");
     
     res.json({
       success: true,
@@ -233,8 +250,9 @@ export async function updatePackageItemOrderController(req, res, next) {
       parseInt(displayOrder)
     );
     
-    // Clear cache
-    packageCache.flushAll();
+    // Clear every menu cache, not just this one -- the qr-menu grid serves the
+    // same rows and would otherwise stay stale.
+    invalidateMenuCaches("package write");
     
     res.json({
       success: true,
@@ -267,8 +285,9 @@ export async function updatePackageItemGroupLabelController(req, res, next) {
       groupLabel || null
     );
 
-    // Clear cache
-    packageCache.flushAll();
+    // Clear every menu cache, not just this one -- the qr-menu grid serves the
+    // same rows and would otherwise stay stale.
+    invalidateMenuCaches("package write");
 
     res.json({
       success: true,
@@ -299,7 +318,7 @@ export async function updatePackageDetailsController(req, res, next) {
       price: price !== undefined && price !== "" ? parseFloat(price) : undefined,
     });
 
-    packageCache.flushAll();
+    invalidateMenuCaches("package write");
 
     res.json({
       success: true,
@@ -331,7 +350,7 @@ export async function createPackageController(req, res, next) {
     });
     
     // Clear caches
-    packageCache.flushAll();
+    invalidateMenuCaches("package write");
     
     res.json({
       success: true,
@@ -339,6 +358,44 @@ export async function createPackageController(req, res, next) {
     });
   } catch (error) {
     console.error("[PACKAGE][CREATE] Error:", error);
+    next(error);
+  }
+}
+
+/**
+ * POST /api/packages/:packageProductId/visibility
+ * Show or hide a whole package on the QR menu.
+ * Body: { isVisible: boolean }
+ */
+export async function setPackageVisibilityController(req, res, next) {
+  try {
+    const { packageProductId } = req.params;
+    const { isVisible } = req.body;
+
+    if (typeof isVisible !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        error: "isVisible must be true or false",
+      });
+    }
+
+    const id = Number(packageProductId);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid package id",
+      });
+    }
+
+    console.log("[PACKAGE][VISIBILITY] Setting package visibility:", { id, isVisible });
+
+    const result = await setPackageVisibility(id, isVisible);
+
+    invalidateMenuCaches("package visibility toggle");
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error("[PACKAGE][VISIBILITY] Error:", error);
     next(error);
   }
 }
@@ -357,7 +414,7 @@ export async function uploadPackageImageController(req, res, next) {
 
     const result = await uploadPackageImage(parseInt(packageProductId), imageBase64);
 
-    packageCache.flushAll();
+    invalidateMenuCaches("package write");
 
     res.json({
       success: true,

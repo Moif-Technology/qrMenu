@@ -20,6 +20,7 @@ import {
   getPackageHeaders,
   getPackageItems,
   removeProductFromPackage,
+  setPackageVisibility,
   updatePackageDetails,
   updatePackageItemGroupLabel,
   uploadPackageImage
@@ -59,7 +60,10 @@ export default function QRMenuManagement() {
   const [allProducts, setAllProducts] = useState([]);
   const [qrProductsMap, setQrProductsMap] = useState(new Map()); // Map of ProductID -> QR Product data
   const [totalProductsCount, setTotalProductsCount] = useState(0); // Total count for display
-  const [qrProductsRefreshKey, setQrProductsRefreshKey] = useState(0); // Key to force re-render when QR products refresh
+  // No refresh key here on purpose. It used to drive ProductsTab's `key`, which
+  // remounted the tab after every saved row and threw away pendingChanges, the
+  // search term, both filters and the pending toast. ProductsTab is not memoized,
+  // so it re-renders from the qrProductsMap prop on its own.
 
   // Groups and Subgroups state
   const [mainGroups, setMainGroups] = useState([]);
@@ -180,8 +184,6 @@ export default function QRMenuManagement() {
         map.set(p.ProductID, p);
       });
       setQrProductsMap(map);
-      // Update refresh key to force re-render of components using qrProductsMap
-      setQrProductsRefreshKey(prev => prev + 1);
     } catch (err) {
       console.error("Failed to load QR products:", err);
     }
@@ -193,14 +195,17 @@ export default function QRMenuManagement() {
   };
 
   // Handle update product QR assignment (called from ProductsTab)
-  const handleUpdateProduct = async (productId, updateData) => {
+  // refresh:false lets a batch save skip the per-row refetch and reload once at
+  // the end instead. Refetching per row meant a Save All of N rows fired N full
+  // unpaginated GETs on top of its N PUTs.
+  const handleUpdateProduct = async (productId, updateData, { refresh = true } = {}) => {
     try {
       setLoading(true);
       setError("");
       // Save the update
       await updateQrProductAssignment(productId, updateData);
-      
-      await loadQrProducts();
+
+      if (refresh) await loadQrProducts();
     } catch (err) {
       setError(err?.response?.data?.error || err.message || "Failed to update product");
       throw err;
@@ -422,7 +427,6 @@ export default function QRMenuManagement() {
 
         {activeTab === TABS.PRODUCTS && (
           <ProductsTab
-            key={`products-${qrProductsRefreshKey}`}
             products={allProducts}
             qrProductsMap={qrProductsMap}
             getQrProductInfo={getQrProductInfo}
@@ -702,7 +706,8 @@ export function ProductsTab({
         if (updateData.IsActive && !updateData.QrGroupID) {
           return Promise.resolve(); // Skip invalid entries
         }
-        return onUpdateProduct(productId, updateData);
+        // Skip the per-row refresh; onRefreshQrProducts() below reloads once.
+        return onUpdateProduct(productId, updateData, { refresh: false });
       });
       
       await Promise.all(savePromises);
@@ -2116,6 +2121,7 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
   const [newPackageImage, setNewPackageImage] = useState(null);
   const [newPackageImagePreview, setNewPackageImagePreview] = useState("");
   const [uploadingPackageImageId, setUploadingPackageImageId] = useState(null);
+  const [togglingPackageId, setTogglingPackageId] = useState(null);
   const [editingPackage, setEditingPackage] = useState(null); // Package being edited (name/desc/price)
   const [editPackageForm, setEditPackageForm] = useState({
     name: "",
@@ -2191,10 +2197,33 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
     }
   };
 
+  // Show/hide a whole package. Nothing is deleted, so a hidden package keeps its
+  // description, price, image and items and can be brought back unchanged.
+  const handleTogglePackageVisibility = async (pkg) => {
+    const nextVisible = !pkg.IsActive;
+    setTogglingPackageId(pkg.ProductID);
+    try {
+      await setPackageVisibility(pkg.ProductID, nextVisible);
+      await loadPackageHeaders();
+      if (selectedPackage?.ProductID === pkg.ProductID) {
+        setSelectedPackage({ ...selectedPackage, IsActive: nextVisible ? 1 : 0 });
+      }
+    } catch (err) {
+      alert(
+        `Could not ${nextVisible ? "show" : "hide"} this package: ` +
+          (err?.response?.data?.error || err.message)
+      );
+    } finally {
+      setTogglingPackageId(null);
+    }
+  };
+
   const loadPackageHeaders = async () => {
     try {
       setLoadingPackages(true);
-      const packages = await getPackageHeaders(parseInt(selectedSubgroup));
+      // includeInactive: hidden packages must stay in the admin list or there is
+      // no way to turn one back on.
+      const packages = await getPackageHeaders(parseInt(selectedSubgroup), { includeInactive: true });
       setPackageHeaders(packages || []);
     } catch (err) {
       console.error("Error loading packages:", err);
@@ -2515,23 +2544,30 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
                   }`}
                   onClick={() => setSelectedPackage(pkg)}
                 >
-                  <div className="mb-3 aspect-[3/2] overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center">
+                  <div className="relative mb-3 aspect-[3/2] overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center">
                     {pkg.cloudinaryUrl ? (
                       <img
                         src={pkg.cloudinaryUrl}
                         alt={pkg.Description}
-                        className="h-full w-full object-cover"
+                        className={`h-full w-full object-cover ${!pkg.IsActive ? "opacity-50 grayscale" : ""}`}
                       />
                     ) : (
                       <span className="text-xs text-gray-400">No image</span>
                     )}
+                    {!pkg.IsActive && (
+                      <span className="absolute top-2 left-2 rounded-full bg-gray-900/80 px-2 py-0.5 text-xs font-medium text-white">
+                        Hidden
+                      </span>
+                    )}
                   </div>
-                  <h4 className="font-semibold text-gray-900 mb-2">{pkg.Description}</h4>
+                  <h4 className={`font-semibold mb-2 ${pkg.IsActive ? "text-gray-900" : "text-gray-500"}`}>
+                    {pkg.Description}
+                  </h4>
                   <p className="text-sm text-gray-600 mb-2">
                     Price: AED {(pkg.price || 0).toFixed(2)}
                   </p>
                   <p className="text-xs text-gray-500">
-                    Product ID: {pkg.ProductID}
+                    {pkg.IsActive ? "Showing on the menu" : "Not on the menu"}
                   </p>
                   <div className="mt-3 flex gap-2">
                     <button
@@ -2573,6 +2609,42 @@ export function PackageManagementTab({ groups, subgroups, loading }) {
                       />
                     </label>
                   </div>
+
+                  {/* Own row, not a third button above -- the action row is already
+                      full at lg and this is the control that changes what guests see. */}
+                  <button
+                    type="button"
+                    disabled={togglingPackageId === pkg.ProductID}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleTogglePackageVisibility(pkg);
+                    }}
+                    className={`mt-2 flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      pkg.IsActive
+                        ? "border-gray-300 text-gray-700 hover:bg-gray-50"
+                        : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    }`}
+                  >
+                    <span>
+                      {togglingPackageId === pkg.ProductID
+                        ? "Saving..."
+                        : pkg.IsActive
+                        ? "Show on menu"
+                        : "Hidden from menu"}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition ${
+                        pkg.IsActive ? "bg-emerald-500" : "bg-gray-300"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
+                          pkg.IsActive ? "left-[1.125rem]" : "left-0.5"
+                        }`}
+                      />
+                    </span>
+                  </button>
                 </div>
               ))}
             </div>
