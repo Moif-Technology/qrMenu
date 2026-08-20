@@ -490,23 +490,30 @@ function TxnDetailModal({ txn, onClose }) {
   );
 }
 
-function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusChange, onTransfer }) {
+function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusChange, onTransferScope }) {
   const [loading, setLoading] = useState(true);
   const [txns, setTxns] = useState([]);
+  const [total, setTotalRows] = useState(0);
   const [acting, setActing] = useState(false);
 
   const fetchTxns = useCallback(() => {
     setLoading(true);
     // Opened from a settlement row: scope to that settlement's transactions
     // rather than everything sharing the batch number.
-    const params = { batch: batchNo, pageSize: 500 };
+    // A batch can hold more rows than one page returns. This sheet is a
+    // preview, so it shows the first page and says so - every action on it is
+    // scoped by batch number server-side and covers rows not listed here.
+    const params = { batch: batchNo, pageSize: 200 };
     if (transferRef) {
       params.payoutStatus = "TRANSFERRED";
       params.transferRef = transferRef;
     }
     return api.get("/transactions", { params })
-      .then(({ data }) => setTxns(data.transactions || []))
-      .catch(() => setTxns([]))
+      .then(({ data }) => {
+        setTxns(data.transactions || []);
+        setTotalRows(Number(data.total) || 0);
+      })
+      .catch(() => { setTxns([]); setTotalRows(0); })
       .finally(() => setLoading(false));
   }, [batchNo, transferRef]);
 
@@ -514,17 +521,21 @@ function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusC
     fetchTxns();
   }, [fetchTxns]);
 
-  const total = txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
-  const activeIds = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED").map((t) => t.paymentId);
+  const listedAmount = txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
+  const truncated = total > txns.length;
+  const activeCount = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED").length;
   // Already-scheduled batch: prefill the modal with the date it sits on today,
   // so "Mark scheduled" doubles as "move this batch to another payout date".
   const batchScheduledDate =
     txns.find((t) => t.payout?.status === "SCHEDULED" && t.payout?.scheduledDate)?.payout?.scheduledDate || null;
 
+  // Both actions address the batch by number, so they cover every row in it -
+  // including the ones past the first page that this sheet never listed.
   function markBatch(status) {
-    if (!activeIds.length) return;
+    if (!activeCount) return;
     setActing(true);
-    requestStatusChange(status, activeIds, {
+    requestStatusChange(status, { batch: [batchNo] }, {
+      count: activeCount,
       currentDate: status === "SCHEDULED" ? batchScheduledDate : null,
       after: async () => { await fetchTxns(); setActing(false); }
     });
@@ -532,11 +543,8 @@ function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusC
   }
 
   function transferBatch() {
-    const activeTxns = txns.filter((t) => !t.failed && t.payout?.status !== "TRANSFERRED");
-    if (!activeTxns.length) return;
-    // TransferModal totals on restaurantPayoutAmount - passing it as paidAmount
-    // made the confirm dialog read AED 0.00 for a batch transfer.
-    onTransfer(activeTxns.map((t) => ({ paymentId: t.paymentId, restaurantPayoutAmount: t.restaurantPayoutAmount })));
+    if (!activeCount) return;
+    onTransferScope({ batch: [batchNo] });
     onClose();
   }
 
@@ -552,7 +560,11 @@ function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusC
             <div>
               <h3 className="font-semibold text-zinc-900">Batch {fmtBatchNo(batchNo)}</h3>
               <p className="text-xs text-zinc-500 mt-0.5">
-                {loading ? "Loading..." : `${txns.length} transaction${txns.length === 1 ? "" : "s"} · ${CURRENCY} ${fmt(total)}`}
+                {loading
+                  ? "Loading..."
+                  : truncated
+                    ? `${total} transactions · showing first ${txns.length}`
+                    : `${txns.length} transaction${txns.length === 1 ? "" : "s"} · ${CURRENCY} ${fmt(listedAmount)}`}
               </p>
               {transferRef && (
                 <p className="text-xs text-zinc-400 mt-0.5">Ref <span className="num text-zinc-600">{transferRef}</span></p>
@@ -563,7 +575,7 @@ function BatchDetailSheet({ batchNo, transferRef = null, onClose, requestStatusC
             </button>
           </div>
 
-          {activeIds.length > 0 && (
+          {activeCount > 0 && (
             <div className="px-5 py-3 border-b border-zinc-100 flex flex-wrap gap-2 shrink-0">
               <button
                 onClick={() => markBatch("PROCESSING")}
@@ -699,7 +711,9 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [restaurants, setRestaurants] = useState([]);
   const [transferTxns, setTransferTxns] = useState(null);
-  const [transferAllOpen, setTransferAllOpen] = useState(false);
+  // Server-side transfer scope - filters ("transfer everything I'm looking at")
+  // or batch numbers. Either way no payment id list crosses the wire.
+  const [transferScope, setTransferScope] = useState(null);
   const [detailTxn, setDetailTxn] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
   const [sort, setSort] = useState({ key: "id", dir: "desc" });
@@ -716,8 +730,6 @@ export default function AdminDashboard() {
   const [unidentifiedCount, setUnidentifiedCount] = useState(0);
   const [batchDetail, setBatchDetail] = useState(null);
   const [selectedBatches, setSelectedBatches] = useState(() => new Set());
-  const [batchPayoutLoading, setBatchPayoutLoading] = useState(false);
-  const [batchRescheduleLoading, setBatchRescheduleLoading] = useState(false);
   const [scheduling, setScheduling] = useState(null);
   const [toast, setToast] = useState(null);
   const showToast = useCallback((message, variant = "info", title = null) => {
@@ -996,10 +1008,12 @@ export default function AdminDashboard() {
     }
   }
 
-  async function setBulkStatus(status, ids = selectedTxns.map((t) => t.paymentId), scheduledDate) {
+  // `target` is either an array of payment ids or a server-side scope such as
+  // { batch: [...] }, which lets a whole batch move without listing its rows.
+  async function setBulkStatus(status, target = selectedTxns.map((t) => t.paymentId), scheduledDate) {
     setStatusSaving(true);
     try {
-      const body = { paymentIds: ids, status };
+      const body = Array.isArray(target) ? { paymentIds: target, status } : { ...target, status };
       if (scheduledDate) body.scheduledDate = scheduledDate;
       const { data } = await api.post("/payouts/bulk-status", body);
       if (data.skipped?.length) {
@@ -1020,12 +1034,19 @@ export default function AdminDashboard() {
 
   // Scheduling always needs a payout date first - route through the modal
   // instead of calling the API directly. Other statuses go straight through.
-  function requestStatusChange(status, ids, opts = {}) {
+  // `target` is an array of payment ids, or a server-side scope like
+  // { batch: [...] } - the latter needs opts.count for the confirm dialog.
+  function requestStatusChange(status, target, opts = {}) {
     if (status === "SCHEDULED") {
-      setScheduling({ ids, currentDate: opts.currentDate || null, after: opts.after });
+      setScheduling({
+        target,
+        count: Array.isArray(target) ? target.length : opts.count ?? 0,
+        currentDate: opts.currentDate || null,
+        after: opts.after
+      });
       return;
     }
-    setBulkStatus(status, ids).then(() => opts.after?.());
+    setBulkStatus(status, target).then(() => opts.after?.());
   }
 
   function logout() {
@@ -1141,69 +1162,27 @@ export default function AdminDashboard() {
     setSelectedBatches(allBatchesSelected ? new Set() : new Set(payableBatches.map((b) => b.batchNo)));
   }
 
-  // Batches are a live GROUP BY, not a stored entity, so a payout run has to
-  // resolve the selection back to the individual payments the transfer API
-  // works on. Already-transferred and failed rows are dropped here.
-  async function payoutSelectedBatches() {
+  // Batch actions address the batch by number and let the server resolve the
+  // payments inside it. They deliberately do NOT fetch the transaction list
+  // first: a batch can hold more rows than one page returns, and a payout run
+  // built from a truncated list settles part of a batch and reports success.
+  function payoutSelectedBatches() {
     if (!selectedPayableBatches.length) return;
-    setBatchPayoutLoading(true);
-    try {
-      const lists = await Promise.all(
-        selectedPayableBatches.map((b) =>
-          api
-            .get("/transactions", { params: { batch: b.batchNo, pageSize: 500 } })
-            .then(({ data }) => data.transactions || [])
-        )
-      );
-      const txns = lists
-        .flat()
-        .filter((t) => !t.failed && (t.payout?.status || "PENDING") !== "TRANSFERRED");
-      if (!txns.length) {
-        showToast("Nothing left to transfer in the selected batches.", "warning");
-        return;
-      }
-      setTransferTxns(txns);
-    } catch {
-      showToast("Failed to load the transactions for these batches.", "error");
-    } finally {
-      setBatchPayoutLoading(false);
-    }
+    setTransferScope({ batch: selectedPayableBatches.map((b) => b.batchNo) });
   }
 
   // Moving a batch to another payout date is the same bulk-status call as the
-  // first scheduling - it just has to resolve the batches back to payments
-  // first. Already-transferred rows are dropped; the backend rejects them anyway.
-  async function rescheduleSelectedBatches() {
+  // first scheduling, scoped by batch number for the same reason.
+  function rescheduleSelectedBatches() {
     if (!selectedPayableBatches.length) return;
-    setBatchRescheduleLoading(true);
-    try {
-      const lists = await Promise.all(
-        selectedPayableBatches.map((b) =>
-          api
-            .get("/transactions", { params: { batch: b.batchNo, pageSize: 500 } })
-            .then(({ data }) => data.transactions || [])
-        )
-      );
-      const ids = lists
-        .flat()
-        .filter((t) => !t.failed && (t.payout?.status || "PENDING") !== "TRANSFERRED")
-        .map((t) => t.paymentId);
-      if (!ids.length) {
-        showToast("Nothing left to reschedule in the selected batches.", "warning");
-        return;
-      }
-      // Only prefill when every selected batch already sits on one same date.
-      const dates = [...new Set(selectedPayableBatches.map((b) => b.scheduledDate || ""))];
-      setScheduling({
-        ids,
-        currentDate: dates.length === 1 ? dates[0] || null : null,
-        after: () => setSelectedBatches(new Set())
-      });
-    } catch {
-      showToast("Failed to load the transactions for these batches.", "error");
-    } finally {
-      setBatchRescheduleLoading(false);
-    }
+    // Only prefill when every selected batch already sits on one same date.
+    const dates = [...new Set(selectedPayableBatches.map((b) => b.scheduledDate || ""))];
+    setScheduling({
+      target: { batch: selectedPayableBatches.map((b) => b.batchNo) },
+      count: selectedPayableBatches.reduce((s, b) => s + (b.txnCount - b.transferredCount), 0),
+      currentDate: dates.length === 1 ? dates[0] || null : null,
+      after: () => setSelectedBatches(new Set())
+    });
   }
 
   const totals = summary?.totals;
@@ -2008,7 +1987,16 @@ export default function AdminDashboard() {
             </h2>
             {isCompany && Number(totals?.totalPendingPayout) > 0 && (
               <button
-                onClick={() => setTransferAllOpen(true)}
+                onClick={() => setTransferScope({
+                  shopId: filters.shopId,
+                  status: filters.status,
+                  methodId: filters.methodId,
+                  search: filters.search,
+                  from: filters.from,
+                  to: filters.to,
+                  minAmount: filters.minAmount,
+                  maxAmount: filters.maxAmount
+                })}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 active:scale-[0.98] transition"
                 title="Transfer every awaiting payment matching the current filters"
               >
@@ -2354,23 +2342,21 @@ export default function AdminDashboard() {
               {selectedPayableBatches.length > 0 && (
                 <button
                   onClick={rescheduleSelectedBatches}
-                  disabled={batchRescheduleLoading}
                   className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-xl border border-ink-700 text-white font-semibold hover:bg-ink-800 active:scale-[0.98] disabled:opacity-50 transition"
                   title="Change the payout date of the selected batches"
                 >
                   <CalendarClock className="w-4 h-4" />
-                  {batchRescheduleLoading ? "Loading..." : "Payout date"}
+                  Payout date
                 </button>
               )}
 
               {selectedPayableBatches.length > 0 && (
                 <button
                   onClick={payoutSelectedBatches}
-                  disabled={batchPayoutLoading}
                   className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-xl bg-emerald-500 text-ink-950 font-semibold hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-50 transition"
                 >
                   <Banknote className="w-4 h-4" />
-                  {batchPayoutLoading ? "Loading..." : "Payout"}
+                  Payout
                 </button>
               )}
 
@@ -2402,23 +2388,15 @@ export default function AdminDashboard() {
         />
       )}
 
-      {transferAllOpen && (
+      {transferScope && (
         <TransferModal
-          scope={{
-            shopId: filters.shopId,
-            status: filters.status,
-            methodId: filters.methodId,
-            search: filters.search,
-            from: filters.from,
-            to: filters.to,
-            minAmount: filters.minAmount,
-            maxAmount: filters.maxAmount
-          }}
-          onClose={() => setTransferAllOpen(false)}
+          scope={transferScope}
+          onClose={() => setTransferScope(null)}
           showToast={showToast}
           onDone={() => {
-            setTransferAllOpen(false);
+            setTransferScope(null);
             setSelected(new Set());
+            setSelectedBatches(new Set());
             load();
             loadBatches();
           }}
@@ -2433,17 +2411,17 @@ export default function AdminDashboard() {
           transferRef={typeof batchDetail === "object" ? batchDetail.transferRef : null}
           onClose={() => setBatchDetail(null)}
           requestStatusChange={requestStatusChange}
-          onTransfer={setTransferTxns}
+          onTransferScope={setTransferScope}
         />
       )}
 
       {scheduling && (
         <ScheduleDateModal
-          count={scheduling.ids.length}
+          count={scheduling.count}
           initialDate={scheduling.currentDate}
           onClose={() => setScheduling(null)}
           onConfirm={async (dateStr) => {
-            await setBulkStatus("SCHEDULED", scheduling.ids, dateStr);
+            await setBulkStatus("SCHEDULED", scheduling.target, dateStr);
             await scheduling.after?.();
             setScheduling(null);
           }}

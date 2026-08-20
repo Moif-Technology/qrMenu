@@ -167,7 +167,9 @@ function BatchDetailSheet({ batch, onClose }) {
     let alive = true;
     // Opened from a settlement (a paid card): scope the list to that settlement's
     // own transactions, not every row that happens to share the batch number.
-    const params = { batch: batch.batchNo, pageSize: 500 };
+    // First page only - the header count above comes from the batch itself, so
+    // a long batch reads honestly even though the list below is capped.
+    const params = { batch: batch.batchNo, pageSize: 200 };
     if (batch.transferRef) {
       params.payoutStatus = "TRANSFERRED";
       params.transferRef = batch.transferRef;
@@ -198,6 +200,9 @@ function BatchDetailSheet({ batch, onClose }) {
                 <p className="text-xs text-zinc-400 mt-0.5">
                   {fmtTxnRange(batch.firstTxnAt, batch.lastTxnAt)} · <span className="num">{batch.txnCount}</span> transaction{batch.txnCount === 1 ? "" : "s"}
                 </p>
+                {!loading && txns.length < batch.txnCount && (
+                  <p className="text-xs text-zinc-400 mt-0.5">Showing the first {txns.length}</p>
+                )}
                 {batch.transferRef && (
                   <p className="text-xs text-zinc-400 mt-0.5">
                     Ref <span className="num text-zinc-600">{batch.transferRef}</span>

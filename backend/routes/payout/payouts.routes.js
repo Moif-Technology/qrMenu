@@ -291,9 +291,16 @@ const SETTABLE_STATUSES = new Set(["PENDING", "PROCESSING", "SCHEDULED"]);
  */
 router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const paymentIds = parsePaymentIds(req.body);
-    if (!paymentIds.length) {
-      return res.status(400).json({ ok: false, error: "paymentIds array is required" });
+    // A batch is addressed by number, never by listing the payments inside it -
+    // a batch can hold more rows than one page or one id list can carry, and a
+    // truncated list would move part of a batch and leave the rest behind.
+    const batchNos = []
+      .concat(req.body?.batch ?? [])
+      .map(Number)
+      .filter((n) => Number.isFinite(n));
+    const paymentIds = batchNos.length ? [] : parsePaymentIds(req.body);
+    if (!batchNos.length && !paymentIds.length) {
+      return res.status(400).json({ ok: false, error: "paymentIds array or batch is required" });
     }
     if (paymentIds.length > 500) {
       return res.status(400).json({ ok: false, error: "Too many payments in one batch (max 500)" });
@@ -312,6 +319,45 @@ router.post("/bulk-status", requireAuth, requireSuperAdmin, async (req, res) => 
       if (!scheduledDate) {
         return res.status(400).json({ ok: false, error: "scheduledDate (YYYY-MM-DD) is required for Scheduled" });
       }
+    }
+
+    // Whole-batch move: one set-based statement, so it cannot half-apply no
+    // matter how many payments the batch holds. TRANSFERRED rows are final and
+    // are excluded rather than skipped one by one.
+    if (batchNos.length) {
+      const params = {};
+      const inList = idsInParams(batchNos, params, "batch");
+      params.status = { type: mssql.VarChar(20), value: status };
+      params.scheduledDate = { type: mssql.Date, value: scheduledDate };
+      const targetBatchNo = status === "SCHEDULED" ? dateBatchNo(scheduledDate) : null;
+
+      if (status === "PENDING") {
+        // PENDING means "no payout row at all" - same as the per-id path.
+        const del = await query(
+          `DELETE FROM dbo.PayoutStatus
+           OUTPUT deleted.PaymentID
+           WHERE BatchNo IN (${inList}) AND Status <> 'TRANSFERRED'`,
+          params
+        );
+        console.log(`[PAYOUT:PAYOUT] Bulk status by ${req.user.username} -> PENDING batches=${batchNos.join(",")}: ${del.length} cleared`);
+        return res.json({ ok: true, status, batchNo: null, updatedCount: del.length, updated: del.map((r) => Number(r.PaymentID)), skipped: [] });
+      }
+
+      // PROCESSING keeps the batch number it already has; SCHEDULED renumbers
+      // to the payout date it is being moved to.
+      params.targetBatchNo = { type: mssql.BigInt, value: targetBatchNo };
+      const upd = await query(
+        `UPDATE dbo.PayoutStatus
+         SET Status = @status,
+             ScheduledDate = @scheduledDate,
+             ${status === "SCHEDULED" ? "BatchNo = @targetBatchNo," : ""}
+             UpdatedAt = SYSDATETIME()
+         OUTPUT inserted.PaymentID
+         WHERE BatchNo IN (${inList}) AND Status <> 'TRANSFERRED'`,
+        params
+      );
+      console.log(`[PAYOUT:PAYOUT] Bulk status by ${req.user.username} -> ${status} batches=${batchNos.join(",")} -> ${targetBatchNo ?? "unchanged"}: ${upd.length} updated`);
+      return res.json({ ok: true, status, batchNo: targetBatchNo, updatedCount: upd.length, updated: upd.map((r) => Number(r.PaymentID)), skipped: [] });
     }
 
     // Scheduled payouts are numbered by their payout date, not by the sequence:
@@ -560,9 +606,21 @@ router.get("/my-batches", requireAuth, async (req, res) => {
  * Build WHERE conditions over dbo.Payment (aliased p) matching the filters the
  * super admin currently has applied in the transaction list, so "transfer all"
  * settles exactly what they are looking at.
+ *
+ * `batch` (one number or an array) narrows the scope to whole batches, which is
+ * how the Batches tab settles a payout: the caller never enumerates the
+ * payments, so a batch can never be half-settled by a truncated id list.
+ * Conditions on `ps` are safe here - every query using this joins PayoutStatus.
  */
 function buildScopeFilters(body, params) {
   const conditions = ["p.PaidAmount > 0"];
+  const batchNos = []
+    .concat(body?.batch ?? [])
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  if (batchNos.length) {
+    conditions.push(`ps.BatchNo IN (${idsInParams(batchNos, params, "scopeBatch")})`);
+  }
   const shopId = Number(body?.shopId);
   if (Number.isFinite(shopId) && shopId > 0) {
     conditions.push("p.ShopID = @shopId");
@@ -618,16 +676,22 @@ function buildScopeFilters(body, params) {
 
 /**
  * POST /api/payout/payouts/transfer-all
- * Body: { preview?, shopId?, status?, methodId?, search?, from?, to?,
+ * Body: { preview?, batch?, shopId?, status?, methodId?, search?, from?, to?,
  *         transferRef?, transferDate?, notes? }
  * With preview: true it only returns { count, amount } of awaiting payments in
  * scope. Otherwise it marks every awaiting payment in scope TRANSFERRED under
- * one reference and one shared batch number, set-based, in a single transaction.
+ * one reference, set-based, in a single transaction.
+ *
+ * Scoped by `batch`, existing batch numbers are left exactly as they are - a
+ * scheduled batch is numbered by its payout date (see dateBatchNo) and that
+ * number is the statement number the restaurant receives. Only an unscoped
+ * transfer-all, which sweeps up payments belonging to no batch yet, mints one.
  */
 router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const params = {};
     const scope = buildScopeFilters(req.body, params);
+    const byBatch = [].concat(req.body?.batch ?? []).filter((b) => b !== "" && b != null).length > 0;
     const pendingWhere = `${scope.join(" AND ")} AND (ps.PayoutID IS NULL OR ps.Status <> 'TRANSFERRED')`;
 
     const previewRows = await query(
@@ -652,15 +716,30 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       return res.status(400).json({ ok: false, error: "No awaiting payments match the current filters" });
     }
 
-    const batchNo = await nextBatchNo();
+    // A batch-scoped run keeps every row's own BatchNo; only an unscoped one
+    // needs a new number for the payments it is about to group together.
+    const batchNo = byBatch ? null : await nextBatchNo();
     const execParams = {
       ...params,
       transferRef: { type: mssql.NVarChar(200), value: transferRef },
       transferDate: { type: mssql.Date, value: parseTransferDate(req.body?.transferDate) },
       transferredBy: { type: mssql.NVarChar(100), value: req.user.username },
       notes: { type: mssql.NVarChar(500), value: req.body?.notes || null },
-      batchNo: { type: mssql.BigInt, value: batchNo }
+      ...(byBatch ? {} : { batchNo: { type: mssql.BigInt, value: batchNo } })
     };
+
+    // Every payment inside a batch already has a PayoutStatus row, so the
+    // INSERT branch below can only ever match under an unscoped run.
+    const insertMissing = byBatch
+      ? ""
+      : `
+      INSERT INTO dbo.PayoutStatus
+        (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, UpdatedAt)
+      SELECT p.PaymentID, p.ShopID, (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME()
+      FROM dbo.Payment p
+      LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
+      WHERE ${scope.join(" AND ")} AND ps.PayoutID IS NULL;
+      `;
 
     await query(
       `
@@ -669,24 +748,18 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       UPDATE ps
       SET Status = 'TRANSFERRED', Amount = (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), TransferRef = @transferRef,
           TransferDate = @transferDate, TransferredBy = @transferredBy,
-          Notes = ISNULL(@notes, ps.Notes), BatchNo = @batchNo, UpdatedAt = SYSDATETIME()
+          Notes = ISNULL(@notes, ps.Notes), ${byBatch ? "" : "BatchNo = @batchNo,"} UpdatedAt = SYSDATETIME()
       FROM dbo.PayoutStatus ps
       INNER JOIN dbo.Payment p ON p.PaymentID = ps.PaymentID
       WHERE ${scope.join(" AND ")} AND ps.Status <> 'TRANSFERRED';
-
-      INSERT INTO dbo.PayoutStatus
-        (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, UpdatedAt)
-      SELECT p.PaymentID, p.ShopID, (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME()
-      FROM dbo.Payment p
-      LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
-      WHERE ${scope.join(" AND ")} AND ps.PayoutID IS NULL;
-
+      ${insertMissing}
       COMMIT;
       `,
       execParams
     );
 
-    console.log(`[PAYOUT:PAYOUT] Transfer-all by ${req.user.username} ref=${transferRef} batch=${batchNo}: ${count} payments, ${amount}`);
+    const batchLabel = byBatch ? [].concat(req.body.batch).join(",") : batchNo;
+    console.log(`[PAYOUT:PAYOUT] Transfer-all by ${req.user.username} ref=${transferRef} batch=${batchLabel}: ${count} payments, ${amount}`);
     res.json({ ok: true, transferredCount: count, amount, transferRef, batchNo });
   } catch (err) {
     console.error("[PAYOUT:PAYOUT] Transfer-all error:", err.message);

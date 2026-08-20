@@ -66,13 +66,21 @@ function resolveShopScope(req) {
  * (capped at MAX_EXPORT_ROWS) instead of a page.
  */
 const MAX_EXPORT_ROWS = 20000;
+const MAX_PAGE_SIZE = 200;
 
 async function queryTransactions(req, { paginate = true } = {}) {
     const shopId = resolveShopScope(req);
     const { status, payoutStatus, from, to, methodId, search, minAmount, maxAmount, batch, transferRef } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
+    // Silently clamping an over-sized pageSize is how a payout run once paid
+    // 200 of a 250-transaction batch and reported success: the caller asked for
+    // 500, got 200, and had no way to tell. A caller that needs every row must
+    // page for it or use an endpoint that is set-based server-side.
+    if (paginate && Number(req.query.pageSize) > MAX_PAGE_SIZE) {
+      throw new BadRequest(`pageSize cannot exceed ${MAX_PAGE_SIZE}. Page through the results instead.`);
+    }
     const pageSize = paginate
-      ? Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
+      ? Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.pageSize) || 50))
       : MAX_EXPORT_ROWS;
 
     const conditions = [];
