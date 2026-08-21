@@ -2,7 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Clock, Users, UtensilsCrossed,
-  QrCode, BarChart3, LogOut, Menu as MenuIcon, X, Settings,
+  QrCode, BarChart3, LogOut, Menu as MenuIcon, X, Settings, MessageCircle,
 } from "lucide-react";
 import { useAdminAuth } from "../../context/AdminAuthContext";
 
@@ -12,6 +12,7 @@ const NAV = [
   { to: "/admin/customers", label: "Customers", icon: Users },
   { to: "/admin/menu", label: "Menu", icon: UtensilsCrossed },
   { to: "/admin/qr-codes", label: "QR Codes", icon: QrCode },
+  { to: "/admin/whatsapp", label: "WhatsApp", icon: MessageCircle },
   { to: "/admin/reports", label: "Reports", icon: BarChart3 },
   { to: "/admin/settings", label: "Settings", icon: Settings },
 ];

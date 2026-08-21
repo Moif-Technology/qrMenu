@@ -46,3 +46,8 @@ desktop.ini
 
 qrmenu-dashboard/
 .gstack/
+
+# WhatsApp Web session credentials - NEVER commit.
+# These files are a live login for the restaurant WhatsApp number.
+.wwebjs_auth/
+.wwebjs_cache/

@@ -26,3 +26,7 @@ yarn-debug.log*
 .DS_Store
 Thumbs.db
 
+
+# WhatsApp Web session credentials - NEVER commit.
+.wwebjs_auth/
+.wwebjs_cache/

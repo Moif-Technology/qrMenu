@@ -8,7 +8,7 @@ const AUTH_TOKEN = process.env.MC_AUTH_TOKEN;
 const COUNTRY_CODE = process.env.MC_COUNTRY_CODE || "971";
 const SENDER_ID = (process.env.MC_SENDER_ID || "").trim();
 
-function normalizeMobileForUae(phone) {
+export function normalizeMobileForUae(phone) {
   let p = String(phone || "").trim();
   p = p.replace(/[^\d+]/g, ""); // keep digits and +
 

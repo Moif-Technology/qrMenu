@@ -22,6 +22,7 @@ import reservationRoutes from "./routes/reservation.routes.js";
 import settingsRoutes from "./routes/settings.routes.js";
 import tableRoutes from "./routes/table.routes.js";
 import waitlistRoutes from "./routes/waitlist.routes.js";
+import whatsappRoutes from "./routes/whatsapp.routes.js";
 import { getAutoMigrationStatus, startAutoMigration, stopAutoMigration } from "./services/imageAutoMigration.service.js";
 import telrRoutes from "./telr.routes.js";
 const app = express();
@@ -248,6 +249,7 @@ app.use("/api", reservationRoutes);
 app.use("/api", waitlistRoutes);
 app.use("/api", qrRoutes);
 app.use("/api/floor-layout", floorLayoutRoutes);
+app.use("/api/admin/whatsapp", whatsappRoutes);
 app.use(telrRoutes);
 
 // Payout tracker (merged in from qrmenu-dashboard - one backend, one process)

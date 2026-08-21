@@ -111,6 +111,7 @@ const AdminReports = lazy(() => import("./pages/admin/AdminReports"));
 const AdminWaitlist = lazy(() => import("./pages/admin/AdminWaitlist"));
 const AdminCustomers = lazy(() => import("./pages/admin/AdminCustomers"));
 const AdminQRCodes = lazy(() => import("./pages/admin/AdminQRCodes"));
+const AdminWhatsApp = lazy(() => import("./pages/admin/AdminWhatsApp"));
 const AdminMenu = lazy(() => import("./pages/admin/AdminMenu"));
 const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
 
@@ -196,6 +197,7 @@ export default function App() {
                   <Route path="customers" element={<AdminCustomers />} />
                   <Route path="menu" element={<AdminMenu />} />
                   <Route path="qr-codes" element={<AdminQRCodes />} />
+                  <Route path="whatsapp" element={<AdminWhatsApp />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                 </Route>
