@@ -33,14 +33,21 @@ router.get("/status", (_req, res) => {
   }
 });
 
-/** POST /api/admin/whatsapp/connect - boot the client (QR arrives via /status). */
-router.post("/connect", (_req, res) => {
+/**
+ * POST /api/admin/whatsapp/connect - boot the client (QR arrives via /status).
+ *
+ * Returns 503 when whatsapp-web.js is not installed on this host, which is the
+ * expected state on a server that cannot run Chromium. The rest of the API is
+ * unaffected either way.
+ */
+router.post("/connect", async (_req, res) => {
   try {
-    const result = startClient();
+    const result = await startClient();
     res.json({ ok: true, ...result });
   } catch (e) {
-    console.error("[WA] /connect ERROR", e?.message || e);
-    res.status(500).json({ ok: false, error: e?.message || "Failed to start WhatsApp" });
+    const status = e?.statusCode || 500;
+    if (status >= 500 && status !== 503) console.error("[WA] /connect ERROR", e?.message || e);
+    res.status(status).json({ ok: false, error: e?.message || "Failed to start WhatsApp" });
   }
 });
 

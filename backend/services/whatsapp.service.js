@@ -18,10 +18,35 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import QRCode from "qrcode";
-import pkg from "whatsapp-web.js";
 import { normalizeMobileForUae } from "./messagecentral.service.js";
 
-const { Client, LocalAuth, MessageMedia } = pkg;
+// whatsapp-web.js is loaded on demand, NEVER at module scope.
+//
+// It drags in puppeteer and a ~300MB Chromium, so it is routinely absent on a
+// host where `npm install` could not complete it. A static ESM import of a
+// missing package throws while the module graph is being built, which kills
+// the entire API process at boot - that took production down with 502s on
+// every route (menu, settings, payments) because of an admin-only feature
+// nobody was even using. Keep this dynamic.
+let waModulePromise = null;
+
+async function loadWhatsAppWeb() {
+  if (!waModulePromise) {
+    waModulePromise = import("whatsapp-web.js")
+      .then((mod) => mod.default ?? mod)
+      .catch((e) => {
+        waModulePromise = null; // let a later attempt retry after an install
+        console.error("[WA] whatsapp-web.js unavailable:", e?.message || e);
+        const err = new Error(
+          "WhatsApp support is not installed on this server. Run `npm install` in backend/ " +
+            "- it downloads a ~300MB Chromium, which some shared hosts cannot run."
+        );
+        err.statusCode = 503;
+        throw err;
+      });
+  }
+  return waModulePromise;
+}
 
 // Offer posters ride along as base64 in the send request - WhatsApp takes the
 // bytes directly, so there is no upload step and nothing to store. The caps
@@ -185,10 +210,20 @@ export async function resetClient({ wipeSession = false } = {}) {
  * Boot the WhatsApp Web client if it is not already running.
  * Returns immediately; poll getStatus() for the QR and READY transitions.
  */
-export function startClient() {
+export async function startClient() {
   if (client) return { ok: true, state };
 
   setState(STATES.STARTING, { qr: null, error: null });
+
+  // Resolved here rather than at import time - see loadWhatsAppWeb().
+  let Client;
+  let LocalAuth;
+  try {
+    ({ Client, LocalAuth } = await loadWhatsAppWeb());
+  } catch (e) {
+    setState(STATES.DISCONNECTED, { qr: null, error: e.message });
+    throw e;
+  }
 
   // Self-heal: clear anything still holding the profile before launching, so a
   // previous crash or an unlinked device does not permanently wedge the
@@ -464,6 +499,7 @@ export async function sendMessage({ customerId, phone, message, image, sentBy })
     if (poster) {
       // The text becomes the image caption rather than a second message - one
       // notification per customer instead of two.
+      const { MessageMedia } = await loadWhatsAppWeb();
       const media = new MessageMedia(poster.mimetype, poster.base64, poster.filename);
       await client.sendMessage(chatId, media, text ? { caption: text } : {});
     } else {
