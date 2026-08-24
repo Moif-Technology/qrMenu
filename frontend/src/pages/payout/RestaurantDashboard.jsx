@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowUpDown,
   CalendarClock,
   CalendarDays,
@@ -18,6 +19,27 @@ import { exportPayoutsExcel, exportPayoutsPdf, exportSettlementStatementPdf, fmt
 import api, { clearSession, getStoredUser } from "../../lib/payoutApi.js";
 
 const CURRENCY = "AED";
+
+const PAYOUT_NOTICE = {
+  title: "Payout update",
+  scheduledDate: "2026-08-28T00:00:00.000Z",
+  processingDate: "2026-08-31T00:00:00.000Z",
+  expiresAt: "2026-09-01T00:00:00+04:00",
+  message: "The payout batch scheduled for 28 Aug 2026 will be processed on 31 Aug 2026 due to the Rabi Al Awwal bank holiday."
+};
+
+const isPayoutNoticeActive = () => Date.now() < new Date(PAYOUT_NOTICE.expiresAt).getTime();
+
+const isHolidayDelayedDate = (d) => {
+  if (!d) return false;
+  const dt = new Date(d);
+  return (
+    !Number.isNaN(dt.getTime()) &&
+    dt.getUTCFullYear() === 2026 &&
+    dt.getUTCMonth() === 7 &&
+    dt.getUTCDate() === 28
+  );
+};
 
 const fmt = (n) =>
   Number(n || 0).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -73,6 +95,11 @@ const fmtTxnRange = (from, to) => {
 };
 
 // Payout (value) date: real transfer date once paid, else the scheduled date.
+const isHolidayDelayedBatch = (b) => {
+  const batchNo = fmtBatchNo(b?.batchNo);
+  return isHolidayDelayedDate(b?.scheduledDate) || batchNo === "28082026";
+};
+
 const fmtValueDay = (b) => fmtDay(b.transferDate || b.scheduledDate);
 
 // A scheduled batch is numbered by its payout date as DDMMYYYY, stored in a
@@ -228,6 +255,12 @@ function BatchDetailSheet({ batch, onClose }) {
                 <p className="text-sm text-emerald-400 font-medium mt-0.5">{fmtValueDay(batch)}</p>
               </div>
             </div>
+            {isPayoutNoticeActive() && isHolidayDelayedBatch(batch) && (
+              <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-xs sm:text-sm text-amber-800">{PAYOUT_NOTICE.message}</p>
+              </div>
+            )}
             <div className="mt-3 grid grid-cols-2 gap-2 text-center">
               <div className="rounded-lg bg-zinc-50 py-2">
                 <p className="text-[10px] text-zinc-400">Gross</p>
@@ -601,6 +634,16 @@ export default function RestaurantDashboard() {
             </div>
           )}
 
+          {isPayoutNoticeActive() && (
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3.5 py-3">
+              <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm text-white font-medium">{PAYOUT_NOTICE.title}</p>
+                <p className="text-xs sm:text-sm text-amber-50/85 mt-0.5">{PAYOUT_NOTICE.message}</p>
+              </div>
+            </div>
+          )}
+
      
         </section>
 
@@ -630,6 +673,14 @@ export default function RestaurantDashboard() {
               <p className="text-xs text-zinc-400 mt-0.5">
                 Each settlement groups the transactions paid out together. Tap a batch to see its transactions.
               </p>
+              {isPayoutNoticeActive() && (
+                <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="text-xs sm:text-sm text-amber-800">
+                    {PAYOUT_NOTICE.message}
+                  </p>
+                </div>
+              )}
             </div>
 
             {upcomingBatches.length === 0 ? (
@@ -677,6 +728,15 @@ export default function RestaurantDashboard() {
                     </div>
 
                     {/* Breakdown: gross → fees → tax (service fee never shown) */}
+                    {isPayoutNoticeActive() && isHolidayDelayedBatch(b) && (
+                      <div className="mx-4 sm:mx-5 mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <p className="text-xs sm:text-sm text-amber-800">
+                          {PAYOUT_NOTICE.message}
+                        </p>
+                      </div>
+                    )}
+
                     <div className="px-4 sm:px-5 py-4 space-y-2 text-sm">
                       <div className="flex items-center justify-between">
                         <span className="text-zinc-500">Gross</span>
