@@ -298,6 +298,31 @@ export async function getServiceFeeRatePercent() {
   }
 }
 
+/**
+ * Inbox Telr mails the card receipt to (bill_email on every payment session).
+ * Company-controlled via the payout admin UI, same config row as the fee.
+ * Kept as its own read/cache so a missing column or DB hiccup can never drag
+ * the fee rate down with it — it just falls back to the built-in address.
+ */
+const DEFAULT_TELR_RECEIPT_EMAIL = "deynoqrreceipts@gmail.com";
+let receiptEmailCache = { value: null, fetchedAt: 0 };
+
+export async function getTelrReceiptEmail() {
+  const now = Date.now();
+  if (receiptEmailCache.value != null && now - receiptEmailCache.fetchedAt < SERVICE_FEE_CACHE_TTL_MS) {
+    return receiptEmailCache.value;
+  }
+  try {
+    const rows = await queryPaymentDb(`SELECT TelrReceiptEmail FROM dbo.ServiceFeeConfig WHERE ID = 1`);
+    const email = String(rows?.[0]?.TelrReceiptEmail || "").trim() || DEFAULT_TELR_RECEIPT_EMAIL;
+    receiptEmailCache = { value: email, fetchedAt: now };
+    return email;
+  } catch (err) {
+    console.error("[PAYMENT:SVC] Failed to read Telr receipt email, using cached/default:", err.message);
+    return receiptEmailCache.value ?? DEFAULT_TELR_RECEIPT_EMAIL;
+  }
+}
+
 export async function getActivePaymentMethods() {
   const sql = `
     SELECT ID, PaymentMethodID, PaymentMethod, Status

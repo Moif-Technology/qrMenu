@@ -850,6 +850,21 @@ export default function RestaurantDashboard() {
                             <span className="text-zinc-500">VAT on transfer fee</span>
                             <span className="num text-zinc-500">− {CURRENCY} {fmt(s.transferFeeVat)}</span>
                           </div>
+                          {/* Only charged on some settlements - no line at all when it is 0. */}
+                          {Number(s.monthlyFee || 0) > 0 && (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-zinc-500">Monthly fee</span>
+                                <span className="num text-zinc-500">− {CURRENCY} {fmt(s.monthlyFee)}</span>
+                              </div>
+                              {Number(s.monthlyFeeVat || 0) > 0 && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-zinc-500">VAT on monthly fee</span>
+                                  <span className="num text-zinc-500">− {CURRENCY} {fmt(s.monthlyFeeVat)}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
                           <div className="flex items-center justify-between pt-2 mt-1 border-t border-zinc-100">
                             <span className="text-zinc-800 font-semibold">Net amount transferred</span>
                             <span className="num text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</span>

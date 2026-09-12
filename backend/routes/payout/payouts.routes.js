@@ -37,7 +37,38 @@ const TRANSFER_FEE_TAX_RATE = 0.05; // 5% UAE VAT
 const BATCH_TRANSFER_FEE = 5;
 const VAT_RATE = 0.05; // 5% UAE VAT
 
+// Largest monthly fee a single settlement may carry. Not a business rule, just
+// a fat-finger guard on a number that comes straight out of an admin's keyboard
+// and gets subtracted from somebody's money.
+const MAX_MONTHLY_FEE = 100000;
+
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * The optional monthly (subscription) fee the admin types into the transfer
+ * modal, deducted from this settlement's net alongside the transfer fee.
+ * `monthlyFeeVat` is a boolean toggle on the way in - VAT is computed here, and
+ * only the resulting AMOUNT is stored, so a settled statement keeps its own
+ * numbers if VAT_RATE ever changes.
+ *
+ * Blank / missing / 0 means no fee: both columns stay 0 and the statement omits
+ * the line. Throws on anything else so a bad value can never silently become 0
+ * and quietly under-deduct.
+ */
+function parseMonthlyFee(body) {
+  const raw = body?.monthlyFee;
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return { amount: 0, vat: 0 };
+  }
+  const amount = Number(raw);
+  if (!Number.isFinite(amount) || amount < 0 || amount > MAX_MONTHLY_FEE) {
+    const err = new Error(`monthlyFee must be a number between 0 and ${MAX_MONTHLY_FEE}`);
+    err.status = 400;
+    throw err;
+  }
+  const rounded = r2(amount);
+  return { amount: rounded, vat: body?.monthlyFeeVat ? r2(rounded * VAT_RATE) : 0 };
+}
 
 async function nextBatchNo() {
   const rows = await query(`SELECT NEXT VALUE FOR dbo.PayoutBatchSeq AS n`);
@@ -147,7 +178,8 @@ async function getPayoutRow(paymentId) {
   return rows?.[0] || null;
 }
 
-async function markTransferred(payment, existing, { transferRef, transferDate, transferredBy, notes, batchNo }) {
+async function markTransferred(payment, existing, { transferRef, transferDate, transferredBy, notes, batchNo, monthlyFee }) {
+  const fee = monthlyFee || { amount: 0, vat: 0 };
   const params = {
     paymentId: { type: mssql.BigInt, value: Number(payment.PaymentID) },
     shopId: { type: mssql.BigInt, value: Number(payment.ShopID) },
@@ -156,7 +188,11 @@ async function markTransferred(payment, existing, { transferRef, transferDate, t
     transferDate: { type: mssql.Date, value: transferDate },
     transferredBy: { type: mssql.NVarChar(100), value: transferredBy },
     notes: { type: mssql.NVarChar(500), value: notes || null },
-    batchNo: { type: mssql.BigInt, value: batchNo }
+    batchNo: { type: mssql.BigInt, value: batchNo },
+    // Batch-level, stamped identically onto every row of the batch (see
+    // add-payout-monthly-fee.sql) - read back with MAX(), never SUM().
+    monthlyFee: { type: mssql.Money, value: fee.amount },
+    monthlyFeeVat: { type: mssql.Money, value: fee.vat }
   };
 
   if (existing) {
@@ -165,16 +201,18 @@ async function markTransferred(payment, existing, { transferRef, transferDate, t
       `UPDATE dbo.PayoutStatus
        SET Status = 'TRANSFERRED', Amount = @amount, TransferRef = @transferRef,
            TransferDate = @transferDate, TransferredBy = @transferredBy,
-           Notes = ISNULL(@notes, Notes), BatchNo = @batchNo, UpdatedAt = SYSDATETIME()
+           Notes = ISNULL(@notes, Notes), BatchNo = @batchNo,
+           MonthlyFeeAmount = @monthlyFee, MonthlyFeeVat = @monthlyFeeVat,
+           UpdatedAt = SYSDATETIME()
        WHERE PaymentID = @paymentId`,
       params
     );
   } else {
     await query(
       `INSERT INTO dbo.PayoutStatus
-         (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, UpdatedAt)
+         (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, MonthlyFeeAmount, MonthlyFeeVat, UpdatedAt)
        VALUES
-         (@paymentId, @shopId, @amount, 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME())`,
+         (@paymentId, @shopId, @amount, 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, @monthlyFee, @monthlyFeeVat, SYSDATETIME())`,
       params
     );
   }
@@ -193,6 +231,7 @@ router.post("/:paymentId/transfer", requireAuth, requireSuperAdmin, async (req, 
       return res.status(400).json({ ok: false, error: "transferRef (cheque/transfer number) is required" });
     }
     const transferDate = parseTransferDate(req.body?.transferDate);
+    const monthlyFee = parseMonthlyFee(req.body);
 
     const payment = await getPayment(paymentId);
     if (!payment) return res.status(404).json({ ok: false, error: "Payment not found" });
@@ -211,11 +250,13 @@ router.post("/:paymentId/transfer", requireAuth, requireSuperAdmin, async (req, 
       transferDate,
       transferredBy: req.user.username,
       notes: req.body?.notes,
-      batchNo
+      batchNo,
+      monthlyFee
     });
 
     res.json({ ok: true, paymentId, status: "TRANSFERRED", transferRef, batchNo });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
     console.error("[PAYOUT:PAYOUT] Transfer error:", err.message);
     res.status(500).json({ ok: false, error: "Failed to mark payout transferred" });
   }
@@ -241,6 +282,7 @@ router.post("/bulk-transfer", requireAuth, requireSuperAdmin, async (req, res) =
       return res.status(400).json({ ok: false, error: "transferRef (cheque/transfer number) is required" });
     }
     const transferDate = parseTransferDate(req.body?.transferDate);
+    const monthlyFee = parseMonthlyFee(req.body);
     const batchNo = await resolveBatchNo(paymentIds);
 
     const results = { transferred: [], skipped: [] };
@@ -265,14 +307,16 @@ router.post("/bulk-transfer", requireAuth, requireSuperAdmin, async (req, res) =
         transferDate,
         transferredBy: req.user.username,
         notes: req.body?.notes,
-        batchNo
+        batchNo,
+        monthlyFee
       });
       results.transferred.push(paymentId);
     }
 
-    console.log(`[PAYOUT:PAYOUT] Bulk transfer by ${req.user.username} ref=${transferRef} batch=${batchNo}: ${results.transferred.length} transferred, ${results.skipped.length} skipped`);
-    res.json({ ok: true, transferredCount: results.transferred.length, transferRef, batchNo, ...results });
+    console.log(`[PAYOUT:PAYOUT] Bulk transfer by ${req.user.username} ref=${transferRef} batch=${batchNo}: ${results.transferred.length} transferred, ${results.skipped.length} skipped, monthlyFee=${monthlyFee.amount}+${monthlyFee.vat}`);
+    res.json({ ok: true, transferredCount: results.transferred.length, transferRef, batchNo, monthlyFee, ...results });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
     console.error("[PAYOUT:PAYOUT] Bulk transfer error:", err.message);
     res.status(500).json({ ok: false, error: "Bulk transfer failed" });
   }
@@ -715,6 +759,7 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
     if (count === 0) {
       return res.status(400).json({ ok: false, error: "No awaiting payments match the current filters" });
     }
+    const monthlyFee = parseMonthlyFee(req.body);
 
     // A batch-scoped run keeps every row's own BatchNo; only an unscoped one
     // needs a new number for the payments it is about to group together.
@@ -725,6 +770,8 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       transferDate: { type: mssql.Date, value: parseTransferDate(req.body?.transferDate) },
       transferredBy: { type: mssql.NVarChar(100), value: req.user.username },
       notes: { type: mssql.NVarChar(500), value: req.body?.notes || null },
+      monthlyFee: { type: mssql.Money, value: monthlyFee.amount },
+      monthlyFeeVat: { type: mssql.Money, value: monthlyFee.vat },
       ...(byBatch ? {} : { batchNo: { type: mssql.BigInt, value: batchNo } })
     };
 
@@ -734,8 +781,8 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       ? ""
       : `
       INSERT INTO dbo.PayoutStatus
-        (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, UpdatedAt)
-      SELECT p.PaymentID, p.ShopID, (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, SYSDATETIME()
+        (PaymentID, ShopID, Amount, Status, TransferRef, TransferDate, TransferredBy, Notes, BatchNo, MonthlyFeeAmount, MonthlyFeeVat, UpdatedAt)
+      SELECT p.PaymentID, p.ShopID, (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), 'TRANSFERRED', @transferRef, @transferDate, @transferredBy, @notes, @batchNo, @monthlyFee, @monthlyFeeVat, SYSDATETIME()
       FROM dbo.Payment p
       LEFT JOIN dbo.PayoutStatus ps ON ps.PaymentID = p.PaymentID
       WHERE ${scope.join(" AND ")} AND ps.PayoutID IS NULL;
@@ -748,7 +795,8 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
       UPDATE ps
       SET Status = 'TRANSFERRED', Amount = (p.PaidAmount - ISNULL(p.ServiceFeeAmount, 0) - ISNULL(p.PlatformFeeAmount, 0)), TransferRef = @transferRef,
           TransferDate = @transferDate, TransferredBy = @transferredBy,
-          Notes = ISNULL(@notes, ps.Notes), ${byBatch ? "" : "BatchNo = @batchNo,"} UpdatedAt = SYSDATETIME()
+          Notes = ISNULL(@notes, ps.Notes), ${byBatch ? "" : "BatchNo = @batchNo,"}
+          MonthlyFeeAmount = @monthlyFee, MonthlyFeeVat = @monthlyFeeVat, UpdatedAt = SYSDATETIME()
       FROM dbo.PayoutStatus ps
       INNER JOIN dbo.Payment p ON p.PaymentID = ps.PaymentID
       WHERE ${scope.join(" AND ")} AND ps.Status <> 'TRANSFERRED';
@@ -759,9 +807,10 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
     );
 
     const batchLabel = byBatch ? [].concat(req.body.batch).join(",") : batchNo;
-    console.log(`[PAYOUT:PAYOUT] Transfer-all by ${req.user.username} ref=${transferRef} batch=${batchLabel}: ${count} payments, ${amount}`);
-    res.json({ ok: true, transferredCount: count, amount, transferRef, batchNo });
+    console.log(`[PAYOUT:PAYOUT] Transfer-all by ${req.user.username} ref=${transferRef} batch=${batchLabel}: ${count} payments, ${amount}, monthlyFee=${monthlyFee.amount}+${monthlyFee.vat}`);
+    res.json({ ok: true, transferredCount: count, amount, transferRef, batchNo, monthlyFee });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
     console.error("[PAYOUT:PAYOUT] Transfer-all error:", err.message);
     res.status(500).json({ ok: false, error: "Transfer-all failed" });
   }
@@ -791,7 +840,10 @@ router.post("/transfer-all", requireAuth, requireSuperAdmin, async (req, res) =>
  *   Gross Payable       = SUM(PaidAmount - ServiceFeeAmount - PlatformFeeAmount)
  *   Transfer Fee        = BATCH_TRANSFER_FEE, flat per settlement
  *   VAT on Transfer Fee = Transfer Fee x 5%
+ *   Monthly Fee         = MAX(MonthlyFeeAmount), optional, 0 = line omitted
+ *   VAT on Monthly Fee  = MAX(MonthlyFeeVat), 0 when the admin left VAT off
  *   NET TRANSFERRED     = Gross Payable - Transfer Fee - VAT on Transfer Fee
+ *                                       - Monthly Fee  - VAT on Monthly Fee
  * ------------------------------------------------------------------------- */
 
 const HISTORY_SELECT = `
@@ -806,6 +858,9 @@ const HISTORY_SELECT = `
     ISNULL(SUM(p.PaidAmount), 0)                                      AS telrTotal,
     ISNULL(SUM(ISNULL(p.ServiceFeeAmount, 0)), 0)                     AS telrServiceFee,
     ISNULL(SUM(ps.Amount), 0)                                         AS ledgerAmount,
+    -- Batch-level, stamped identically on every row of the batch - MAX, not SUM.
+    ISNULL(MAX(ps.MonthlyFeeAmount), 0)                               AS monthlyFee,
+    ISNULL(MAX(ps.MonthlyFeeVat), 0)                                  AS monthlyFeeVat,
     MIN(p.CreatedAt)                                                  AS firstTxnAt,
     MAX(p.CreatedAt)                                                  AS lastTxnAt,
     MAX(ps.TransferredBy)                                             AS transferredBy,
@@ -869,7 +924,12 @@ function toStatement(r) {
   const grossPayable = r2(r.grossPayable);
   const transferFee = BATCH_TRANSFER_FEE;
   const transferFeeVat = r2(transferFee * VAT_RATE);
-  const netTransferred = r2(grossPayable - transferFee - transferFeeVat);
+  // Optional monthly (subscription) fee charged on this settlement. 0 for every
+  // batch settled before the feature existed, and for any settlement where the
+  // admin left the field blank - the statement then omits both lines.
+  const monthlyFee = r2(r.monthlyFee);
+  const monthlyFeeVat = r2(r.monthlyFeeVat);
+  const netTransferred = r2(grossPayable - transferFee - transferFeeVat - monthlyFee - monthlyFeeVat);
 
   const ledgerAmount = r2(r.ledgerAmount);
 
@@ -888,6 +948,8 @@ function toStatement(r) {
     grossPayable,
     transferFee,
     transferFeeVat,
+    monthlyFee,
+    monthlyFeeVat,
     netTransferred,
     firstTxnAt: r.firstTxnAt,
     lastTxnAt: r.lastTxnAt,

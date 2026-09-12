@@ -225,6 +225,10 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
   const isAll = !txns;
   const [transferRef, setTransferRef] = useState("");
   const [transferDate, setTransferDate] = useState(new Date().toISOString().slice(0, 10));
+  // Optional monthly (subscription) fee for this settlement. Blank = not
+  // charged, and the statement then omits the line entirely.
+  const [monthlyFee, setMonthlyFee] = useState("");
+  const [monthlyFeeVat, setMonthlyFeeVat] = useState(true);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -243,6 +247,13 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
     ? preview?.amount
     : txns.reduce((s, t) => s + Number(t.restaurantPayoutAmount || 0), 0);
 
+  // Preview only. The server re-parses the same fields and computes the VAT
+  // itself - these numbers are never what gets stored.
+  const feeAmount = monthlyFee.trim() === "" ? 0 : Number(monthlyFee);
+  const feeValid = Number.isFinite(feeAmount) && feeAmount >= 0;
+  const feeVatAmount = feeValid && monthlyFeeVat ? Math.round(feeAmount * 5) / 100 : 0;
+  const feeTotal = feeValid ? feeAmount + feeVatAmount : 0;
+
   async function submit(e) {
     e.preventDefault();
     setError("");
@@ -253,6 +264,8 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
           ...scope,
           transferRef,
           transferDate,
+          monthlyFee,
+          monthlyFeeVat,
           notes
         });
         showToast(`${data.transferredCount} payments marked transferred under ${data.transferRef}.`, "success");
@@ -261,6 +274,8 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
           paymentIds: txns.map((t) => t.paymentId),
           transferRef,
           transferDate,
+          monthlyFee,
+          monthlyFeeVat,
           notes
         });
         if (data.skipped?.length) {
@@ -320,6 +335,18 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
           <p className="num text-xl font-semibold text-white mt-1">
             {totalAmount == null ? "..." : `${CURRENCY} ${fmt(totalAmount)}`}
           </p>
+          {feeTotal > 0 && totalAmount != null && (
+            <div className="mt-2 pt-2 border-t border-white/10 space-y-1 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400">Monthly fee{monthlyFeeVat ? " + VAT" : ""}</span>
+                <span className="num text-rose-300">− {fmt(feeTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-300">Net after monthly fee</span>
+                <span className="num text-white font-semibold">{CURRENCY} {fmt(totalAmount - feeTotal)}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
@@ -355,6 +382,41 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
           />
         </div>
         <div className="space-y-2">
+          <label htmlFor="transfer-monthly-fee" className="block text-sm text-zinc-600">
+            Monthly fee (optional)
+          </label>
+          <input
+            id="transfer-monthly-fee"
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            value={monthlyFee}
+            onChange={(e) => setMonthlyFee(e.target.value)}
+            className={inputCls}
+            placeholder={`${CURRENCY} 0.00 - leave blank to not charge`}
+          />
+          <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={monthlyFeeVat}
+              onChange={(e) => setMonthlyFeeVat(e.target.checked)}
+              className="w-4 h-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500/30"
+            />
+            Add 5% VAT on the monthly fee
+          </label>
+          {feeTotal > 0 && (
+            <p className="text-xs text-zinc-500">
+              Deducts <span className="num">{CURRENCY} {fmt(feeAmount)}</span>
+              {monthlyFeeVat && <> + <span className="num">{fmt(feeVatAmount)}</span> VAT</>}
+              {" = "}<span className="num text-zinc-700 font-medium">{CURRENCY} {fmt(feeTotal)}</span> from this settlement.
+            </p>
+          )}
+          {!feeValid && (
+            <p className="text-xs text-red-600">Monthly fee must be a positive amount.</p>
+          )}
+        </div>
+        <div className="space-y-2">
           <label htmlFor="transfer-notes" className="block text-sm text-zinc-600">Notes (optional)</label>
           <textarea
             id="transfer-notes"
@@ -381,7 +443,7 @@ function TransferModal({ txns, scope, onClose, onDone, showToast }) {
           </button>
           <button
             type="submit"
-            disabled={saving || (isAll && (!preview || preview.count === 0))}
+            disabled={saving || !feeValid || (isAll && (!preview || preview.count === 0))}
             className="px-4 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-60 text-white font-semibold transition"
           >
             {saving ? "Saving..." : "Confirm transfer"}
@@ -701,6 +763,7 @@ export default function AdminDashboard() {
   const [methodBusy, setMethodBusy] = useState(null);
   const [serviceFee, setServiceFee] = useState(null);
   const [serviceFeeDraft, setServiceFeeDraft] = useState("");
+  const [receiptEmailDraft, setReceiptEmailDraft] = useState("");
   const [serviceFeeSaving, setServiceFeeSaving] = useState(false);
 
   const [summary, setSummary] = useState(null);
@@ -926,6 +989,7 @@ export default function AdminDashboard() {
       .then(({ data }) => {
         setServiceFee(data);
         setServiceFeeDraft(String(data.ratePercent));
+        setReceiptEmailDraft(String(data.receiptEmail || ""));
       })
       .catch(() => {});
   }, [isCompany]);
@@ -980,11 +1044,17 @@ export default function AdminDashboard() {
       alert("Enter a valid percentage between 0 and 100");
       return;
     }
+    const receiptEmail = receiptEmailDraft.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptEmail)) {
+      alert("Enter a valid receipt email address");
+      return;
+    }
     setServiceFeeSaving(true);
     try {
-      const { data } = await api.put("/settings/service-fee", { ratePercent });
-      setServiceFee((prev) => ({ ...prev, ratePercent: data.ratePercent, updatedBy: user?.username, updatedOn: new Date().toISOString() }));
+      const { data } = await api.put("/settings/service-fee", { ratePercent, receiptEmail });
+      setServiceFee((prev) => ({ ...prev, ratePercent: data.ratePercent, receiptEmail: data.receiptEmail, updatedBy: user?.username, updatedOn: new Date().toISOString() }));
       setServiceFeeDraft(String(data.ratePercent));
+      setReceiptEmailDraft(String(data.receiptEmail || ""));
     } catch (err) {
       alert(err.response?.data?.error || "Failed to update service fee");
     } finally {
@@ -1100,9 +1170,10 @@ export default function AdminDashboard() {
     (acc, s) => ({
       txnCount: acc.txnCount + Number(s.txnCount || 0),
       grossPayable: acc.grossPayable + Number(s.grossPayable ?? s.totalAmount ?? 0),
+      monthlyFee: acc.monthlyFee + Number(s.monthlyFee || 0) + Number(s.monthlyFeeVat || 0),
       netTransferred: acc.netTransferred + Number(s.netTransferred ?? s.totalAmount ?? 0)
     }),
-    { txnCount: 0, grossPayable: 0, netTransferred: 0 }
+    { txnCount: 0, grossPayable: 0, monthlyFee: 0, netTransferred: 0 }
   );
 
   const HISTORY_EXPORT_COLUMNS = [
@@ -1117,6 +1188,8 @@ export default function AdminDashboard() {
     { header: "Gross payable", key: (s) => fmt(s.grossPayable), align: "right" },
     { header: "Transfer fee", key: (s) => fmt(s.transferFee), align: "right" },
     { header: "VAT on transfer fee", key: (s) => fmt(s.transferFeeVat), align: "right" },
+    { header: "Monthly fee", key: (s) => fmt(s.monthlyFee), align: "right" },
+    { header: "VAT on monthly fee", key: (s) => fmt(s.monthlyFeeVat), align: "right" },
     { header: "Net transferred", key: (s) => fmt(s.netTransferred), align: "right" },
     { header: "Transferred by", key: (s) => s.transferredBy || "-" }
   ];
@@ -1411,9 +1484,10 @@ export default function AdminDashboard() {
         {isCompany && (
           <section className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
             <div className="px-5 py-3.5 border-b border-zinc-100">
-              <h2 className="text-sm font-semibold text-zinc-800">Service fee</h2>
+              <h2 className="text-sm font-semibold text-zinc-800">Service fee &amp; receipts</h2>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Convenience fee charged to customers on every QR menu payment. Takes effect on the next payment.
+                Convenience fee charged to customers on every QR menu payment, and the inbox Telr mails card
+                receipts to. Both take effect on the next payment.
               </p>
             </div>
             <form onSubmit={saveServiceFee} className="p-4 flex flex-wrap items-end gap-3">
@@ -1430,9 +1504,26 @@ export default function AdminDashboard() {
                   className={`${inputCls} w-28`}
                 />
               </div>
+              <div className="min-w-[16rem] flex-1">
+                <label htmlFor="telr-receipt-email" className="block text-xs text-zinc-400 mb-1">
+                  Telr receipt email
+                </label>
+                <input
+                  id="telr-receipt-email"
+                  type="email"
+                  value={receiptEmailDraft}
+                  onChange={(e) => setReceiptEmailDraft(e.target.value)}
+                  placeholder="receipts@example.com"
+                  className={`${inputCls} w-full`}
+                />
+              </div>
               <button
                 type="submit"
-                disabled={serviceFeeSaving || serviceFeeDraft === String(serviceFee?.ratePercent ?? "")}
+                disabled={
+                  serviceFeeSaving ||
+                  (serviceFeeDraft === String(serviceFee?.ratePercent ?? "") &&
+                    receiptEmailDraft.trim() === String(serviceFee?.receiptEmail ?? ""))
+                }
                 className="px-4 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-50 text-white font-semibold transition"
               >
                 {serviceFeeSaving ? "Saving..." : "Save"}
@@ -1740,7 +1831,7 @@ export default function AdminDashboard() {
               ) : (
                 <>
                   <div className="overflow-x-auto hidden sm:block">
-                    <table className="w-full min-w-[1180px] text-sm">
+                    <table className="w-full min-w-[1290px] text-sm">
                       <thead>
                         <tr className="text-left text-xs text-zinc-400 border-b border-zinc-100">
                           <th className="pl-5 pr-3 py-2.5 font-medium whitespace-nowrap">Payout date</th>
@@ -1753,6 +1844,7 @@ export default function AdminDashboard() {
                           <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">VAT on it</th>
                           <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Gross payable</th>
                           <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap" title="Flat bank charge per settlement, plus VAT">Transfer fee</th>
+                          <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap" title="Monthly subscription fee charged on this settlement, plus VAT if it was applied">Monthly fee</th>
                           <th className="px-3 py-2.5 font-semibold text-zinc-600 text-right whitespace-nowrap">Net transferred</th>
                           <th className="px-3 py-2.5 font-medium whitespace-nowrap">By</th>
                         </tr>
@@ -1787,6 +1879,11 @@ export default function AdminDashboard() {
                             <td className="num px-3 py-3 text-right text-rose-600">-{fmt(s.serviceFeeVat)}</td>
                             <td className="num px-3 py-3 text-right text-zinc-700">{fmt(s.grossPayable)}</td>
                             <td className="num px-3 py-3 text-right text-rose-600">-{fmt(Number(s.transferFee || 0) + Number(s.transferFeeVat || 0))}</td>
+                            <td className="num px-3 py-3 text-right text-rose-600">
+                              {Number(s.monthlyFee || 0) > 0
+                                ? `-${fmt(Number(s.monthlyFee || 0) + Number(s.monthlyFeeVat || 0))}`
+                                : <span className="text-zinc-300">-</span>}
+                            </td>
                             <td className="num px-3 py-3 text-right text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</td>
                             <td className="px-3 py-3 text-zinc-500 text-xs whitespace-nowrap">{s.transferredBy || "-"}</td>
                           </tr>
@@ -1801,6 +1898,9 @@ export default function AdminDashboard() {
                           <td colSpan={4} />
                           <td className="num px-3 py-3 text-right text-zinc-700">{fmt(historyTotals.grossPayable)}</td>
                           <td />
+                          <td className="num px-3 py-3 text-right text-rose-600">
+                            {historyTotals.monthlyFee > 0 ? `-${fmt(historyTotals.monthlyFee)}` : ""}
+                          </td>
                           <td className="num px-3 py-3 text-right font-semibold text-zinc-900">
                             {CURRENCY} {fmt(historyTotals.netTransferred)}
                           </td>
@@ -1833,6 +1933,12 @@ export default function AdminDashboard() {
                           <span className="num text-right text-zinc-700">{fmt(s.grossPayable)}</span>
                           <span className="text-zinc-400">Transfer fee + VAT</span>
                           <span className="num text-right text-rose-600">-{fmt(Number(s.transferFee || 0) + Number(s.transferFeeVat || 0))}</span>
+                          {Number(s.monthlyFee || 0) > 0 && (
+                            <>
+                              <span className="text-zinc-400">Monthly fee{Number(s.monthlyFeeVat || 0) > 0 ? " + VAT" : ""}</span>
+                              <span className="num text-right text-rose-600">-{fmt(Number(s.monthlyFee || 0) + Number(s.monthlyFeeVat || 0))}</span>
+                            </>
+                          )}
                           <span className="text-zinc-500 font-semibold">Net transferred</span>
                           <span className="num text-right text-zinc-900 font-semibold">{CURRENCY} {fmt(s.netTransferred)}</span>
                         </div>

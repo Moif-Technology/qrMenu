@@ -192,6 +192,9 @@ export function exportSettlementStatementPdf({ restaurantName, statement: s, fil
     ["Gross Payable", fmtMoney(s.grossPayable)],
     ["Transfer Fee", fmtMoney(s.transferFee)],
     ["VAT on Transfer Fee", fmtMoney(s.transferFeeVat)],
+    // Optional - a settlement with no monthly fee prints no monthly fee lines.
+    ...(Number(s.monthlyFee || 0) > 0 ? [["Monthly Fee", fmtMoney(s.monthlyFee)]] : []),
+    ...(Number(s.monthlyFeeVat || 0) > 0 ? [["VAT on Monthly Fee", fmtMoney(s.monthlyFeeVat)]] : []),
     ["NET AMOUNT TRANSFERRED", `${CURRENCY} ${fmtMoney(s.netTransferred)}`]
   ];
 

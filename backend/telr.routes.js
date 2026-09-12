@@ -8,6 +8,7 @@ import {
   saveCustomSplitPayment,
   saveItemSplitPayment,
   getServiceFeeRatePercent,
+  getTelrReceiptEmail,
   getPaidItems,
   settleSplitFromSession,
   settleAnyModeFromPayload,
@@ -272,6 +273,7 @@ router.post("/api/telr/create", async (req, res) => {
       numberOfPeople = null,
       items = null,
       originalBillAmount = null,
+      customer = {},
     } = req.body ?? {};
 
     if (!amount || !cartId || !description) {
@@ -367,10 +369,16 @@ router.post("/api/telr/create", async (req, res) => {
 
     // Billing info is fixed (not collected from the guest) - QR menu checkout
     // has no billing form, so every Telr session uses these same details.
-    form.set("bill_email", "moiftechz@gmail.com");
+    // The receipt inbox is company-controlled (payout admin > Service fee card)
+    // so it can be switched when Telr mail to one address starts failing.
+    form.set("bill_email", await getTelrReceiptEmail());
     form.set("bill_fname", "Opaia");
     form.set("bill_sname", "Restaurant");
     form.set("bill_country", "AE");
+    const billPhone = String(customer?.phone || "").replace(/[^0-9+]/g, "").slice(0, 25);
+    if (billPhone) {
+      form.set("bill_tel", billPhone);
+    }
 
     const { data } = await axios.post(TELR_ENDPOINT, form, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -756,7 +764,15 @@ router.post("/api/telr/webhook", async (req, res) => {
   // Always respond 200 immediately — Telr retries if it gets a non-200 response
   res.sendStatus(200);
 
-  const orderRef = req.body?.order_ref || req.body?.orderRef || null;
+  // Log the raw shape first - Telr's advice payload field names are not the same
+  // as the redirect's, and we need to see one real call to map them correctly.
+  console.log("[Telr:Webhook] RAW:", {
+    contentType: req.get("content-type"),
+    body: req.body,
+    query: req.query,
+  });
+
+  const orderRef = req.body?.order_ref || req.body?.orderRef || req.query?.order_ref || null;
   const statusCode = req.body?.status || null; // "A" = Authorised
 
   console.log("[Telr:Webhook] Received notification:", { orderRef, statusCode, body: req.body });
@@ -864,4 +880,3 @@ router.post("/api/telr/webhook", async (req, res) => {
 });
 
 export default router;
-
