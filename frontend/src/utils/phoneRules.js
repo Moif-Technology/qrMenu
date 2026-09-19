@@ -126,3 +126,4 @@ export function getPhoneValidationMessage(phone, defaultCountry = "ae") {
   }
   return `${country.name} numbers must have ${rules.min}-${rules.max} digits after ${country.dialCode}.`;
 }
+
