@@ -7,12 +7,144 @@ import { formatAED } from "../utils/currency";
 import Icon from "./Icon";
 import { useTranslation } from "react-i18next";
 import ModifierModal from "./ModifierModal";
+import PhoneInputWithCountry from "./reservation/PhoneInputWithCountry";
+import { normalizePhoneForInput } from "../utils/phone";
+import {
+  getPhoneValidationMessage,
+  validatePhoneForSelectedCountry,
+} from "../utils/phoneRules";
+import { createPortal } from "react-dom";
+
+function isValidCustomerPhone(phone) {
+  return validatePhoneForSelectedCountry(phone, "ae").valid;
+}
+
+function MobileNumberSheet({
+  open,
+  value,
+  error,
+  sending,
+  onChange,
+  onClose,
+  onConfirm,
+  onSkip,
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[220] flex items-end justify-center sm:items-center"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="mobile-number-title"
+    >
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-md" onClick={sending ? undefined : onClose} />
+
+      <div className="relative w-full overflow-hidden rounded-t-[28px] border border-white/70 bg-white shadow-[0_28px_70px_rgba(0,0,0,0.28)] sm:max-w-[390px] sm:rounded-[28px]">
+        <div className="flex justify-center pb-1 pt-3 sm:hidden">
+          <div className="h-1 w-10 rounded-full bg-gray-200" />
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={sending}
+          aria-label="Close mobile number"
+          className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-full bg-gray-100 text-gray-500 transition hover:bg-gray-200 hover:text-gray-800 disabled:opacity-50"
+        >
+          <Icon name="x" className="h-4 w-4" />
+        </button>
+
+        <div className="px-5 pb-5 pt-7 sm:px-6 sm:pb-6">
+          <div className="mb-5 flex items-start gap-3 pr-8">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#101828] text-white shadow-[0_10px_24px_rgba(16,24,40,0.18)]">
+              <Icon name="phone-call" className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 text-[11px] font-extrabold uppercase tracking-[0.08em] text-[var(--grad-end)]">
+                One quick detail
+              </div>
+              <h2 id="mobile-number-title" className="text-xl font-bold leading-tight text-gray-950">
+                Your mobile number
+              </h2>
+              <p className="mt-1 text-sm leading-relaxed text-gray-500">
+                We use this to link the QR order to your table. It's optional -
+                you can skip it.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+            <PhoneInputWithCountry
+              value={normalizePhoneForInput(value || "", "ae")}
+              onChange={onChange}
+              defaultCountry="ae"
+              placeholder="Enter mobile number"
+              disabled={sending}
+              hasError={!!error}
+              pickerVariant="sheet"
+            />
+
+            <p className={`mt-2 min-h-[1.1rem] text-[12px] leading-snug ${error ? "text-red-600" : "text-gray-500"}`}>
+              {error || "Tap the country code to change it."}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={sending}
+            className="btn mt-5 h-12 w-full justify-center disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {sending ? (
+              <>
+                <Icon name="loader" className="mr-2 h-4 w-4 animate-spin" />
+                Sending
+              </>
+            ) : (
+              <>
+                <Icon name="send" className="mr-2 h-4 w-4" />
+                Continue
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={sending}
+            className="mt-2 h-11 w-full rounded-xl text-sm font-semibold text-gray-500 transition hover:bg-gray-50 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Skip and send order
+          </button>
+        </div>
+        <div className="safe-bottom" />
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 export default function CartDrawer({ open, onClose }) {
-  const { items, inc, dec, remove, subtotal, note, setNote, clear, tableId, tableAreaId } = useCart();
+  const {
+    items,
+    inc,
+    dec,
+    remove,
+    subtotal,
+    note,
+    setNote,
+    clear,
+    tableId,
+    tableAreaId,
+    customerPhone,
+    setCustomerPhone,
+  } = useCart();
   const showSuccess = useUI((s) => s.showSuccess);
   const [sending, setSending] = useState(false);
   const [editingLine, setEditingLine] = useState(null);
+  const [phoneError, setPhoneError] = useState("");
+  const [showMobileSheet, setShowMobileSheet] = useState(false);
   const total = subtotal();
   const { t } = useTranslation();
 
@@ -66,24 +198,41 @@ export default function CartDrawer({ open, onClose }) {
         tableId: tableId || null,
         areaId: tableAreaId || null,
         note: note || "",
+        customerPhone: String(customerPhone || "").trim(),
         subtotal: Number(total.toFixed(2)),
         currency: "AED",
         itemsCount: sendableItems.length,
       },
       items: lines,
     };
-  }, [items, note, total, tableId, tableAreaId]);
+  }, [items, note, total, tableId, tableAreaId, customerPhone]);
   const hasSendableItems = orderPayload.items.some((l) => l.kotChildId == null);
 
-  async function handleSend() {
+  async function submitCurrentOrder({ skipPhone = false } = {}) {
     if (!hasSendableItems || sending) return;
     if (!tableId) {
       alert("Table ID is missing. Please scan the QR code on your table to continue.");
       return;
     }
+
+    const cleanPhone = String(customerPhone || "").trim();
+    if (!skipPhone && !isValidCustomerPhone(cleanPhone)) {
+      setPhoneError(getPhoneValidationMessage(cleanPhone, "ae"));
+      setShowMobileSheet(true);
+      return;
+    }
+
+    // Skipping sends no number at all; the backend then files the KOT against
+    // the house walk-in customer instead of creating a CustomerMaster row.
+    const payload = skipPhone
+      ? { ...orderPayload, header: { ...orderPayload.header, customerPhone: "" } }
+      : orderPayload;
+
     try {
+      setPhoneError("");
+      setShowMobileSheet(false);
       setSending(true);
-      const res = await submitOrder(orderPayload);
+      const res = await submitOrder(payload);
       const kotId =
         res?.kotId ?? res?.id ?? res?.data?.kotId ?? res?.data?.id ?? null;
       const etaMin = res?.etaMin ?? res?.data?.etaMin ?? null;
@@ -114,6 +263,20 @@ export default function CartDrawer({ open, onClose }) {
     } finally {
       setSending(false);
     }
+  }
+
+  function handleSend() {
+    if (!hasSendableItems || sending) return;
+    if (!tableId) {
+      alert("Table ID is missing. Please scan the QR code on your table to continue.");
+      return;
+    }
+    if (!isValidCustomerPhone(customerPhone)) {
+      setPhoneError(getPhoneValidationMessage(customerPhone, "ae"));
+      setShowMobileSheet(true);
+      return;
+    }
+    submitCurrentOrder();
   }
 
   return (
@@ -277,7 +440,6 @@ export default function CartDrawer({ open, onClose }) {
         {/* Footer - Fixed at bottom */}
         <div className="flex-shrink-0 border-t border-gray-100 bg-white safe-bottom">
           <div className="p-4 space-y-3">
-            {/* Notes - Updated with better placeholder */}
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <Icon name="edit-3" className="h-3.5 w-3.5" />
@@ -359,6 +521,26 @@ export default function CartDrawer({ open, onClose }) {
         initialSelectedMods={editingLine?.mods || []}
         onClose={closeModifierEditor}
         onApply={applyModifierEdit}
+      />
+
+      <MobileNumberSheet
+        open={showMobileSheet}
+        value={customerPhone}
+        error={phoneError}
+        sending={sending}
+        onChange={(phone) => {
+          setCustomerPhone(phone || "");
+          if (phoneError) setPhoneError("");
+        }}
+        onClose={() => {
+          if (!sending) setShowMobileSheet(false);
+        }}
+        onConfirm={() => submitCurrentOrder()}
+        onSkip={() => {
+          setCustomerPhone("");
+          setPhoneError("");
+          submitCurrentOrder({ skipPhone: true });
+        }}
       />
     </div>
   );

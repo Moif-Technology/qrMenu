@@ -29,6 +29,7 @@ const persistMeta = (meta) => {
 };
 
 const TOKEN_KEY = "qr.tableToken";
+const CUSTOMER_KEY = "qr.customerContact";
 
 const getInitialToken = () => {
   if (typeof window === "undefined") return null;
@@ -53,9 +54,35 @@ const persistToken = (token) => {
   }
 };
 
+const getInitialCustomer = () => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(CUSTOMER_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    logWarn("Failed to parse customer contact", err);
+    return {};
+  }
+};
+
+const persistCustomer = (customer) => {
+  if (typeof window === "undefined") return;
+  try {
+    const phone = String(customer?.phone || "").trim();
+    if (phone) {
+      window.localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ phone }));
+    } else {
+      window.localStorage.removeItem(CUSTOMER_KEY);
+    }
+  } catch (err) {
+    logWarn("Failed to persist customer contact", err);
+  }
+};
+
 export const useCart = create((set, get) => {
   const initialMeta = getInitialMeta();
   const initialToken = getInitialToken();
+  const initialCustomer = getInitialCustomer();
 
   return {
   items: [], // { _k, id, name, basePrice, mods:[{id?,name,price}], price, qty, product }
@@ -66,6 +93,7 @@ export const useCart = create((set, get) => {
     tableNo: initialMeta.tableNo ?? null, // Table number (display)
     tableName: initialMeta.tableName ?? null, // Table name (display)
   token: initialToken ?? null, // QR code token for navigation to payment page
+  customerPhone: initialCustomer.phone ?? "",
 
   // Normalize incoming mods: [{ id?, name?/label?, price?, raw? }]
   _normalizeMods(mods) {
@@ -206,6 +234,11 @@ export const useCart = create((set, get) => {
       return { items: [...existing, ...keepNew] };
     }),
   setNote: (note) => set({ note }),
+    setCustomerPhone: (phone) => {
+      const cleanPhone = String(phone || "").trim();
+      persistCustomer({ phone: cleanPhone });
+      set({ customerPhone: cleanPhone });
+    },
     setTableId: (tableId, tableArea = null, tableAreaId = null, tableNo = null, tableName = null) =>
       set((state) => {
         const next = {

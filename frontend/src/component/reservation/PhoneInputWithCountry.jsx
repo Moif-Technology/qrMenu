@@ -17,6 +17,7 @@ export default function PhoneInputWithCountry({
   className = "",
   id,
   hasError = false,
+  pickerVariant = "dropdown",
 }) {
   const wrapperRef = useRef(null);
   const popoverRef = useRef(null);
@@ -30,7 +31,6 @@ export default function PhoneInputWithCountry({
 
   const {
     inputValue,
-    handlePhoneValueChange,
     inputRef,
     country,
     setCountry,
@@ -48,6 +48,7 @@ export default function PhoneInputWithCountry({
         name: c.name,
         dialCode: `+${c.dialCode}`,
         rawDial: String(c.dialCode),
+        format: c.format,
       }));
   }, []);
 
@@ -126,23 +127,129 @@ export default function PhoneInputWithCountry({
     [countries, dialCodesDesc]
   );
 
-  const replaceDialCode = (phoneStr, newRawDial) => {
-    const s = (phoneStr || "").trim();
-    if (!s) return `+${newRawDial}`;
-    if (!s.startsWith("+")) return `+${newRawDial}${s.replace(/[^\d]/g, "")}`;
+  const getLocalNumber = useCallback(
+    (phoneStr, rawDial = selected.rawDial) => {
+      const source = String(phoneStr || "").trim();
+      if (!source) return "";
 
-    // remove current dial if found, keep rest
-    for (const rawDial of dialCodesDesc) {
-      const prefix = `+${rawDial}`;
-      if (s.startsWith(prefix)) {
-        const rest = s.slice(prefix.length); // keep the rest as-is
-        return `+${newRawDial}${rest}`;
+      const normalized = source.replace(/[^\d+]/g, "");
+      if (normalized.startsWith(`+${rawDial}`)) {
+        return normalized.slice(rawDial.length + 1);
+      }
+
+      if (normalized.startsWith("+")) {
+        const detected = detectCountryFromPhone(normalized, currentIso2);
+        if (detected) return normalized.slice(detected.rawDial.length + 1);
+        return normalized.replace(/[^\d]/g, "");
+      }
+
+      if (normalized.startsWith(rawDial)) {
+        return normalized.slice(rawDial.length);
+      }
+
+      return normalized.replace(/[^\d]/g, "");
+    },
+    [currentIso2, detectCountryFromPhone, selected.rawDial]
+  );
+
+  const localInputValue = useMemo(
+    () => getLocalNumber(value || inputValue, selected.rawDial),
+    [getLocalNumber, inputValue, selected.rawDial, value]
+  );
+
+  const getNumberRules = useCallback((phoneCountry, localDigits = "") => {
+    const countMaskDigits = (mask) => String(mask || "").split("").filter((ch) => ch === ".").length;
+    const format = phoneCountry?.format;
+
+    if (typeof format === "string") {
+      const length = countMaskDigits(format);
+      return { min: length || 4, max: length || 15 };
+    }
+
+    if (format && typeof format === "object") {
+      const masks = Object.entries(format)
+        .map(([key, mask]) => ({
+          key,
+          length: countMaskDigits(mask),
+        }))
+        .filter((rule) => rule.length > 0);
+
+      const matching = masks.find((rule) => {
+        if (rule.key === "default") return false;
+        if (!rule.key.startsWith("/") || !rule.key.endsWith("/")) return false;
+        try {
+          return new RegExp(rule.key.slice(1, -1)).test(localDigits);
+        } catch {
+          return false;
+        }
+      });
+
+      if (matching) return { min: matching.length, max: matching.length };
+
+      const lengths = masks.map((rule) => rule.length);
+      if (lengths.length) {
+        return {
+          min: Math.min(...lengths),
+          max: Math.max(...lengths),
+        };
       }
     }
 
-    // if no dial matched, just prepend new dial and keep digits
-    const digitsOnly = s.replace(/[^\d]/g, "");
-    return `+${newRawDial}${digitsOnly ? digitsOnly : ""}`;
+    return { min: Math.max(4, 7 - String(phoneCountry?.rawDial || "").length), max: 15 - String(phoneCountry?.rawDial || "").length };
+  }, []);
+
+  const selectedNumberRules = useMemo(
+    () => getNumberRules(selected, localInputValue),
+    [getNumberRules, localInputValue, selected]
+  );
+
+  const clampLocalDigits = useCallback(
+    (digits, phoneCountry = selected) => {
+      const cleanDigits = String(digits || "").replace(/\D/g, "");
+      return cleanDigits.slice(0, getNumberRules(phoneCountry, cleanDigits).max);
+    },
+    [getNumberRules, selected]
+  );
+
+  const handleLocalNumberChange = (e) => {
+    const digits = clampLocalDigits(e.target.value);
+    onChange?.(digits ? `+${selected.rawDial}${digits}` : `+${selected.rawDial}`);
+  };
+
+  const handleLocalNumberKeyDown = (e) => {
+    if (
+      e.ctrlKey ||
+      e.metaKey ||
+      e.altKey ||
+      ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Tab", "Enter"].includes(e.key)
+    ) {
+      return;
+    }
+
+    if (!/^\d$/.test(e.key)) {
+      e.preventDefault();
+    }
+  };
+
+  const handleLocalNumberPaste = (e) => {
+    const pasted = e.clipboardData?.getData("text") || "";
+    if (!pasted) return;
+
+    e.preventDefault();
+    const compact = pasted.replace(/[^\d+]/g, "");
+
+    if (compact.startsWith("+")) {
+      const detected = detectCountryFromPhone(compact, currentIso2);
+      if (detected) {
+        setCountry(detected.iso2);
+        const localDigits = clampLocalDigits(getLocalNumber(compact, detected.rawDial), detected);
+        onChange?.(localDigits ? `+${detected.rawDial}${localDigits}` : `+${detected.rawDial}`);
+        return;
+      }
+    }
+
+    const digits = clampLocalDigits(compact);
+    onChange?.(digits ? `+${selected.rawDial}${digits}` : `+${selected.rawDial}`);
   };
 
   // Auto-detect country from phone value (BUT don't override right after manual pick)
@@ -208,8 +315,8 @@ export default function PhoneInputWithCountry({
     setCountry(iso2);
 
     // IMPORTANT: also update the phone value prefix so UI matches
-    const basePhone = (value || inputValue || "").trim();
-    const nextPhone = replaceDialCode(basePhone, picked.rawDial);
+    const localNumber = clampLocalDigits(getLocalNumber(value || inputValue || "", selected.rawDial), picked);
+    const nextPhone = localNumber ? `+${picked.rawDial}${localNumber}` : `+${picked.rawDial}`;
 
     onChange?.(nextPhone);
 
@@ -269,35 +376,84 @@ export default function PhoneInputWithCountry({
         <input
           id={id}
           ref={inputRef}
-          value={inputValue}
-          onChange={handlePhoneValueChange}
+          value={localInputValue}
+          onChange={handleLocalNumberChange}
+          onKeyDown={handleLocalNumberKeyDown}
+          onPaste={handleLocalNumberPaste}
           placeholder={placeholder}
           disabled={disabled}
-          inputMode="tel"
+          inputMode="numeric"
+          autoComplete="tel-national"
+          pattern="[0-9]*"
+          maxLength={selectedNumberRules.max}
+          aria-describedby={id ? `${id}-phone-format` : undefined}
           className="w-full flex-1 border-0 bg-transparent px-3 text-[15.5px] font-bold text-gray-900 outline-none placeholder:font-semibold placeholder:text-gray-400"
         />
       </div>
 
-      {/* Dropdown - absolute, directly below input like a common dropdown */}
+      {/* Dropdown - absolute by default, fixed bottom sheet for compact QR flows. */}
       {open && !disabled && (
+        <>
+        {pickerVariant === "sheet" && (
+          <button
+            type="button"
+            aria-label="Close country list"
+            className="fixed inset-0 z-[245] cursor-default bg-black/35 backdrop-blur-sm"
+            onClick={() => {
+              setOpen(false);
+              setQuery("");
+            }}
+          />
+        )}
         <div
           ref={popoverRef}
           role="dialog"
           aria-label="Country list"
-          className="absolute left-0 top-full z-[9999] mt-1 w-[360px] max-w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(0,0,0,0.14)]"
+          className={
+            pickerVariant === "sheet"
+              ? "fixed inset-x-0 bottom-0 z-[260] mx-auto w-full overflow-hidden rounded-t-3xl border border-white/70 bg-white shadow-[0_24px_60px_rgba(0,0,0,0.28)] sm:bottom-auto sm:top-1/2 sm:max-w-sm sm:-translate-y-1/2 sm:rounded-3xl"
+              : "absolute left-0 top-full z-[9999] mt-1 w-[360px] max-w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_12px_30px_rgba(0,0,0,0.14)]"
+          }
         >
           {/* Top / search */}
           <div className="border-b border-gray-100 bg-gradient-to-b from-white to-[#fbfbfb] p-3">
+            {pickerVariant === "sheet" && (
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-extrabold text-gray-950">Country code</div>
+                  <div className="text-xs font-semibold text-gray-500">Choose the calling code</div>
+                </div>
+                <button
+                  type="button"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-gray-100 text-gray-600 transition hover:bg-gray-200"
+                  aria-label="Close country list"
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M18 6 6 18M6 6l12 12"
+                      stroke="currentColor"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
             <input
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search country or code (e.g. UAE, +971, 971)"
+              placeholder="Search country or code"
               className="h-10 w-full rounded-xl border border-gray-200 px-3 text-sm font-bold text-gray-900 outline-none focus:border-[#C91A4D] focus:ring-4 focus:ring-[#C91A4D]/10"
             />
             <div className="mt-2 text-xs font-semibold text-gray-500">
-              Tip: type <span className="font-extrabold">+971</span> or{" "}
-              <span className="font-extrabold">971</span> for UAE quickly.
+              Try <span className="font-extrabold">UAE</span>,{" "}
+              <span className="font-extrabold">+971</span>, or{" "}
+              <span className="font-extrabold">India</span>.
             </div>
           </div>
 
@@ -370,6 +526,7 @@ export default function PhoneInputWithCountry({
             )}
           </div>
         </div>
+        </>
       )}
     </div>
   );
