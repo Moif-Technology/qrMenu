@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, Check, Clock, ImagePlus, Loader2, LogOut, MessageCircle,
-  QrCode, RefreshCw, RotateCcw, Search, Send, Smartphone, Square, Users, X,
+  AlertTriangle, ArrowLeft, Check, CheckCheck, Clock, Download, FileText, ListChecks,
+  Loader2, LogOut,
+  MessageCircle, MoreVertical, Paperclip, QrCode, RefreshCw, RotateCcw, Search, Send,
+  Smartphone, Smile, Square, Trash2, Users, X,
 } from "lucide-react";
 import {
   connectWhatsApp, getWhatsAppCustomers, getWhatsAppStatus,
@@ -9,8 +11,24 @@ import {
 } from "../../services/whatsapp.service";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
-const inputCls =
-  "h-12 w-full rounded-xl bg-[var(--paper)] border border-[var(--line)] px-4 text-[15px] text-[var(--ink)] outline-none focus:border-[var(--brass)] focus:ring-2 focus:ring-[var(--brass-soft)] transition";
+
+const iconBtn =
+  "grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[var(--line)] bg-[var(--paper)] text-[var(--brass-2)] hover:border-[var(--brass)] disabled:opacity-50 transition";
+const pillBtn =
+  "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] px-4 text-[13px] font-bold text-[var(--ink)] hover:border-[var(--brass)] disabled:opacity-50 transition";
+const darkBtn =
+  "inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-[#5A0A22] px-5 text-[13px] font-bold text-white hover:bg-[var(--brass-2)] disabled:opacity-40 transition";
+
+const EMOJIS = ["😊", "😍", "🎉", "🙏", "👋", "❤️", "🔥", "✨", "🍽️", "🍷", "🥂", "🎁"];
+
+// Chat wallpaper: two offset dot grids in the theme's wine tint.
+const WALLPAPER = {
+  backgroundColor: "#FCF3F5",
+  backgroundImage:
+    "radial-gradient(rgba(122,0,38,0.05) 1.2px, transparent 1.2px), radial-gradient(rgba(122,0,38,0.035) 1.2px, transparent 1.2px)",
+  backgroundSize: "28px 28px, 28px 28px",
+  backgroundPosition: "0 0, 14px 14px",
+};
 
 // Gap between two sends. Randomised inside this window so the traffic does not
 // look like a metronome - a perfectly regular cadence is exactly the pattern
@@ -22,6 +40,15 @@ const GAP_MAX_S = 20;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const randomGap = () => GAP_MIN_S + Math.floor(Math.random() * (GAP_MAX_S - GAP_MIN_S + 1));
+
+const downloadFile = (filename, text, type) => {
+  const url = URL.createObjectURL(new Blob([text], { type: `${type};charset=utf-8` }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 const initial = (n) => (n || "?").trim().charAt(0).toUpperCase();
 
@@ -57,6 +84,12 @@ export default function AdminWhatsApp() {
   const [image, setImage] = useState(null); // { data, mimetype, filename, sizeKb }
   const [error, setError] = useState("");
   const fileRef = useRef(null);
+  const taRef = useRef(null);
+  const searchRef = useRef(null);
+
+  const [mobileView, setMobileView] = useState("list"); // "list" | "chat", below md only
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   // Queue state. `results` is keyed by customer id so rows can show their own
   // outcome without a second lookup.
@@ -64,6 +97,9 @@ export default function AdminWhatsApp() {
   const [current, setCurrent] = useState(null);
   const [countdown, setCountdown] = useState(0);
   const [results, setResults] = useState({});
+  // Bubbles for what was sent from this tab. Session-only: nothing is stored.
+  const [sentLog, setSentLog] = useState([]);
+  const logEndRef = useRef(null);
   const stopRef = useRef(false);
 
   const ready = status.state === "READY";
@@ -111,6 +147,18 @@ export default function AdminWhatsApp() {
       alive = false;
     };
   }, [debounced, reloadKey]);
+
+  // Grow the composer with its content, up to the max-height set in CSS.
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [message]);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [sentLog.length]);
 
   // ---- connection actions ---------------------------------------------
   const handleConnect = async () => {
@@ -226,6 +274,15 @@ export default function AdminWhatsApp() {
     setSending(true);
     stopRef.current = false;
 
+    // Show it in the conversation and empty the composer, as a chat would. The
+    // loop below keeps sending the `message` and `image` captured by this call.
+    setSentLog((log) => [
+      ...log,
+      { id: Date.now(), text: preview, image: image?.data, time: now, total: selectedList.length },
+    ]);
+    setMessage("");
+    clearImage();
+
     for (let i = 0; i < selectedList.length; i++) {
       if (stopRef.current) break;
       const c = selectedList[i];
@@ -280,406 +337,597 @@ export default function AdminWhatsApp() {
   }, [message, selectedList, customers]);
 
   const stateInfo = STATE_LABEL[status.state] || STATE_LABEL.DISCONNECTED;
+  const busy = connecting || status.state === "STARTING";
+  const canSend = !sending && ready && selectedList.length > 0 && (message.trim() || image);
+  const now = new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+  const exportGuests = () => {
+    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = (selectedList.length > 0 ? selectedList : customers).map((c) =>
+      [c.name, c.phone, fmtDate(c.lastMessagedAt) || "Never"].map(cell).join(",")
+    );
+    // BOM so Excel reads non-Latin names as UTF-8.
+    downloadFile("guests.csv", `\uFEFFName,Phone,Last messaged\n${rows.join("\n")}`, "text/csv");
+  };
+
+  const exportChat = () =>
+    downloadFile(
+      "whatsapp-outreach.txt",
+      sentLog
+        .map((m) => `[${m.time}] to ${m.total} guest(s)${m.image ? " (with poster)" : ""}\n${m.text}`)
+        .join("\n\n"),
+      "text/plain"
+    );
+
+  // `divider` draws a rule above the item, grouping the menu like WhatsApp's.
+  const menuItems = [
+    { label: "Search guests", icon: Search, onClick: () => focusSearch() },
+    {
+      label: allShownSelected ? "Clear selection" : "Select all guests",
+      icon: ListChecks,
+      onClick: toggleAll,
+      disabled: sending || customers.length === 0,
+    },
+    { label: "Refresh guest list", icon: RefreshCw, onClick: () => setReloadKey((k) => k + 1) },
+    {
+      label: selectedList.length > 0 ? "Export selected guests" : "Export guest list",
+      icon: Download,
+      onClick: exportGuests,
+      disabled: customers.length === 0,
+      divider: true,
+    },
+    { label: "Export chat", icon: FileText, onClick: exportChat, disabled: sentLog.length === 0 },
+    {
+      label: "Clear chat",
+      icon: Trash2,
+      onClick: () => setSentLog([]),
+      disabled: sending || sentLog.length === 0,
+      divider: true,
+    },
+    ...(ready ? [{ label: "Log out", icon: LogOut, onClick: handleLogout }] : []),
+  ];
+
+  const focusSearch = () => {
+    setMobileView("list");
+    // The list is display:none on mobile until the view flips, so wait a frame.
+    requestAnimationFrame(() => searchRef.current?.focus());
+  };
 
   return (
-    <div className="space-y-7">
-      {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="admin-eyebrow">Guest outreach</p>
-          <div className="flex items-baseline gap-3 mt-1">
-            <h1 className="font-display text-[40px] sm:text-[48px] leading-[0.95] text-[var(--ink)]">
-              WhatsApp
-            </h1>
-            <span className="rounded-full bg-[var(--brass-soft)] text-[var(--brass-2)] text-[13px] font-bold px-3 py-1">
-              {usage.sent}/{usage.limit} this hour
-            </span>
+    <div className="flex h-[calc(100dvh-3.5rem)] lg:h-dvh min-h-[560px] flex-col overflow-hidden bg-[#FDF1F4] text-[var(--ink)]">
+      {/* Title bar */}
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#F8D3DC] text-[var(--brass)]">
+            <MessageCircle className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="font-display text-[22px] font-semibold leading-none">WhatsApp</h1>
+            <p className="admin-eyebrow mt-1 !text-[10px] !text-[var(--brass)]">Guest outreach</p>
           </div>
         </div>
+        <span
+          title="Messages sent this hour"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#F8D3DC] px-3 py-1.5 text-[12px] font-bold text-[var(--brass-2)]"
+        >
+          <Clock className="h-3.5 w-3.5" />
+          {usage.sent}/{usage.limit} this hour
+        </span>
       </div>
 
-      {/* Standing warning. This is unofficial automation and the person using
-          it should be reminded every single time, not once in a changelog. */}
-      <div className="flex gap-3 rounded-xl border border-[#E3C4BB] bg-[#F6E7E2] px-4 py-3">
-        <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--danger)] mt-0.5" />
-        <div className="text-[13px] leading-relaxed text-[var(--ink-soft)]">
-          <p className="font-bold text-[var(--danger)]">Unofficial WhatsApp automation</p>
-          <p className="mt-0.5">
-            This sends from your own number through WhatsApp Web, which WhatsApp's terms do not
-            permit. Message only guests who gave you their number, keep an opt-out line in the
-            text, and stay under the hourly limit. A number that collects blocks or reports can be
-            banned permanently.
-          </p>
-        </div>
-      </div>
-
-      {error && (
-        <div className="rounded-xl bg-[#F6E7E2] border border-[#E3C4BB] text-[var(--danger)] text-sm px-4 py-3">
-          {error}
-        </div>
-      )}
-
-      {/* Connection */}
-      <div className="admin-card p-5 admin-rise">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-full bg-[var(--brass-soft)] border border-[var(--line)]">
-              <Smartphone className="h-5 w-5 text-[var(--brass-2)]" />
+      <div className="flex min-h-0 flex-1">
+        {/* Chat list - the broadcast row on top, then one row per guest */}
+        <aside
+          className={cn(
+            "w-full md:w-[300px] xl:w-[340px] shrink-0 flex-col border-r border-[var(--line)]",
+            mobileView === "list" ? "flex" : "hidden md:flex"
+          )}
+        >
+          <div className="p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--brass)]" />
+              <input
+                ref={searchRef}
+                type="text"
+                placeholder="Search chats..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-10 w-full rounded-full bg-[#F7E3E8] pl-11 pr-4 text-[13px] outline-none placeholder:text-[var(--ink-faint)] focus:bg-[var(--paper)] focus:ring-2 focus:ring-[#F8D3DC] transition"
+              />
             </div>
-            <div>
-              <p className="admin-eyebrow">Sending number</p>
-              <p className="font-semibold text-[15px] text-[var(--ink)]">
-                {status.me ? `+${status.me}` : stateInfo.text}
-              </p>
-            </div>
-            <span
-              className={cn(
-                "rounded-full px-3 py-1 text-[12px] font-bold",
-                stateInfo.tone === "good" && "bg-[#E4EFE4] text-[#3B6B3B]",
-                stateInfo.tone === "bad" && "bg-[#F6E7E2] text-[var(--danger)]",
-                stateInfo.tone === "busy" && "bg-[var(--brass-soft)] text-[var(--brass-2)]",
-                stateInfo.tone === "idle" && "bg-[var(--cream-2)] text-[var(--ink-faint)]"
-              )}
+          </div>
+
+          <div className="px-2">
+            <button
+              type="button"
+              onClick={() => setMobileView("chat")}
+              className="flex w-full items-center gap-3 rounded-xl bg-[#F8D3DC] px-3 py-2.5 text-left"
             >
-              {stateInfo.text}
-            </span>
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#F3BFCB] text-[var(--brass)]">
+                <Smartphone className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-bold">Guest Outreach</span>
+                <span className="block truncate text-[12px] text-[var(--ink-soft)]">
+                  {status.me ? `+${status.me}` : stateInfo.text}
+                </span>
+              </span>
+              <span className="flex shrink-0 flex-col items-end gap-1">
+                <span className="text-[11px] text-[var(--ink-soft)]">{now}</span>
+                <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold text-[var(--brass)]">
+                  {usage.sent}/{usage.limit}
+                </span>
+              </span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-2">
-            {ready ? (
-              <button
-                onClick={handleLogout}
-                className="inline-flex h-11 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] px-4 text-[14px] font-bold text-[var(--ink-soft)] hover:border-[var(--brass)] transition"
-              >
-                <LogOut className="h-4 w-4" /> Log out
-              </button>
+          <div className="mt-3 flex items-center justify-between border-b border-[var(--line)] px-4 pb-2 text-[12px]">
+            <button
+              onClick={toggleAll}
+              disabled={sending || customers.length === 0}
+              className="font-bold text-[var(--brass)] hover:underline disabled:opacity-50 disabled:no-underline"
+            >
+              {allShownSelected ? "Clear selection" : "Select all"}
+            </button>
+            <span className="text-[var(--ink-soft)]">{selectedList.length} selected</span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-2 py-1">
+            {loading ? (
+              <div className="py-16">
+                <Loader2 className="mx-auto h-6 w-6 animate-spin text-[var(--brass)]" />
+              </div>
+            ) : customers.length === 0 ? (
+              <p className="px-6 py-16 text-center text-[13px] text-[var(--ink-faint)]">
+                No customers found
+              </p>
             ) : (
-              <>
-                {/* Escape hatch for a wedged Chromium profile, and the only way
-                    to link a different phone once one is cached. */}
-                <button
-                  onClick={() => handleReset(false)}
-                  disabled={resetting}
-                  title="Kill a stuck browser and clear the profile lock"
-                  className="inline-flex h-11 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] px-4 text-[14px] font-bold text-[var(--ink-soft)] hover:border-[var(--brass)] disabled:opacity-50 transition"
-                >
-                  {resetting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-4 w-4" />
-                  )}
-                  Reset
-                </button>
-                <button
-                  onClick={() => handleReset(true)}
-                  disabled={resetting}
-                  title="Forget the linked number so a different phone can scan"
-                  className="inline-flex h-11 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] px-4 text-[14px] font-bold text-[var(--ink-soft)] hover:border-[var(--brass)] disabled:opacity-50 transition"
-                >
-                  <Smartphone className="h-4 w-4" /> Switch number
-                </button>
-                <button
-                  onClick={handleConnect}
-                  disabled={connecting || resetting || status.state === "STARTING"}
-                  className="admin-btn-brass inline-flex h-11 items-center gap-2 px-5 text-[14px] font-bold disabled:opacity-50"
-                >
-                  {connecting || status.state === "STARTING" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <QrCode className="h-4 w-4" />
-                  )}
-                  Connect WhatsApp
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {status.qr && (
-          <div className="mt-5 flex flex-col items-center gap-3 border-t border-[var(--line)] pt-5">
-            <img
-              src={status.qr}
-              alt="WhatsApp QR code"
-              className="h-[260px] w-[260px] rounded-xl border border-[var(--line)] bg-white p-2"
-            />
-            <p className="text-[13px] text-[var(--ink-faint)] text-center max-w-sm">
-              On the phone holding the restaurant number: WhatsApp → Settings → Linked devices →
-              Link a device, then scan this code.
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Composer */}
-      <div className="admin-card p-5 admin-rise space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <p className="admin-eyebrow">Message</p>
-          <div className="flex items-center gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={handlePickImage}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={sending}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--paper)] px-3 py-1 text-[12px] font-bold text-[var(--ink-soft)] hover:border-[var(--brass)] disabled:opacity-50 transition"
-            >
-              <ImagePlus className="h-3.5 w-3.5" />
-              {image ? "Replace poster" : "Attach poster"}
-            </button>
-            <button
-              onClick={() => setMessage((m) => `${m}{{name}}`)}
-              className="rounded-full border border-[var(--line)] bg-[var(--paper)] px-3 py-1 text-[12px] font-bold text-[var(--ink-soft)] hover:border-[var(--brass)] transition"
-            >
-              Insert {"{{name}}"}
-            </button>
-          </div>
-        </div>
-
-        {image && (
-          <div className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--cream)] p-3">
-            <img
-              src={image.data}
-              alt="Offer poster"
-              className="h-16 w-16 shrink-0 rounded-lg border border-[var(--line)] object-cover"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[14px] font-semibold text-[var(--ink)]">
-                {image.filename}
-              </p>
-              <p className="text-[12px] text-[var(--ink-faint)]">
-                {image.sizeKb} KB · sent as an image, your text becomes the caption
-              </p>
-            </div>
-            <button
-              onClick={clearImage}
-              disabled={sending}
-              title="Remove poster"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[var(--line)] bg-[var(--paper)] text-[var(--ink-soft)] hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:opacity-50 transition"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-        <textarea
-          rows={5}
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder={"Hi {{name}}, this week we have…\n\nReply STOP to opt out."}
-          className="w-full rounded-xl bg-[var(--paper)] border border-[var(--line)] p-4 text-[15px] leading-relaxed text-[var(--ink)] outline-none focus:border-[var(--brass)] focus:ring-2 focus:ring-[var(--brass-soft)] transition resize-y"
-        />
-        {(message.trim() || image) && (
-          <div className="rounded-xl bg-[var(--cream)] border border-[var(--line)] px-4 py-3">
-            <p className="admin-eyebrow mb-2">Preview</p>
-            {image && (
-              <img
-                src={image.data}
-                alt="Offer poster preview"
-                className="mb-2 max-h-64 w-auto rounded-lg border border-[var(--line)]"
-              />
-            )}
-            {message.trim() && (
-              <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--ink-soft)]">
-                {preview}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Send bar */}
-      <div className="admin-card p-5 admin-rise">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-[14px] text-[var(--ink-soft)]">
-            <Users className="h-4 w-4 text-[var(--brass)]" />
-            <span className="font-bold text-[var(--ink)]">{selectedList.length}</span> selected
-            <span className="text-[var(--ink-faint)]">·</span>
-            <Clock className="h-4 w-4 text-[var(--brass)]" />
-            <span className="font-bold text-[var(--ink)]">{usage.remaining}</span> left this hour
-          </div>
-
-          <div className="flex items-center gap-2">
-            {sending && (
-              <button
-                onClick={stopQueue}
-                className="inline-flex h-11 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] px-4 text-[14px] font-bold text-[var(--danger)] hover:border-[var(--danger)] transition"
-              >
-                <Square className="h-3.5 w-3.5" /> Stop
-              </button>
-            )}
-            <button
-              onClick={runQueue}
-              disabled={
-                sending || !ready || selectedList.length === 0 || (!message.trim() && !image)
-              }
-              className="admin-btn-brass inline-flex h-11 items-center gap-2 px-5 text-[14px] font-bold disabled:opacity-50"
-            >
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              {sending
-                ? `Sending ${(current?.index ?? 0) + 1} of ${current?.total ?? selectedList.length}`
-                : `Send to ${selectedList.length}`}
-            </button>
-          </div>
-        </div>
-
-        {sending && (
-          <div className="mt-4 border-t border-[var(--line)] pt-4">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--cream-2)]">
-              <div
-                className="h-full rounded-full bg-[var(--brass)] transition-all duration-500"
-                style={{
-                  width: `${(((current?.index ?? 0) + 1) / (current?.total || 1)) * 100}%`,
-                }}
-              />
-            </div>
-            <p className="mt-2 text-[13px] text-[var(--ink-faint)]">
-              {countdown > 0
-                ? `Pausing ${countdown}s before the next message…`
-                : current
-                  ? `Sending to ${current.customer.name}…`
-                  : "Working…"}
-            </p>
-          </div>
-        )}
-
-        {!ready && (
-          <p className="mt-3 text-[13px] text-[var(--ink-faint)]">
-            Connect WhatsApp above before sending.
-          </p>
-        )}
-      </div>
-
-      {/* Recipients */}
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-4 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-[var(--ink-faint)]" />
-        <input
-          type="text"
-          placeholder="Search name or phone"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className={`${inputCls} pl-11`}
-        />
-      </div>
-
-      <div className="admin-card overflow-hidden admin-rise">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-[var(--cream-2)]/60 border-b border-[var(--line)]">
-                <th className="px-5 py-3.5 w-12">
-                  <input
-                    type="checkbox"
-                    checked={allShownSelected}
-                    onChange={toggleAll}
-                    className="h-4 w-4 accent-[var(--brass)]"
-                  />
-                </th>
-                <th className="admin-eyebrow font-bold px-5 py-3.5">Customer</th>
-                <th className="admin-eyebrow font-bold px-5 py-3.5 hidden sm:table-cell">Phone</th>
-                <th className="admin-eyebrow font-bold px-5 py-3.5 hidden md:table-cell">
-                  Last messaged
-                </th>
-                <th className="admin-eyebrow font-bold px-5 py-3.5 text-right">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={5} className="py-20 text-center">
-                    <Loader2 className="h-6 w-6 animate-spin text-[var(--brass)] mx-auto" />
-                  </td>
-                </tr>
-              ) : customers.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-16 text-center">
-                    <p className="font-display text-2xl text-[var(--ink-faint)]">
-                      No customers found
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                customers.map((c) => {
-                  const result = results[c.id];
-                  const isCurrent = current?.customer?.id === c.id;
-                  return (
-                    <tr
-                      key={c.id}
+              customers.map((c) => {
+                const result = results[c.id];
+                const isCurrent = current?.customer?.id === c.id;
+                const isSelected = selected.has(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggle(c.id)}
+                    disabled={sending}
+                    aria-pressed={isSelected}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors disabled:cursor-default",
+                      isCurrent ? "bg-[#F8D3DC]" : isSelected ? "bg-[#F7E3E8]" : "hover:bg-[#F9E9ED]"
+                    )}
+                  >
+                    <span
                       className={cn(
-                        "border-b border-[var(--line)] last:border-0 transition-colors",
-                        isCurrent ? "bg-[var(--brass-soft)]" : "hover:bg-[var(--cream)]"
+                        "grid h-10 w-10 shrink-0 place-items-center rounded-full text-[15px] font-bold transition-colors",
+                        isSelected
+                          ? "bg-[var(--brass)] text-white"
+                          : "bg-[#F8D3DC] text-[var(--brass-2)]"
                       )}
                     >
-                      <td className="px-5 py-3.5">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(c.id)}
-                          onChange={() => toggle(c.id)}
-                          disabled={sending}
-                          className="h-4 w-4 accent-[var(--brass)]"
-                        />
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--brass-soft)] border border-[var(--line)] font-display text-[15px] text-[var(--brass-2)]">
-                            {initial(c.name)}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-[15px] text-[var(--ink)] truncate">
-                              {c.name || "Unknown"}
-                            </p>
-                            <p className="text-[12px] text-[var(--ink-faint)] sm:hidden">
-                              {c.phone || "—"}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5 hidden sm:table-cell text-[14px] text-[var(--ink-soft)]">
-                        {c.phone || "—"}
-                      </td>
-                      <td className="px-5 py-3.5 hidden md:table-cell text-[14px] text-[var(--ink-faint)]">
-                        {fmtDate(c.lastMessagedAt) || "Never"}
-                      </td>
-                      <td className="px-5 py-3.5 text-right">
+                      {isSelected ? <Check className="h-5 w-5" /> : initial(c.name)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-[14px] font-semibold">
+                          {c.name || "Unknown"}
+                        </span>
+                        <span
+                          title="Last messaged"
+                          className="shrink-0 text-[11px] text-[var(--ink-faint)]"
+                        >
+                          {fmtDate(c.lastMessagedAt) || "Never"}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 flex items-center gap-1 text-[12px] text-[var(--ink-soft)]">
                         {isCurrent ? (
-                          <Loader2 className="ml-auto h-4 w-4 animate-spin text-[var(--brass)]" />
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--brass)]" />
+                            Sending…
+                          </>
                         ) : result?.ok ? (
-                          <span className="inline-flex items-center gap-1 text-[13px] font-bold text-[#3B6B3B]">
-                            <Check className="h-4 w-4" /> Sent
-                          </span>
+                          <>
+                            <CheckCheck className="h-4 w-4 shrink-0 text-[var(--forest)]" />
+                            Sent
+                          </>
                         ) : result ? (
-                          <span
-                            title={result.error}
-                            className="inline-flex items-center gap-1 text-[13px] font-bold text-[var(--danger)]"
-                          >
-                            <X className="h-4 w-4" /> Failed
-                          </span>
+                          <>
+                            <X className="h-4 w-4 shrink-0 text-[var(--danger)]" />
+                            <span title={result.error} className="truncate text-[var(--danger)]">
+                              {result.error}
+                            </span>
+                          </>
                         ) : (
-                          <span className="text-[13px] text-[var(--ink-faint)]">—</span>
+                          <span className="truncate">{c.phone || "—"}</span>
                         )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
 
-      <p className="flex items-center gap-2 text-[13px] text-[var(--ink-faint)]">
-        <MessageCircle className="h-4 w-4" />
-        Messages go out one at a time with a {GAP_MIN_S}–{GAP_MAX_S} second gap. Keep this tab open
-        until the run finishes.
-        <button
-          onClick={() => setReloadKey((k) => k + 1)}
-          className="ml-auto inline-flex items-center gap-1.5 text-[var(--ink-soft)] hover:text-[var(--brass-2)]"
+          <div className="shrink-0 border-t border-[var(--line)] p-3 md:hidden">
+            <button
+              onClick={() => setMobileView("chat")}
+              className={cn(darkBtn, "h-11 w-full justify-center")}
+            >
+              <Send className="h-4 w-4" />
+              Write message ({selectedList.length})
+            </button>
+          </div>
+        </aside>
+
+        {/* Conversation */}
+        <section
+          className={cn(
+            "min-w-0 flex-1 flex-col",
+            mobileView === "chat" ? "flex" : "hidden md:flex"
+          )}
         >
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
-      </p>
+          <header className="flex shrink-0 items-center gap-3 border-b border-[var(--line)] px-4 py-2.5 sm:px-5">
+            <button
+              onClick={() => setMobileView("list")}
+              title="Back to guests"
+              className={cn(iconBtn, "md:hidden")}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#F8D3DC] text-[var(--brass)]">
+              <Smartphone className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[15px] font-bold leading-tight">Guest Outreach</p>
+              <p className="truncate text-[12px] leading-tight text-[var(--ink-soft)]">
+                {selectedList.length > 0
+                  ? selectedList.map((c) => c.name || c.phone).join(", ")
+                  : stateInfo.text}
+              </p>
+            </div>
+
+            <button onClick={focusSearch} title="Search guests" className={iconBtn}>
+              <Search className="h-4 w-4" />
+            </button>
+            <div className="relative shrink-0">
+              <button onClick={() => setMenuOpen((o) => !o)} title="Menu" className={iconBtn}>
+                <MoreVertical className="h-4 w-4" />
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute right-0 top-12 z-20 w-52 rounded-xl border border-[var(--line)] bg-[var(--paper)] py-1.5 shadow-[0_12px_30px_-12px_rgba(43,20,27,0.35)]">
+                    {menuItems.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          key={item.label}
+                          disabled={item.disabled}
+                          onClick={() => {
+                            setMenuOpen(false);
+                            item.onClick();
+                          }}
+                          className={cn(
+                            "flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-semibold text-[var(--ink)] hover:bg-[var(--brass-soft)] disabled:opacity-40 disabled:hover:bg-transparent",
+                            item.divider && "mt-1.5 border-t border-[var(--line)] pt-3"
+                          )}
+                        >
+                          <Icon className="h-4 w-4 text-[var(--brass)]" />
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </header>
+
+          <div className="flex-1 overflow-y-auto px-3 py-3 sm:px-4" style={WALLPAPER}>
+            <div className="flex min-h-full flex-col gap-3">
+              {/* Standing warning. This is unofficial automation and the person
+                  using it should be reminded every single time, not once in a
+                  changelog. */}
+              <div className="flex gap-3 rounded-xl border border-[#F3C9BF] bg-[#FBE3DC] px-4 py-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--danger)]" />
+                <div className="text-[12px] leading-relaxed text-[var(--ink-soft)]">
+                  <p className="font-bold text-[var(--danger)]">Unofficial WhatsApp automation</p>
+                  <p>
+                    This sends from your own number through WhatsApp Web, which WhatsApp's terms do
+                    not permit. Message only guests who gave you their number, keep an opt-out line
+                    in the text, and stay under the hourly limit. A number that collects blocks or
+                    reports can be banned permanently.
+                  </p>
+                </div>
+              </div>
+
+              {error && (
+                <div className="flex items-start justify-between gap-3 rounded-xl border border-[#F3C9BF] bg-[#FBE3DC] px-4 py-2.5 text-[12.5px] font-semibold text-[var(--danger)]">
+                  <p>{error}</p>
+                  <button onClick={() => setError("")} title="Dismiss" className="shrink-0">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Sending number */}
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#F8D3DC] text-[var(--brass)]">
+                      {busy ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <Smartphone className="h-5 w-5" />
+                      )}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="admin-eyebrow !text-[9px] !text-[var(--brass)]">Sending number</p>
+                      <p className="truncate text-[14px] font-bold">
+                        {status.me ? `+${status.me}` : "Not connected"}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold",
+                        stateInfo.tone === "good" && "bg-[#E4F1EA] text-[var(--forest)]",
+                        stateInfo.tone === "bad" && "bg-[#F6E7E2] text-[var(--danger)]",
+                        stateInfo.tone === "busy" && "bg-[#FFF1D6] text-[#8A5200] animate-pulse",
+                        stateInfo.tone === "idle" && "bg-[var(--brass-soft)] text-[var(--brass-2)]"
+                      )}
+                    >
+                      {stateInfo.text}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {ready ? (
+                      <button onClick={handleLogout} className={pillBtn}>
+                        <LogOut className="h-4 w-4 text-[var(--brass)]" />
+                        Log out
+                      </button>
+                    ) : (
+                      <>
+                        {/* Escape hatch for a wedged Chromium profile, and the
+                            only way to link a different phone once one is cached. */}
+                        <button
+                          onClick={() => handleReset(false)}
+                          disabled={resetting}
+                          title="Clear a stuck browser, keep the linked number"
+                          className={pillBtn}
+                        >
+                          {resetting ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-[var(--brass)]" />
+                          ) : (
+                            <RotateCcw className="h-4 w-4 text-[var(--brass)]" />
+                          )}
+                          Reset
+                        </button>
+                        <button
+                          onClick={() => handleReset(true)}
+                          disabled={resetting}
+                          title="Forget the linked number and scan a new QR code"
+                          className={pillBtn}
+                        >
+                          <Smartphone className="h-4 w-4 text-[var(--brass)]" />
+                          Switch number
+                        </button>
+                        <button
+                          onClick={handleConnect}
+                          disabled={busy || resetting || !!status.qr}
+                          className={darkBtn}
+                        >
+                          {busy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <QrCode className="h-4 w-4" />
+                          )}
+                          Connect WhatsApp
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {!ready && status.qr && (
+                  <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-[var(--line)] pt-3">
+                    <img
+                      src={status.qr}
+                      alt="WhatsApp QR code"
+                      className="h-[200px] w-[200px] rounded-lg border border-[var(--line)] bg-white p-2"
+                    />
+                    <div className="min-w-0 flex-1 basis-[220px]">
+                      <p className="font-display text-[20px] font-semibold">
+                        Scan to link your number
+                      </p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-[var(--ink-soft)]">
+                        On the phone holding the restaurant number: WhatsApp → Settings → Linked
+                        devices → Link a device, then scan this code.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sent messages, right-aligned like an outgoing chat bubble */}
+              {sentLog.map((m) => (
+                <div
+                  key={m.id}
+                  className="ml-auto mr-2 mt-1 w-fit max-w-[85%] rounded-xl rounded-tr-sm bg-[#DFF0DC] px-3 py-2 shadow-[0_1px_1px_rgba(43,20,27,0.08)] sm:mr-6 sm:max-w-[60%]"
+                >
+                  <p className="admin-eyebrow !text-[9px]">Message</p>
+                  {m.image && (
+                    <img src={m.image} alt="Offer poster" className="mt-1.5 max-h-64 w-auto rounded-lg" />
+                  )}
+                  {m.text.trim() && (
+                    <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ink)]">
+                      {m.text}
+                    </p>
+                  )}
+                  <p className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-[var(--ink-faint)]">
+                    {m.total} {m.total === 1 ? "guest" : "guests"} · {m.time}
+                    <CheckCheck className="h-3.5 w-3.5" />
+                  </p>
+                </div>
+              ))}
+              <div ref={logEndRef} />
+
+              <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-2">
+                {image && (
+                  <span className="inline-flex h-10 min-w-0 items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--paper)] pl-1.5 pr-2 text-[12px] text-[var(--ink-soft)]">
+                    <img
+                      src={image.data}
+                      alt=""
+                      className="h-7 w-7 shrink-0 rounded-full object-cover"
+                    />
+                    <span className="max-w-[160px] truncate">{image.filename}</span>
+                    <span className="shrink-0">· {image.sizeKb} KB</span>
+                    <button
+                      onClick={clearImage}
+                      disabled={sending}
+                      title="Remove poster"
+                      className="grid h-6 w-6 shrink-0 place-items-center rounded-full hover:bg-[var(--brass-soft)] disabled:opacity-50"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                )}
+                <button
+                  onClick={() => setMessage((m) => `${m}{{name}}`)}
+                  disabled={sending}
+                  title="Insert the guest's name"
+                  className={pillBtn}
+                >
+                  <Users className="h-4 w-4 text-[var(--brass)]" />
+                  {"Insert {{name}}"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <footer className="shrink-0 border-t border-[var(--line)]">
+            {sending && (
+              <div className="h-1 w-full bg-[#F8D3DC]">
+                <div
+                  className="h-full bg-[var(--brass)] transition-all duration-500"
+                  style={{
+                    width: `${(((current?.index ?? 0) + 1) / (current?.total || 1)) * 100}%`,
+                  }}
+                />
+              </div>
+            )}
+            <div className="flex items-end gap-2 px-3 pt-3 sm:px-4">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handlePickImage}
+                className="hidden"
+              />
+              <div className="relative flex min-w-0 flex-1 items-end rounded-[22px] border border-[var(--line)] bg-[var(--paper)] px-2 focus-within:border-[var(--brass)] transition">
+                <button
+                  onClick={() => setEmojiOpen((o) => !o)}
+                  disabled={sending}
+                  title="Emoji"
+                  className="grid h-11 w-9 shrink-0 place-items-center text-[var(--brass)] disabled:opacity-50"
+                >
+                  <Smile className="h-5 w-5" />
+                </button>
+                {emojiOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setEmojiOpen(false)} />
+                    <div className="absolute bottom-12 left-0 z-20 grid w-[200px] grid-cols-6 gap-1 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-2 shadow-[0_12px_30px_-12px_rgba(43,20,27,0.35)]">
+                      {EMOJIS.map((e) => (
+                        <button
+                          key={e}
+                          onClick={() => setMessage((m) => m + e)}
+                          className="grid h-7 w-7 place-items-center rounded-md text-[17px] hover:bg-[var(--brass-soft)]"
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <textarea
+                  ref={taRef}
+                  rows={1}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  disabled={sending}
+                  placeholder="Type a message..."
+                  className="max-h-[120px] min-h-[44px] flex-1 resize-none bg-transparent px-1.5 py-[11px] text-[14px] leading-[22px] outline-none placeholder:text-[var(--ink-faint)] disabled:opacity-60"
+                />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={sending}
+                  title={image ? "Replace poster" : "Attach poster"}
+                  className="grid h-11 w-9 shrink-0 place-items-center text-[var(--ink-faint)] hover:text-[var(--brass)] disabled:opacity-50"
+                >
+                  <Paperclip className="h-5 w-5" />
+                </button>
+              </div>
+              {sending ? (
+                <button
+                  onClick={stopQueue}
+                  title="Stop sending"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--danger)] text-white transition"
+                >
+                  <Square className="h-4 w-4 fill-current" />
+                </button>
+              ) : (
+                <button
+                  onClick={runQueue}
+                  disabled={!canSend}
+                  title={`Send to ${selectedList.length}`}
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#7A0026] text-white hover:bg-[#5A0A22] disabled:opacity-40 transition"
+                >
+                  <Send className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+              <p className="flex min-w-0 items-center gap-1.5 truncate text-[12px] text-[var(--ink-soft)]">
+                {sending ? (
+                  countdown > 0 ? (
+                    `Sent ${(current?.index ?? 0) + 1} of ${current?.total ?? selectedList.length} · pausing ${countdown}s before the next message…`
+                  ) : current ? (
+                    `Sending ${current.index + 1} of ${current.total} to ${current.customer.name}… keep this tab open`
+                  ) : (
+                    "Working…"
+                  )
+                ) : (
+                  <>
+                    <Users className="h-4 w-4 shrink-0 text-[var(--brass)]" />
+                    <b className="text-[var(--ink)]">{selectedList.length}</b> selected
+                    <span className="mx-1 text-[var(--ink-faint)]">·</span>
+                    <Clock className="h-4 w-4 shrink-0 text-[var(--brass)]" />
+                    <b className="text-[var(--ink)]">{usage.remaining}</b> left this hour
+                  </>
+                )}
+              </p>
+              {sending ? (
+                <button onClick={stopQueue} className={cn(darkBtn, "h-9 !bg-[var(--danger)]")}>
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={runQueue}
+                  disabled={!canSend}
+                  title={!ready ? "Connect WhatsApp before sending" : undefined}
+                  className={cn(darkBtn, "h-9")}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Send to {selectedList.length}
+                </button>
+              )}
+            </div>
+          </footer>
+        </section>
+      </div>
     </div>
   );
 }

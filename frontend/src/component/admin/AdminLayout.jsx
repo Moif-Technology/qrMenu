@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Clock, Users, UtensilsCrossed,
   QrCode, BarChart3, LogOut, Menu as MenuIcon, X, Settings, MessageCircle,
@@ -55,6 +55,7 @@ function NavItems({ onNavigate }) {
 export default function AdminLayout() {
   const { user, logout } = useAdminAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const handleLogout = () => {
@@ -103,6 +104,10 @@ export default function AdminLayout() {
     </div>
   );
 
+  // The WhatsApp screen is a full-height chat app, so it fills the content area
+  // edge to edge instead of sitting inside the usual page padding.
+  const fullBleed = /\/whatsapp\/?$/.test(pathname);
+
   return (
     <div className="admin-root min-h-screen">
       {/* Desktop sidebar */}
@@ -135,11 +140,17 @@ export default function AdminLayout() {
           </button>
         </header>
 
-        <main className="px-5 py-7 sm:px-8 sm:py-10 xl:px-12">
-          <div className="mx-auto w-full max-w-[1500px]">
+        {fullBleed ? (
+          <main>
             <Outlet />
-          </div>
-        </main>
+          </main>
+        ) : (
+          <main className="px-5 py-7 sm:px-8 sm:py-10 xl:px-12">
+            <div className="mx-auto w-full max-w-[1500px]">
+              <Outlet />
+            </div>
+          </main>
+        )}
       </div>
     </div>
   );
