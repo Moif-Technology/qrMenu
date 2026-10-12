@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, Check, CheckCheck, Clock, Crown, Download, FileText, ListChecks,
-  Loader2, LogOut,
-  MessageCircle, MoreVertical, Paperclip, QrCode, RefreshCw, RotateCcw, Search, Send,
-  Smartphone, Smile, Square, Trash2, Users, X,
+  AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCheck, Clock, Crown, Download, FileText, ListChecks,
+  Loader2, LogOut, Minus, Pencil,
+  MessageCircle, MoreVertical, Paperclip, Plus, QrCode, RefreshCw, RotateCcw, Search, Send,
+  Smartphone, Smile, Square, Sun, Tag, Trash2, Users, X,
 } from "lucide-react";
 import {
   connectWhatsApp, getWhatsAppCustomers, getWhatsAppStatus,
@@ -50,21 +50,78 @@ const downloadFile = (filename, text, type) => {
   URL.revokeObjectURL(url);
 };
 
-// VIP marks live in this browser only: the customers API has no VIP field.
-const VIP_KEY = "admin.whatsapp.vipIds";
-const loadVipIds = () => {
+// Hand-picked guest lists, one tab each. They live in this browser only: the
+// customers API has no visit history or tags to derive them from.
+// Lists made with the "+" tab are added after these and get the Tag icon.
+const BUILT_IN_LISTS = [
+  { key: "vip", label: "VIP", icon: Crown },
+  { key: "daily", label: "Daily", icon: Sun },
+  { key: "weekly", label: "Weekly", icon: CalendarDays },
+];
+const GROUPS_KEY = "admin.whatsapp.guestGroups";
+const LEGACY_VIP_KEY = "admin.whatsapp.vipIds"; // VIPs saved before the other lists existed
+
+/** "VIP customers", "daily customers", "Family customers". */
+const listNoun = (l) => (l.key === "daily" || l.key === "weekly" ? l.label.toLowerCase() : l.label);
+
+/** { custom: [{ key, label }], groups: { [key]: Set of customer ids } } */
+const loadLists = () => {
+  let saved = {};
   try {
-    return new Set(JSON.parse(localStorage.getItem(VIP_KEY)) || []);
+    saved = JSON.parse(localStorage.getItem(GROUPS_KEY)) || {};
   } catch {
-    return new Set();
+    // Unreadable storage: start with empty lists.
+  }
+  const custom = Array.isArray(saved.custom) ? saved.custom : [];
+  // The first version stored the id arrays at the top level, with no "members".
+  const members = saved.members || saved;
+  if (!members.vip) {
+    try {
+      members.vip = JSON.parse(localStorage.getItem(LEGACY_VIP_KEY)) || [];
+    } catch {
+      members.vip = [];
+    }
+  }
+  const keys = [...BUILT_IN_LISTS, ...custom].map((l) => l.key);
+  return {
+    custom,
+    groups: Object.fromEntries(keys.map((k) => [k, new Set(members[k] || [])])),
+  };
+};
+
+const saveLists = ({ custom, groups }) => {
+  try {
+    localStorage.setItem(
+      GROUPS_KEY,
+      JSON.stringify({
+        custom,
+        members: Object.fromEntries(Object.entries(groups).map(([k, ids]) => [k, [...ids]])),
+      })
+    );
+  } catch {
+    // Storage blocked or full: the lists still apply until the page reloads.
   }
 };
+
+/** Small icons after a guest's name for each list they are on. */
+function GroupIcons({ lists, groups, id, className }) {
+  return lists.filter((g) => groups[g.key]?.has(id)).map((g) => {
+    const Icon = g.icon;
+    return (
+      <span key={g.key} title={`${g.label} customer`} className="shrink-0">
+        <Icon className={cn(className, "text-[var(--brass)]")} />
+      </span>
+    );
+  });
+}
 
 /** Fill the {{name}} / {{phone}} placeholders for one guest. */
 const fill = (text, c) =>
   text
     .replace(/\{\{\s*name\s*\}\}/gi, c?.name || "Customer")
     .replace(/\{\{\s*phone\s*\}\}/gi, c?.phone || "");
+
+const mentionLabel = (c) => c.name || c.phone || "Guest";
 
 const initial = (n) => (n || "?").trim().charAt(0).toUpperCase();
 
@@ -106,14 +163,24 @@ export default function AdminWhatsApp() {
   const taRef = useRef(null);
   const searchRef = useRef(null);
 
-  const [vipIds, setVipIds] = useState(loadVipIds);
-  // null when the picker is closed, otherwise the ids ticked so far.
-  const [vipDraft, setVipDraft] = useState(null);
-  const [vipSearch, setVipSearch] = useState("");
+  const [lists, setLists] = useState(loadLists);
+  const groups = lists.groups;
+  const allLists = useMemo(
+    () => [...BUILT_IN_LISTS, ...lists.custom.map((l) => ({ ...l, icon: Tag, custom: true }))],
+    [lists.custom]
+  );
+  const [tab, setTab] = useState("all"); // "all" | a list key | "other"
+  const [newListName, setNewListName] = useState(null); // null = dialog closed
+  // null when the list picker is closed, otherwise { key, draft: Set of ids }.
+  const [picker, setPicker] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState("");
 
   const [mobileView, setMobileView] = useState("list"); // "list" | "chat", below md only
   const [menuOpen, setMenuOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [mentions, setMentions] = useState([]); // guests picked through "@"
+  const [mentionQuery, setMentionQuery] = useState(null); // null = picker closed
+  const [mentionIndex, setMentionIndex] = useState(0);
 
   // Queue state. `results` is keyed by customer id so rows can show their own
   // outcome without a second lookup.
@@ -132,7 +199,27 @@ export default function AdminWhatsApp() {
     () => customers.filter((c) => selected.has(c.id)),
     [customers, selected]
   );
-  const recipients = useMemo(() => (active ? [active] : selectedList), [active, selectedList]);
+  // Guests @mentioned in the composer are sent the message too, for as long as
+  // their mention is still in the text.
+  const mentionedList = useMemo(
+    () => mentions.filter((c) => message.includes(`@${mentionLabel(c)}`)),
+    [mentions, message]
+  );
+  const recipients = useMemo(() => {
+    const base = active ? [active] : selectedList;
+    const ids = new Set(base.map((c) => c.id));
+    return [...base, ...mentionedList.filter((c) => !ids.has(c.id))];
+  }, [active, selectedList, mentionedList]);
+  const extraMentions = recipients.length - (active ? 1 : selectedList.length);
+
+  // Suggestions while the text before the caret ends in "@query".
+  const mentionMatches = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return customers
+      .filter((c) => (c.name || "").toLowerCase().includes(q) || (c.phone || "").includes(q))
+      .slice(0, 6);
+  }, [mentionQuery, customers]);
   // A guest's chat shows everything sent to them, broadcasts included.
   const visibleLog = useMemo(
     () => sentLog.filter((m) => (active ? m.ids.includes(active.id) : m.broadcast)),
@@ -268,65 +355,127 @@ export default function AdminWhatsApp() {
       return next;
     });
 
-  // ---- VIP guests -----------------------------------------------------
-  const vipList = customers.filter((c) => vipIds.has(c.id));
-  // VIPs first under their own heading, everyone else below.
-  const otherList = customers.filter((c) => !vipIds.has(c.id));
-  const listRows =
-    vipList.length === 0
+  // ---- guest lists and tabs -------------------------------------------
+  const commitLists = (next) => {
+    setLists(next);
+    saveLists(next);
+  };
+
+  const inAnyGroup = (id) => allLists.some((g) => groups[g.key]?.has(id));
+  const rowsFor = (key) =>
+    key === "all"
       ? customers
-      : [
-          { header: "VIP guests", vip: true, group: vipList },
-          ...vipList,
-          ...(otherList.length > 0 ? [{ header: "Other guests", group: otherList }] : []),
-          ...otherList,
-        ];
+      : key === "other"
+        ? customers.filter((c) => !inAnyGroup(c.id))
+        : customers.filter((c) => groups[key]?.has(c.id));
+  const tabs = [
+    { key: "all", label: "All" },
+    ...allLists,
+    { key: "other", label: "Other" },
+  ].map((t) => ({ ...t, count: rowsFor(t.key).length }));
+  const tabRows = rowsFor(tab);
+  const tabGroup = allLists.find((g) => g.key === tab);
 
-  /** Tick every guest in one section, or untick them if all already are. */
-  const toggleGroup = (group) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      const allIn = group.every((c) => prev.has(c.id));
-      group.forEach((c) => (allIn ? next.delete(c.id) : next.add(c.id)));
-      return next;
-    });
-
-  const openVipPicker = () => {
-    setVipSearch("");
-    setVipDraft(new Set(vipIds));
+  const openPicker = (key) => {
+    setPickerSearch("");
+    setPicker({ key, draft: new Set(groups[key] || []) });
   };
 
-  const toggleVipDraft = (id) =>
-    setVipDraft((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+  const createList = () => {
+    const label = (newListName || "").trim();
+    if (!label) return;
+    const key = `list-${Date.now()}`;
+    commitLists({
+      custom: [...lists.custom, { key, label }],
+      groups: { ...groups, [key]: new Set() },
     });
+    setNewListName(null);
+    setTab(key);
+    setPickerSearch("");
+    setPicker({ key, draft: new Set() });
+  };
 
-  const saveVips = () => {
-    setVipIds(vipDraft);
-    try {
-      localStorage.setItem(VIP_KEY, JSON.stringify([...vipDraft]));
-    } catch {
-      // Storage blocked or full: the marks still apply until the page reloads.
+  const deleteList = (list) => {
+    if (!window.confirm(`Delete the "${list.label}" list? The guests themselves are not affected.`)) {
+      return;
     }
-    setVipDraft(null);
+    const rest = { ...groups };
+    delete rest[list.key];
+    commitLists({ custom: lists.custom.filter((l) => l.key !== list.key), groups: rest });
+    setTab("all");
   };
 
-  const vipPickerRows = customers.filter((c) => {
-    const q = vipSearch.trim().toLowerCase();
+  const togglePickerDraft = (id) =>
+    setPicker((prev) => {
+      const draft = new Set(prev.draft);
+      if (draft.has(id)) draft.delete(id);
+      else draft.add(id);
+      return { ...prev, draft };
+    });
+
+  const savePicker = () => {
+    commitLists({ ...lists, groups: { ...groups, [picker.key]: picker.draft } });
+    setPicker(null);
+  };
+
+  const pickerGroup = picker && allLists.find((g) => g.key === picker.key);
+  const pickerRows = customers.filter((c) => {
+    const q = pickerSearch.trim().toLowerCase();
     return !q || (c.name || "").toLowerCase().includes(q) || (c.phone || "").includes(q);
   });
+
+  // ---- @mentions ------------------------------------------------------
+  /** Open, narrow or close the mention picker from the text before the caret. */
+  const handleMessageChange = (e) => {
+    const { value, selectionStart } = e.target;
+    setMessage(value);
+    const match = value.slice(0, selectionStart).match(/(?:^|\s)@([^\s@]*)$/);
+    setMentionQuery(match ? match[1] : null);
+    setMentionIndex(0);
+  };
+
+  /** Swap the "@query" being typed for "@Name " and add that guest as a recipient. */
+  const pickMention = (c) => {
+    const ta = taRef.current;
+    const caret = ta?.selectionStart ?? message.length;
+    const before = message.slice(0, caret).replace(/@[^\s@]*$/, `@${mentionLabel(c)} `);
+    setMessage(before + message.slice(caret));
+    setMentions((prev) => (prev.some((m) => m.id === c.id) ? prev : [...prev, c]));
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      ta?.focus();
+      ta?.setSelectionRange(before.length, before.length);
+    });
+  };
+
+  const handleMessageKeyDown = (e) => {
+    if (mentionMatches.length === 0) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setMentionIndex((i) => (i + step + mentionMatches.length) % mentionMatches.length);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      pickMention(mentionMatches[mentionIndex] || mentionMatches[0]);
+    } else if (e.key === "Escape") {
+      setMentionQuery(null);
+    }
+  };
 
   const openChat = (c) => {
     setActive(c);
     setMobileView("chat");
   };
 
-  const allShownSelected = customers.length > 0 && customers.every((c) => selected.has(c.id));
+  // "Select all" works on the open tab only, leaving other tabs' ticks alone.
+  const allShownSelected = tabRows.length > 0 && tabRows.every((c) => selected.has(c.id));
+  const someShownSelected = tabRows.some((c) => selected.has(c.id));
   const toggleAll = () =>
-    setSelected(allShownSelected ? new Set() : new Set(customers.map((c) => c.id)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      tabRows.forEach((c) => (allShownSelected ? next.delete(c.id) : next.add(c.id)));
+      return next;
+    });
 
   // ---- the queue ------------------------------------------------------
 
@@ -375,6 +524,8 @@ export default function AdminWhatsApp() {
       },
     ]);
     setMessage("");
+    setMentions([]);
+    setMentionQuery(null);
     clearImage();
 
     for (let i = 0; i < recipients.length; i++) {
@@ -456,18 +607,19 @@ export default function AdminWhatsApp() {
     ...(active
       ? []
       : [
-          {
-            label: "Select VIP customers",
-            icon: Crown,
-            onClick: openVipPicker,
+          ...BUILT_IN_LISTS.map((g) => ({
+            label: `Select ${listNoun(g)} customers`,
+            icon: g.icon,
+            onClick: () => openPicker(g.key),
             disabled: customers.length === 0,
-          },
+          })),
+          { label: "New list", icon: Plus, onClick: () => setNewListName("") },
         ]),
     {
       label: allShownSelected ? "Clear selection" : "Select all guests",
       icon: ListChecks,
       onClick: toggleAll,
-      disabled: sending || customers.length === 0,
+      disabled: sending || tabRows.length === 0,
     },
     { label: "Refresh guest list", icon: RefreshCw, onClick: () => setReloadKey((k) => k + 1) },
     {
@@ -569,48 +721,123 @@ export default function AdminWhatsApp() {
             </button>
           </div>
 
-          <div className="mt-3 flex items-center justify-between border-b border-[var(--line)] px-4 pb-2 text-[12px]">
+          <div className="mt-3 flex gap-1.5 overflow-x-auto px-3 pb-2 [scrollbar-width:none]">
+            {tabs.map((t) => {
+              const Icon = t.icon;
+              const on = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  aria-pressed={on}
+                  className={cn(
+                    "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors",
+                    on
+                      ? "bg-[#5A0A22] text-white"
+                      : "bg-[#F7E3E8] text-[var(--ink-soft)] hover:bg-[#F8D3DC]"
+                  )}
+                >
+                  {Icon && <Icon className="h-3.5 w-3.5" />}
+                  {t.label}
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 text-[10px]",
+                      on ? "bg-white/20" : "bg-white/70 text-[var(--brass)]"
+                    )}
+                  >
+                    {t.count}
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setNewListName("")}
+              title="New list"
+              aria-label="New list"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#F7E3E8] text-[var(--brass)] hover:bg-[#F8D3DC] transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Tab toolbar: a tri-state "select all" for the open tab, the running
+              selection count, and the list's own edit/delete actions. */}
+          <div className="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-1.5">
             <button
               onClick={toggleAll}
-              disabled={sending || customers.length === 0}
-              className="font-bold text-[var(--brass)] hover:underline disabled:opacity-50 disabled:no-underline"
+              disabled={sending || tabRows.length === 0}
+              aria-pressed={allShownSelected}
+              className="inline-flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 text-[12px] font-bold text-[var(--ink)] hover:bg-[var(--brass-soft)] disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
             >
-              {allShownSelected ? "Clear selection" : "Select all"}
+              <span
+                className={cn(
+                  "grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] border transition-colors",
+                  someShownSelected
+                    ? "border-[var(--brass)] bg-[var(--brass)] text-white"
+                    : "border-[var(--ink-faint)] bg-[var(--paper)]"
+                )}
+              >
+                {allShownSelected ? (
+                  <Check className="h-3 w-3" strokeWidth={3} />
+                ) : someShownSelected ? (
+                  <Minus className="h-3 w-3" strokeWidth={3} />
+                ) : null}
+              </span>
+              <span className="truncate">{allShownSelected ? "Clear all" : "Select all"}</span>
             </button>
-            <span className="text-[var(--ink-soft)]">{selectedList.length} selected</span>
+
+            <span className="ml-auto inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--brass-soft)] px-2.5 text-[11px] font-bold text-[var(--brass-2)]">
+              {selectedList.length} selected
+            </span>
+
+            {tabGroup && (
+              <button
+                onClick={() => openPicker(tabGroup.key)}
+                disabled={customers.length === 0}
+                title={`Edit the ${tabGroup.label} list`}
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-[12px] font-bold text-[var(--ink)] hover:border-[var(--brass)] hover:text-[var(--brass)] disabled:opacity-40 transition-colors"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            )}
+            {tabGroup?.custom && (
+              <button
+                onClick={() => deleteList(tabGroup)}
+                title={`Delete the ${tabGroup.label} list`}
+                aria-label={`Delete the ${tabGroup.label} list`}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[var(--line)] text-[var(--ink-soft)] hover:border-[var(--danger)] hover:text-[var(--danger)] transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
+          <div className="border-b border-[var(--line)]" />
 
           <div className="flex-1 overflow-y-auto px-2 py-1">
             {loading ? (
               <div className="py-16">
                 <Loader2 className="mx-auto h-6 w-6 animate-spin text-[var(--brass)]" />
               </div>
-            ) : customers.length === 0 ? (
-              <p className="px-6 py-16 text-center text-[13px] text-[var(--ink-faint)]">
-                No customers found
-              </p>
-            ) : (
-              listRows.map((c) => {
-                if (c.header) {
-                  return (
-                    <div
-                      key={c.header}
-                      className="flex items-center justify-between px-3 pb-1 pt-3 text-[11px]"
+            ) : tabRows.length === 0 ? (
+              <div className="px-6 py-16 text-center text-[13px] text-[var(--ink-faint)]">
+                {tabGroup && customers.length > 0 ? (
+                  <>
+                    <p>No {listNoun(tabGroup)} customers yet</p>
+                    <button
+                      onClick={() => openPicker(tabGroup.key)}
+                      className={cn(pillBtn, "mx-auto mt-3")}
                     >
-                      <span className="admin-eyebrow flex items-center gap-1.5 !text-[10px]">
-                        {c.vip && <Crown className="h-3.5 w-3.5 text-[var(--brass)]" />}
-                        {c.header}
-                      </span>
-                      <button
-                        onClick={() => toggleGroup(c.group)}
-                        disabled={sending}
-                        className="font-bold text-[var(--brass)] hover:underline disabled:opacity-50"
-                      >
-                        {c.group.every((g) => selected.has(g.id)) ? "Clear" : "Select all"}
-                      </button>
-                    </div>
-                  );
-                }
+                      <tabGroup.icon className="h-4 w-4 text-[var(--brass)]" />
+                      Add customers
+                    </button>
+                  </>
+                ) : (
+                  <p>No customers found</p>
+                )}
+              </div>
+            ) : (
+              tabRows.map((c) => {
                 const result = results[c.id];
                 const isCurrent = current?.customer?.id === c.id;
                 const isSelected = selected.has(c.id);
@@ -652,9 +879,12 @@ export default function AdminWhatsApp() {
                       <span className="flex items-baseline justify-between gap-2">
                         <span className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold">
                           <span className="truncate">{c.name || "Unknown"}</span>
-                          {vipIds.has(c.id) && (
-                            <Crown className="h-3.5 w-3.5 shrink-0 text-[var(--brass)]" />
-                          )}
+                          <GroupIcons
+                            lists={tab === "all" ? BUILT_IN_LISTS.filter((l) => l.key === "vip") : allLists}
+                            groups={groups}
+                            id={c.id}
+                            className="h-3.5 w-3.5"
+                          />
                         </span>
                         <span
                           title="Last messaged"
@@ -1004,13 +1234,49 @@ export default function AdminWhatsApp() {
                     </div>
                   </>
                 )}
+                {mentionMatches.length > 0 && (
+                  <div className="absolute bottom-12 left-0 right-0 z-20 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--paper)] py-1 shadow-[0_12px_30px_-12px_rgba(43,20,27,0.35)]">
+                    {mentionMatches.map((c, i) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        // mousedown, not click: the textarea's blur would close
+                        // the list before a click lands.
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          pickMention(c);
+                        }}
+                        onMouseEnter={() => setMentionIndex(i)}
+                        className={cn(
+                          "flex w-full items-center gap-3 px-3 py-2 text-left",
+                          i === mentionIndex && "bg-[var(--brass-soft)]"
+                        )}
+                      >
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#F8D3DC] text-[13px] font-bold text-[var(--brass-2)]">
+                          {initial(c.name)}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-1.5 truncate text-[13px] font-semibold">
+                            {c.name || "Unknown"}
+                            <GroupIcons lists={allLists} groups={groups} id={c.id} className="h-3 w-3" />
+                          </span>
+                          <span className="block truncate text-[11px] text-[var(--ink-soft)]">
+                            {c.phone || "—"}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   ref={taRef}
                   rows={1}
                   value={message}
-                  onChange={(e) => setMessage(e.target.value)}
+                  onChange={handleMessageChange}
+                  onKeyDown={handleMessageKeyDown}
+                  onBlur={() => setMentionQuery(null)}
                   disabled={sending}
-                  placeholder="Type a message..."
+                  placeholder="Type a message... (@ to mention a guest)"
                   className="max-h-[120px] min-h-[44px] flex-1 resize-none bg-transparent px-1.5 py-[11px] text-[14px] leading-[22px] outline-none placeholder:text-[var(--ink-faint)] disabled:opacity-60"
                 />
                 <button
@@ -1064,6 +1330,12 @@ export default function AdminWhatsApp() {
                         <b className="text-[var(--ink)]">{selectedList.length}</b> selected
                       </>
                     )}
+                    {extraMentions > 0 && (
+                      <>
+                        {" "}
+                        + <b className="text-[var(--ink)]">{extraMentions}</b> mentioned
+                      </>
+                    )}
                     <span className="mx-1 text-[var(--ink-faint)]">·</span>
                     <Clock className="h-4 w-4 shrink-0 text-[var(--brass)]" />
                     <b className="text-[var(--ink)]">{usage.remaining}</b> left this hour
@@ -1083,7 +1355,7 @@ export default function AdminWhatsApp() {
                   className={cn(darkBtn, "h-9")}
                 >
                   <Send className="h-3.5 w-3.5" />
-                  {active ? "Send" : `Send to ${recipients.length}`}
+                  {active && recipients.length === 1 ? "Send" : `Send to ${recipients.length}`}
                 </button>
               )}
             </div>
@@ -1091,24 +1363,72 @@ export default function AdminWhatsApp() {
         </section>
       </div>
 
-      {vipDraft && (
+      {newListName !== null && (
         <div className="fixed inset-0 z-50 grid place-items-center p-4">
           <div
             className="absolute inset-0 bg-[var(--ink)]/50 backdrop-blur-sm"
-            onClick={() => setVipDraft(null)}
+            onClick={() => setNewListName(null)}
+          />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createList();
+            }}
+            className="relative w-full max-w-[380px] rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5 shadow-[0_24px_60px_-20px_rgba(43,20,27,0.5)]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#F8D3DC] text-[var(--brass)]">
+                <Tag className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="font-display text-[20px] font-semibold leading-none">New list</h2>
+                <p className="mt-1 text-[12px] text-[var(--ink-soft)]">
+                  It gets its own tab. You pick the guests next.
+                </p>
+              </div>
+            </div>
+            <input
+              type="text"
+              autoFocus
+              maxLength={24}
+              placeholder="List name, e.g. Family, Corporate"
+              value={newListName}
+              onChange={(e) => setNewListName(e.target.value)}
+              className="mt-4 h-11 w-full rounded-xl border border-[var(--line)] bg-[var(--paper)] px-4 text-[14px] outline-none focus:border-[var(--brass)] focus:ring-2 focus:ring-[var(--brass-soft)] transition"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setNewListName(null)} className={pillBtn}>
+                Cancel
+              </button>
+              <button type="submit" disabled={!newListName.trim()} className={darkBtn}>
+                <Plus className="h-4 w-4" />
+                Create
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {picker && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-4">
+          <div
+            className="absolute inset-0 bg-[var(--ink)]/50 backdrop-blur-sm"
+            onClick={() => setPicker(null)}
           />
           <div className="relative flex max-h-[85dvh] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--paper)] shadow-[0_24px_60px_-20px_rgba(43,20,27,0.5)]">
             <div className="flex items-center gap-3 border-b border-[var(--line)] px-5 py-4">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#F8D3DC] text-[var(--brass)]">
-                <Crown className="h-5 w-5" />
+                <pickerGroup.icon className="h-5 w-5" />
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="font-display text-[20px] font-semibold leading-none">VIP customers</h2>
+                <h2 className="font-display text-[20px] font-semibold leading-none">
+                  {pickerGroup.custom ? pickerGroup.label : `${pickerGroup.label} customers`}
+                </h2>
                 <p className="mt-1 text-[12px] text-[var(--ink-soft)]">
-                  Tick the guests to list separately as VIPs.
+                  Tick the guests to show under the {pickerGroup.label} tab.
                 </p>
               </div>
-              <button onClick={() => setVipDraft(null)} title="Close" className={iconBtn}>
+              <button onClick={() => setPicker(null)} title="Close" className={iconBtn}>
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -1120,26 +1440,26 @@ export default function AdminWhatsApp() {
                   type="text"
                   autoFocus
                   placeholder="Search name or phone"
-                  value={vipSearch}
-                  onChange={(e) => setVipSearch(e.target.value)}
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
                   className="h-10 w-full rounded-full bg-[#F7E3E8] pl-11 pr-4 text-[13px] outline-none placeholder:text-[var(--ink-faint)] focus:ring-2 focus:ring-[#F8D3DC] transition"
                 />
               </div>
             </div>
 
             <div className="min-h-[160px] flex-1 overflow-y-auto px-2 py-2">
-              {vipPickerRows.length === 0 ? (
+              {pickerRows.length === 0 ? (
                 <p className="px-6 py-12 text-center text-[13px] text-[var(--ink-faint)]">
                   No customers found
                 </p>
               ) : (
-                vipPickerRows.map((c) => {
-                  const ticked = vipDraft.has(c.id);
+                pickerRows.map((c) => {
+                  const ticked = picker.draft.has(c.id);
                   return (
                     <button
                       key={c.id}
                       type="button"
-                      onClick={() => toggleVipDraft(c.id)}
+                      onClick={() => togglePickerDraft(c.id)}
                       aria-pressed={ticked}
                       className={cn(
                         "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors",
@@ -1175,13 +1495,13 @@ export default function AdminWhatsApp() {
 
             <div className="flex items-center justify-between gap-3 border-t border-[var(--line)] px-5 py-3">
               <span className="text-[12px] text-[var(--ink-soft)]">
-                <b className="text-[var(--ink)]">{vipDraft.size}</b> VIP selected
+                <b className="text-[var(--ink)]">{picker.draft.size}</b> selected
               </span>
               <div className="flex items-center gap-2">
-                <button onClick={() => setVipDraft(null)} className={pillBtn}>
+                <button onClick={() => setPicker(null)} className={pillBtn}>
                   Cancel
                 </button>
-                <button onClick={saveVips} className={darkBtn}>
+                <button onClick={savePicker} className={darkBtn}>
                   <Check className="h-4 w-4" />
                   Save
                 </button>
