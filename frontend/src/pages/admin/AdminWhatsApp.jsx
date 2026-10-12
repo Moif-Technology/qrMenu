@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCheck, Clock, Crown, Download, FileText, ListChecks,
-  Loader2, LogOut, Minus, Pencil,
+  Loader2, LogOut,
   MessageCircle, MoreVertical, Paperclip, Plus, QrCode, RefreshCw, RotateCcw, Search, Send,
   Smartphone, Smile, Square, Sun, Tag, Trash2, Users, X,
 } from "lucide-react";
@@ -469,7 +469,6 @@ export default function AdminWhatsApp() {
 
   // "Select all" works on the open tab only, leaving other tabs' ticks alone.
   const allShownSelected = tabRows.length > 0 && tabRows.every((c) => selected.has(c.id));
-  const someShownSelected = tabRows.some((c) => selected.has(c.id));
   const toggleAll = () =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -760,59 +759,35 @@ export default function AdminWhatsApp() {
             </button>
           </div>
 
-          {/* Tab toolbar: a tri-state "select all" for the open tab, the running
-              selection count, and the list's own edit/delete actions. */}
-          <div className="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-1.5">
-            <button
-              onClick={toggleAll}
-              disabled={sending || tabRows.length === 0}
-              aria-pressed={allShownSelected}
-              className="inline-flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 text-[12px] font-bold text-[var(--ink)] hover:bg-[var(--brass-soft)] disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-            >
-              <span
-                className={cn(
-                  "grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] border transition-colors",
-                  someShownSelected
-                    ? "border-[var(--brass)] bg-[var(--brass)] text-white"
-                    : "border-[var(--ink-faint)] bg-[var(--paper)]"
-                )}
-              >
-                {allShownSelected ? (
-                  <Check className="h-3 w-3" strokeWidth={3} />
-                ) : someShownSelected ? (
-                  <Minus className="h-3 w-3" strokeWidth={3} />
-                ) : null}
-              </span>
-              <span className="truncate">{allShownSelected ? "Clear all" : "Select all"}</span>
-            </button>
-
-            <span className="ml-auto inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--brass-soft)] px-2.5 text-[11px] font-bold text-[var(--brass-2)]">
-              {selectedList.length} selected
-            </span>
-
-            {tabGroup && (
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 pb-2 text-[12px]">
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => openPicker(tabGroup.key)}
-                disabled={customers.length === 0}
-                title={`Edit the ${tabGroup.label} list`}
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-[12px] font-bold text-[var(--ink)] hover:border-[var(--brass)] hover:text-[var(--brass)] disabled:opacity-40 transition-colors"
+                onClick={toggleAll}
+                disabled={sending || tabRows.length === 0}
+                className="font-bold text-[var(--brass)] hover:underline disabled:opacity-50 disabled:no-underline"
               >
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
+                {allShownSelected ? "Clear selection" : "Select all"}
               </button>
-            )}
-            {tabGroup?.custom && (
-              <button
-                onClick={() => deleteList(tabGroup)}
-                title={`Delete the ${tabGroup.label} list`}
-                aria-label={`Delete the ${tabGroup.label} list`}
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[var(--line)] text-[var(--ink-soft)] hover:border-[var(--danger)] hover:text-[var(--danger)] transition-colors"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            )}
+              {tabGroup && (
+                <button
+                  onClick={() => openPicker(tabGroup.key)}
+                  disabled={customers.length === 0}
+                  className="font-bold text-[var(--ink-soft)] hover:text-[var(--brass)] hover:underline disabled:opacity-50"
+                >
+                  Edit list
+                </button>
+              )}
+              {tabGroup?.custom && (
+                <button
+                  onClick={() => deleteList(tabGroup)}
+                  className="font-bold text-[var(--ink-soft)] hover:text-[var(--danger)] hover:underline"
+                >
+                  Delete list
+                </button>
+              )}
+            </div>
+            <span className="text-[var(--ink-soft)]">{selectedList.length} selected</span>
           </div>
-          <div className="border-b border-[var(--line)]" />
 
           <div className="flex-1 overflow-y-auto px-2 py-1">
             {loading ? (
